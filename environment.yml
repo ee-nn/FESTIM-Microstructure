@@ -1,0 +1,18 @@
+name: festim-microstructure
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - fenics-dolfinx
+  - gmsh
+  - matplotlib
+  - mpi4py
+  - neper>=5.0.0
+  - numpy
+  - pip
+  - scipy
+  - ufl
+  - pip:
+      - festim==2.2.0rc2

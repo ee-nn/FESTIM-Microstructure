@@ -1,0 +1,61 @@
+{
+ "ctf": "mwes_and_examples/EBSD_grain_construction/D7 PBF SS316L.ctf",
+ "crop": "0,306,0,306",
+ "phase": 1,
+ "threshold": 10.0,
+ "max_mad": 1.5,
+ "min_bands": 0,
+ "allow_error": true,
+ "min_pixels": 15,
+ "scale": 1.0,
+ "flip_y": false,
+ "active": false,
+ "fill": true,
+ "topology_fix": true,
+ "voxel_ori": true,
+ "diagnostics": true,
+ "unit": "um",
+ "voxsize": [
+  1.6,
+  1.6
+ ],
+ "ncells": 259,
+ "segmentation_error_deg": {
+  "all": {
+   "n": 36481,
+   "area": 93391.36000000002,
+   "l2": 2886.5502993125847,
+   "rms": 9.445517995132803,
+   "mean": 5.980543260450424,
+   "median": 4.290945338947627,
+   "p99": 45.1521316852173,
+   "max": 59.90946209336722,
+   "threshold": 10.0,
+   "frac_over": 0.08598996738028014
+  },
+  "indexed": {
+   "n": 35297,
+   "area": 90360.32000000002,
+   "l2": 2046.3435009208165,
+   "rms": 6.80753144993492,
+   "mean": 5.022723505592863,
+   "median": 4.179931963860661,
+   "p99": 20.389303243595588,
+   "max": 59.90946209336722,
+   "threshold": 10.0,
+   "frac_over": 0.05669037028642661
+  },
+  "backfilled": {
+   "n": 1184,
+   "area": 3031.0400000000004,
+   "l2": 2035.841572102483,
+   "rms": 36.97840243959665,
+   "mean": 34.53473573275391,
+   "median": 36.26273791711564,
+   "p99": 58.38886038295144,
+   "max": 59.44178026637984,
+   "threshold": 10.0,
+   "frac_over": 0.9594594594594594
+  }
+ }
+}
