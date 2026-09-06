@@ -1,18 +1,72 @@
+# Conda environment for FESTIM-Microstructure.
+#
+#   conda env create -f environment.yml
+#   conda activate festim-microstructure
+#   pip install -e .
+#
+# Platforms: linux-64, osx-64, osx-arm64.
+# Windows is not supported: neper has no win-64 build on conda-forge.
+# Windows users should work inside WSL2.
+
 name: festim-microstructure
 
 channels:
   - conda-forge
 
 dependencies:
-  - python=3.11
-  - fenics-dolfinx
-  - gmsh
-  - matplotlib
-  - mpi4py
-  - neper>=5.0.0
-  - numpy
+  # ---- interpreter -------------------------------------------------------
+  # FESTIM supports 3.9-3.13; 3.12 has the widest set of conda-forge builds
+  # for the compiled dolfinx/scifem stack.
+  - python=3.12
   - pip
+
+  # ---- FEniCSx ------------------------------------------------------------
+  # Pin the dolfinx minor series. FESTIM tracks the dolfinx ABI closely
+  # (festim-dev/FESTIM#1173 moved FESTIM to dolfinx 0.11), so an unpinned
+  # dolfinx will silently drift away from the pinned FESTIM below.
+  # Widen or narrow this range when you bump the FESTIM pin.
+  - fenics-dolfinx >=0.10,<0.12
+  - fenics-ufl            # NOT `ufl` -- that name does not exist on conda-forge
+  - fenics-basix
+  - mpi4py
+  - petsc4py
+
+  # ---- FESTIM's own compiled dependencies ---------------------------------
+  # Installed from conda-forge so that pip does not try to build scifem
+  # from source against the conda dolfinx. FESTIM declares
+  # tqdm, scifem>=0.20.0 and io4dolfinx[h5py].
+  - scifem
+  - io4dolfinx
+  - h5py
+  - tqdm
+
+  # ---- meshing / microstructure generation --------------------------------
+  - gmsh                  # CLI + shared library
+  - python-gmsh           # the `import gmsh` Python API -- a SEPARATE package
+  - neper >=5.0.0         # linux-64, osx-64, osx-arm64 only
+  - meshio
+
+  # ---- scientific stack ---------------------------------------------------
+  - numpy
   - scipy
-  - ufl
+  - matplotlib
+  - pandas                # EBSD tables (.ang / .ctf ingestion)
+
+  # ---- optional: visualisation -------------------------------------------
+  - pyvista
+
+  # ---- development --------------------------------------------------------
+  - pytest
+  - pytest-cov
+  - ruff
+  - ipykernel
+
+  # ---- pip-only -----------------------------------------------------------
   - pip:
-      - festim==2.2.0rc2
+      # FESTIM 2.1 / 2.2rc* are not on conda-forge yet (newest there is
+      # 2.0b2.post2), so this must come from PyPI. Note the canonical
+      # spelling is `2.2rc2`, not `2.2.0rc2`.
+      # If pip tries to build scifem from source here, the conda scifem above
+      # is too old for this FESTIM pin -- either relax the FESTIM pin or
+      # install with: pip install --no-deps festim==2.2rc2
+      - festim==2.2rc2
