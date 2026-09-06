@@ -1,0 +1,81 @@
+[build-system]
+requires = [
+    "setuptools>=77.0.3",
+    "wheel",
+    "setuptools-scm[toml]>=7.0.5",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "festim-microstructure"
+description = "Microstructure-resolved hydrogen transport modelling with FESTIM"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dynamic = ["version"]
+authors = [{ name = "ee-nn" }]
+classifiers = [
+    "Natural Language :: English",
+    "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+
+# Only pure-Python, pip-installable requirements belong here.
+# dolfinx, gmsh (Python API) and neper come from conda -- see environment.yml.
+# This mirrors FESTIM's own pyproject, which likewise does not declare dolfinx.
+dependencies = [
+    "festim>=2.2rc2",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "meshio",
+    "pandas",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-cov"]
+lint = ["ruff"]
+docs = ["sphinx", "sphinx-book-theme", "sphinx-design"]
+
+[project.urls]
+Homepage = "https://github.com/ee-nn/FESTIM-Microstructure"
+Issues = "https://github.com/ee-nn/FESTIM-Microstructure/issues"
+
+[project.scripts]
+fm-voronoi = "festim_microstructure.meshing.voronoi:main"
+fm-ebsd = "festim_microstructure.meshing.ebsd:main"
+
+[tool.setuptools_scm]
+write_to = "src/festim_microstructure/_version.py"
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "RUF", "UP", "ICN", "NPY", "FLY"]
+ignore = ["UP007", "RUF012"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["festim_microstructure"]
+known-third-party = ["basix", "dolfinx", "ffcx", "ufl", "gmsh", "festim", "numpy"]
+section-order = [
+    "future",
+    "standard-library",
+    "mpi",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+
+[tool.ruff.lint.isort.sections]
+"mpi" = ["mpi4py", "petsc4py"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
