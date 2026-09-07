@@ -34,7 +34,7 @@ dependencies = [
     "scipy",
     "matplotlib",
     "meshio",
-    "pandas",
+    "pillow",  # meshing.ebsd.micrograph: scale bars and border trimming on PNGs
 ]
 
 [project.optional-dependencies]
@@ -48,7 +48,12 @@ Issues = "https://github.com/ee-nn/FESTIM-Microstructure/issues"
 
 [project.scripts]
 fm-voronoi = "festim_microstructure.meshing.voronoi:main"
-fm-ebsd = "festim_microstructure.meshing.ebsd:main"
+fm-ebsd = "festim_microstructure.meshing.ebsd.pipeline:main"
+fm-homogenise = "festim_microstructure.models.homogenisation:main"
+fm-validate = "festim_microstructure.models.validation:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.setuptools_scm]
 write_to = "src/festim_microstructure/_version.py"
@@ -79,3 +84,6 @@ section-order = [
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+markers = [
+    "fenics: needs dolfinx, festim and gmsh (skipped when they are not installed)",
+]

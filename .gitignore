@@ -1,6 +1,25 @@
-# Ignore results folder
-
+# outputs
 results/
+*.bp/
+*.msh
+*.msh4
+*.tess
+*.st*
+*.json
+!examples/data/*.json
+!docs/*.json
+identified.json
+validation.json
 
-# vscode
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+# written by setuptools-scm at install
+src/festim_microstructure/_version.py
+
+# editors
 .vscode
+.idea

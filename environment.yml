@@ -50,7 +50,7 @@ dependencies:
   - numpy
   - scipy
   - matplotlib
-  - pandas                # EBSD tables (.ang / .ctf ingestion)
+  - pillow                # EBSD check images (scale bars, border trimming)
 
   # ---- optional: visualisation -------------------------------------------
   - pyvista

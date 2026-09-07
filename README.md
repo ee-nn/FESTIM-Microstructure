@@ -104,41 +104,77 @@ pip check
 FESTIM-Microstructure/
 ├── environment.yml
 ├── pyproject.toml
-├── LICENSE
 ├── README.md
+├── docs/
+│   └── gb_homogenisation.md    # the homogenisation study, with figures
 ├── src/festim_microstructure/
 │   ├── __init__.py
+│   ├── subdomains.py           # GrainBoundaryNetwork (locator), TaggedGrainBoundaryNetwork
+│   │                           #   (facet tags), Grain, GrainSurface
+│   ├── solvers.py              # ATOL and the MUMPS workaround, see docs/
+│   ├── _binaries.py            # find_binary(): FM_NEPER_BIN / FM_GMSH_BIN / FM_POVRAY_BIN
 │   ├── meshing/
-│   │   ├── voronoi.py          # Gmsh Voronoi polycrystals (2D/3D)
-│   │   ├── neper.py            # Neper tessellation wrapper
-│   │   └── ebsd.py             # EBSD map -> conforming mesh
+│   │   ├── voronoi.py          # 2D/3D Voronoi polycrystals via Gmsh; `fm-voronoi`
+│   │   ├── neper.py            # neper -T / -M wrapper, stat readers, raster meshing
+│   │   └── ebsd/
+│   │       ├── ctf.py          # .ctf -> .tesr converter (pure Python)
+│   │       ├── orientation.py  # quaternions, cubic symmetry, disorientation
+│   │       ├── pipeline.py     # .tesr -> mesh -> EbsdMicrostructure; `fm-ebsd`
+│   │       └── ...             # segmentation_error, grain_area_change, figures
 │   ├── models/
-│   │   ├── fisher.py           # Fisher grain-boundary short circuit
-│   │   ├── homogenisation.py   # GB homogenisation
-│   │   └── baselines.py        # Diaz-Rodriguez benchmarks
+│   │   ├── fisher.py           # ShortCircuitProblem: one lattice + one network
+│   │   ├── properties.py       # Physics, per-grain / per-boundary coefficient fields
+│   │   ├── resolved.py         # one subdomain per grain, coupled through the network
+│   │   ├── homogenisation.py   # identify an anisotropic D_eff; `fm-homogenise`
+│   │   ├── validation.py       # does D_eff predict what it was not fitted to?
+│   │   └── diaz_rodriguez*.py  # Diaz-Rodriguez et al. (2022) benchmarks
 │   └── postprocessing/
-├── examples/                   # runnable scripts, one per workflow
-└── test/                       # pytest suite
+│       ├── measures.py         # inventory, submesh length/area, component count
+│       └── figures.py          # the figures in docs/
+├── examples/                   # one runnable driver per workflow, plus data/
+└── test/                       # pytest; the FEniCS-dependent tests skip without it
 ```
 
-Scripts that were previously at the repository root now live either as library
-modules under `src/festim_microstructure/` or as runnable examples under
-`examples/`. Nothing importable should sit at the repository root.
+Nothing importable sits at the repository root. The pure-NumPy parts of the
+package -- the EBSD converter, the orientation algebra, the Voronoi
+tessellation geometry, the Neper stat readers -- import and test without
+dolfinx or FESTIM installed; the mesh builders and models import them lazily.
 
 ## Usage
 
-Generate a 2D Voronoi polycrystal and run a grain-boundary diffusion problem:
-
-```bash
-python examples/voronoi_polycrystal_2d.py
+```python
+import festim as F
+import festim_microstructure as fm
+from festim_microstructure.meshing.voronoi import build_mesh, near_segments, voronoi_segments
+from festim_microstructure.models.fisher import ShortCircuitParams, ShortCircuitProblem
+from festim_microstructure.subdomains import GrainBoundaryNetwork
 ```
 
-Or from the console entry points declared in `pyproject.toml`:
+Each example is a `Setup` dataclass plus a `main()`; edit the dataclass or
+import `main` and pass your own:
 
 ```bash
-fm-voronoi --n-grains 64 --domain-size 100e-6 --out mesh/poly2d.msh
+python examples/voronoi_polycrystal_2d.py       # in-process Gmsh tessellation
+python examples/voronoi_polycrystal_3d.py
+python examples/neper_voronoi_network.py        # needs neper + gmsh executables
+python examples/ebsd_ctf_to_tesr.py             # stage 1 of the EBSD pipeline
+python examples/ebsd_gb_diffusion.py            # stages 2-3 + the transport model
+python examples/fisher_grain_boundary.py        # single boundary vs Le Claire
+python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6 --out rve.json
+python examples/gb_validation.py --out validation.json
+python examples/gb_figures.py --rve rve.json --validation validation.json
 ```
 
+Console entry points from `pyproject.toml`:
+
+```bash
+fm-voronoi --n-grains 64 --domain-size 100e-6 --aspect 4 --out poly2d.msh
+fm-ebsd examples/data/"D7 PBF SS316L.ctf" --out results --crop 0,306,0,306
+fm-homogenise --k-sweep 1e-6 1e-4 1e-2 3 --out rve.json
+```
+
+Neper, Gmsh and POV-Ray are found on `PATH` or through `FM_NEPER_BIN`,
+`FM_GMSH_BIN`, `FM_POVRAY_BIN`; Neper may live in its own conda environment.
 Parallel runs use MPI directly, as with any DOLFINx program:
 
 ```bash
