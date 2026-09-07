@@ -30,13 +30,12 @@ from collections import Counter, defaultdict
 from mpi4py import MPI
 
 import dolfinx
+import festim as F
 import gmsh
 import numpy as np
 import ufl
 from dolfinx.io.gmsh import model_to_mesh
 from scipy.spatial import Voronoi
-
-import festim as F
 
 # parameters
 L = 1.0  # specimen size

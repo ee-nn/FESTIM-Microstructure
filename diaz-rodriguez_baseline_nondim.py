@@ -169,14 +169,13 @@ diaz-flux-fraction.png, diaz-columnar.csv.
 from mpi4py import MPI
 
 import dolfinx
-import matplotlib
+import matplotlib as mpl
 import numpy as np
 import ufl
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
+mpl.use("Agg")
 import festim as F
+import matplotlib.pyplot as plt
 
 # geometry (SI)
 # ----------------------------------------------------------------------------
@@ -250,7 +249,7 @@ VERBOSE = 0  # SNES/KSP monitors, to tell stagnation from blow-up
 
 
 def segregation_length(T):
-    """ell_s [m]: equilibrium Gamma/c_b in the dilute limit, McLean prefactor N_s/N_b."""
+    """ell_s [m]: equilibrium Gamma/c_b in the dilute limit, McLean prefactor N_s/N_b"""
     return (GAMMA_MAX / N_B_SITES) * np.exp(E_BIND / (F.k_B * T))
 
 
@@ -598,7 +597,7 @@ if __name__ == "__main__":
         rows.append(r)
         if comm.rank == 0:
             print(
-                f"T={r['T']:.0f} K  f_GB={r['f_gb']:.4f}  D_eff/D_b={r['D_eff'] / r['D_b']:.3f}  "
+                f"T={r['T']:.0f} K  f_GB={r['f_gb']:.4f}  D_eff/D_b={r['D_eff'] / r['D_b']:.3f}"  # noqa: E501
                 f"C_in={r['C_in'] * 1e-27:.2e} H/nm^3  P_eq={r['P_eq']:.2e} Pa\n"
                 f"  phi={r['phi']:.3e}  phi_mono={r['phi_mono']:.3e}  "
                 f"phi_exp={r['phi_exp']:.3e}  H2 m^-1 s^-1 Pa^-1/2\n"
@@ -607,7 +606,7 @@ if __name__ == "__main__":
             )
             if abs(r["mass_balance"]) > 1e-2:
                 print(
-                    "  WARNING: mass balance fails; not at steady state? raise T_END_HAT"
+                    "WARNING: mass balance fails; not at steady state? raise T_END_HAT"
                 )
             if r["theta_max"] > 1.0 + 1e-6:
                 print("  WARNING: theta exceeded 1; Newton overshot the GB capacity.")
@@ -623,7 +622,7 @@ if __name__ == "__main__":
         x = np.array([r["inv_T_1000"] for r in rows])
         order = np.argsort(x)
         x = x[order]
-        get = lambda k: np.array([r[k] for r in rows])[order]
+        get = lambda k: np.array([r[k] for r in rows])[order]  # noqa: E731
 
         # Fig. 7 layout: permeability vs 1000/T, log y
         fig, ax = plt.subplots(figsize=(6, 4.5))

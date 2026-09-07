@@ -43,13 +43,12 @@ import ufl
 from dolfinx.io import gmsh as gmshio
 
 mpl.use("Agg")
+import festim as F
 from grain_area_change import measure
 from matplotlib.collections import LineCollection
 from mesh_overlay import draw_raster, overlay, read_tesr
 from micrograph import scale_bar_ax
 from orientation import cubic_disorientation_angle, qconj, qmul, rodrigues_to_quat
-
-import festim as F
 
 plt.rcParams.update(
     {

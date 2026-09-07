@@ -73,14 +73,13 @@ Outputs diaz-flux-fraction.png, diaz-permeability.png and a CSV.
 from mpi4py import MPI
 
 import dolfinx
-import matplotlib
+import matplotlib as mpl
 import numpy as np
 import ufl
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
+mpl.use("Agg")
 import festim as F
+import matplotlib.pyplot as plt
 
 # geometry
 # ----------------------------------------------------------------------------

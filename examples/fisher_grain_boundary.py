@@ -42,9 +42,8 @@ halves are written from the *same* ``J``: that is what makes the exchange conser
 from mpi4py import MPI
 
 import dolfinx
-import numpy as np
-
 import festim as F
+import numpy as np
 
 # ---------------------------------------------------------------- parameters
 E_M_BULK = 0.20  # eV, DFT, their Fig. 3

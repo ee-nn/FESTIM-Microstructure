@@ -41,11 +41,10 @@ from pathlib import Path
 from mpi4py import MPI
 
 import dolfinx
+import festim as F
 import numpy as np
 import ufl
 from dolfinx.io import gmsh as gmshio
-
-import festim as F
 
 # parameters
 L = 1.0  # specimen size (Neper's default domain is cube(1,1,1))
