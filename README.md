@@ -145,7 +145,11 @@ dolfinx or FESTIM installed; the mesh builders and models import them lazily.
 ```python
 import festim as F
 import festim_microstructure as fm
-from festim_microstructure.meshing.voronoi import build_mesh, near_segments, voronoi_segments
+from festim_microstructure.meshing.voronoi import (
+    build_mesh,
+    near_segments,
+    voronoi_segments,
+)
 from festim_microstructure.models.fisher import ShortCircuitParams, ShortCircuitProblem
 from festim_microstructure.subdomains import GrainBoundaryNetwork
 ```
