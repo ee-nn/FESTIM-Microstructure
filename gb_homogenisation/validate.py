@@ -38,12 +38,11 @@ from dataclasses import asdict
 from mpi4py import MPI
 
 import dolfinx
+import festim as F
 import micromodel as mm
 import numpy as np
 import ufl
 from homogenise import identify, make_microstructure
-
-import festim as F
 
 __all__ = ["homogeneous_model", "permeation_bcs", "steady_consistency", "uptake"]
 
