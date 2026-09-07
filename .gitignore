@@ -6,6 +6,8 @@ results/
 *.tess
 *.st*
 *.json
+*.csv
+*.png
 !examples/data/*.json
 !docs/*.json
 identified.json
