@@ -1,8 +1,17 @@
-# Conda environment for FESTIM-Microstructure.
+# Conda environment for FESTIM-Microstructure: the FEniCSx / FESTIM side.
 #
 #   conda env create -f environment.yml
+#   conda env create -f environment-neper.yml     # Neper, in its own env
 #   conda activate festim-microstructure
 #   pip install -e .
+#   tools/link-neper-env.sh                       # tell this env where Neper is
+#
+# Neper is deliberately NOT in this file. On conda-forge, `neper` is built
+# against `scotch 6.1.x`, which pins `zlib <1.3`, while `fenics-dolfinx >=0.10`
+# needs `libzlib >=1.3.2` (through libadios2). The two cannot be solved into
+# one environment. Neper is only ever run as a subprocess, so it lives in
+# environment-neper.yml and this environment finds it through the FM_NEPER_BIN
+# / FM_GMSH_BIN / FM_POVRAY_BIN variables (see festim_microstructure._binaries).
 #
 # Platforms: linux-64, osx-64, osx-arm64.
 # Windows is not supported: neper has no win-64 build on conda-forge.
@@ -41,10 +50,13 @@ dependencies:
   - tqdm
 
   # ---- meshing / microstructure generation --------------------------------
-  - gmsh                  # CLI + shared library
-  - python-gmsh           # the `import gmsh` Python API -- a SEPARATE package
-  - neper >=5.0.0         # linux-64, osx-64, osx-arm64 only
+  # The Gmsh *Python API* is what meshing.voronoi needs (`import gmsh`); on
+  # conda-forge that is `python-gmsh`, a separate package from the `gmsh`
+  # executable. The executable that Neper calls comes from environment-neper.yml
+  # and is reached through FM_GMSH_BIN, so the two Gmsh builds never mix.
+  - python-gmsh
   - meshio
+  # neper: see the header -- environment-neper.yml
 
   # ---- scientific stack ---------------------------------------------------
   - numpy

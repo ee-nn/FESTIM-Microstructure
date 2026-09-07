@@ -72,7 +72,7 @@ import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
-from ..._binaries import find_binary
+from ..._binaries import find_binary, subprocess_env
 from .mesh_overlay import use_agg
 from .micrograph import annotate_png, append_key, scale_bar_ax
 from .orientation import (
@@ -667,8 +667,14 @@ def settings_from_provenance(path):
 
 # --- rendered check images ---------------------------------------------------
 def _run(cmd, cwd, log):
-    """Run a Neper command, returning True on success and reporting on failure."""
-    out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    """Run a Neper command, returning True on success and reporting on failure.
+
+    The directories of ``cmd[0]`` (neper) and of any ``-povray`` argument are
+    put on the child's PATH, since Neper may look the renderer up by name.
+    """
+    extra = [cmd[cmd.index("-povray") + 1]] if "-povray" in cmd else []
+    env = subprocess_env(cmd[0], *extra)
+    out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
     if out.returncode:
         tail = (out.stderr or out.stdout).strip().splitlines()[-3:]
         log(f"  WARNING: {Path(cmd[0]).name} {cmd[1]} failed: {' / '.join(tail)}")

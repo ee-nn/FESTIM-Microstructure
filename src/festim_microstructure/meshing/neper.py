@@ -31,18 +31,18 @@ Three things the scipy construction could not give at all:
 
 Binaries
 --------
-Neper does not have to live in the same conda environment as FESTIM -- it only
-has to be a path. Keeping it in its own environment avoids letting the solver
-rearrange a working dolfinx install over a dependency (GSL, scotch) that has
-nothing to do with FESTIM. :func:`find_binary` resolves each program from, in
-order, an explicit argument, an environment variable (``FM_NEPER_BIN``,
-``FM_GMSH_BIN``, ``FM_POVRAY_BIN``) and ``PATH``. ``GMSH_BIN`` is the
-*executable* that Neper calls for meshing: the conda-forge package providing
-it is ``gmsh``; ``python-gmsh`` is only the bindings, so a dolfinx environment
-may have the API without the command.
+Neper *cannot* live in the same conda environment as DOLFINx (see
+``environment-neper.yml``), and it does not need to: it only has to be a path.
+:func:`~festim_microstructure._binaries.find_binary` resolves each program
+from, in order, an explicit argument, an environment variable (``FM_NEPER_BIN``,
+``FM_GMSH_BIN``, ``FM_POVRAY_BIN``; ``tools/link-neper-env.sh`` sets them) and
+``PATH``, and every subprocess here runs with those directories prepended to its
+``PATH`` so Neper finds Gmsh when it spawns it. ``FM_GMSH_BIN`` is the
+*executable* that Neper calls for meshing: the conda-forge package providing it
+is ``gmsh``; ``python-gmsh`` is only the bindings, so the DOLFINx environment
+has the API without the command.
 """
 
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -50,7 +50,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .._binaries import find_binary
+from .._binaries import find_binary, subprocess_env
 
 # dolfinx and mpi4py are imported inside read_mesh, so that running Neper and
 # reading its stat files stays possible without them.
@@ -222,6 +222,7 @@ def run_neper(
 
     neper_bin = find_binary("neper", neper_bin, "FM_NEPER_BIN")
     gmsh_bin = find_binary("gmsh", gmsh_bin, "FM_GMSH_BIN")
+    env = subprocess_env(neper_bin, gmsh_bin)
 
     morpho = opt.morpho
     if opt.rsel is not None:
@@ -256,7 +257,7 @@ def run_neper(
     tmp = base.parent / "tmp"
     tmp.mkdir(exist_ok=True)
     if not base.with_suffix(".tess").exists() or force:
-        run_interruptible(tess, cwd=wd)
+        run_interruptible(tess, cwd=wd, env=env)
     else:
         print(f"  reusing {base.name}.tess")
     # -order 1: the default is 2. -format msh4: Gmsh v4; the default `msh` is
@@ -299,6 +300,7 @@ def run_neper(
             stem,
         ],
         cwd=wd,
+        env=env,
     )
     leftovers = list(tmp.glob("*"))
     if leftovers:
@@ -516,13 +518,7 @@ def mesh_tesr(
         )
     neper_bin = find_binary("neper", neper_bin, "FM_NEPER_BIN")
     gmsh_bin = find_binary("gmsh", gmsh_bin, "FM_GMSH_BIN")
-    # the equivalent of activating neper's environment for the child processes
-    # only: neper -M spawns gmsh by name unless given a path, and other helpers
-    # are looked up on PATH
-    env = dict(os.environ)
-    env["PATH"] = os.pathsep.join(
-        [str(Path(neper_bin).parent), str(Path(gmsh_bin).parent), env.get("PATH", "")]
-    )
+    env = subprocess_env(neper_bin, gmsh_bin)
     tmp = wd / "tmp"
     tmp.mkdir(exist_ok=True)
 

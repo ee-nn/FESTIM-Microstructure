@@ -75,6 +75,7 @@ def test_submodule_imports(stubbed_heavy_deps, name):
 @pytest.mark.parametrize(
     "target",
     [
+        "festim_microstructure.check:main",
         "festim_microstructure.meshing.voronoi:main",
         "festim_microstructure.meshing.ebsd.pipeline:main",
         "festim_microstructure.models.homogenisation:main",
@@ -91,6 +92,7 @@ def test_pure_modules_need_no_fenics():
     for name in (
         "festim_microstructure",
         "festim_microstructure._binaries",
+        "festim_microstructure.check",
         "festim_microstructure.meshing.voronoi",
         "festim_microstructure.meshing.neper",
         "festim_microstructure.meshing.ebsd.ctf",

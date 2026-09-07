@@ -24,13 +24,19 @@ import festim_microstructure as fm
 
 ## Requirements
 
-The stack is split across two package managers, because the compiled parts are
-not installable from PyPI:
+The stack is split across two package managers and **two conda environments**:
 
-- **conda-forge** supplies DOLFINx, the Gmsh Python API, Neper, and FESTIM's
-  compiled dependencies (`scifem`, `io4dolfinx`).
+- **conda-forge** supplies DOLFINx, the Gmsh Python API, FESTIM's compiled
+  dependencies (`scifem`, `io4dolfinx`), and Neper.
 - **PyPI** supplies FESTIM itself. Versions 2.1 and 2.2rc* are not yet on
   conda-forge, where the newest 2.x build is `2.0b2.post2`.
+- **Neper lives in its own environment.** conda-forge's `neper` is built
+  against `scotch 6.1.x`, which pins `zlib <1.3`, while `fenics-dolfinx >=0.10`
+  needs `libzlib >=1.3.2` (through `libadios2`). No single solve can contain
+  both; `conda env create` on a combined file fails with
+  `LibMambaUnsatisfiableError` on exactly that pair. Since Neper is only ever
+  run as a subprocess -- nothing in the Python stack links against it -- the
+  split costs nothing: the FEniCSx environment just needs to know the path.
 
 **Platforms:** linux-64, osx-64, osx-arm64. There is no Windows build of Neper
 on conda-forge, and DOLFINx is easiest to obtain on Linux/macOS, so Windows
@@ -45,15 +51,37 @@ then:
 ```bash
 git clone https://github.com/ee-nn/FESTIM-Microstructure.git
 cd FESTIM-Microstructure
+
+# 1. the FEniCSx / FESTIM environment (this is the one you work in)
 conda env create -f environment.yml
 conda activate festim-microstructure
 pip install -e .
+
+# 2. Neper, in its own environment (never activated)
+conda env create -f environment-neper.yml
+
+# 3. tell environment 1 where environment 2's executables are
+tools/link-neper-env.sh
+conda activate festim-microstructure   # re-activate so the variables load
+fm-check
 ```
 
-`pip install -e .` is required — without it the modules under `src/` are not on
-the import path and none of the examples will run.
+Step 3 records `FM_NEPER_BIN`, `FM_GMSH_BIN` and `FM_POVRAY_BIN` as conda
+environment variables of `festim-microstructure` (`conda env config vars`), so
+they are exported on activate and cleared on deactivate; nothing is written to
+your shell profile. If you prefer, skip the script and export the same three
+variables yourself -- or pass paths explicitly (`run_neper(..., neper_bin=...)`).
+Resolution order is always explicit argument, then the variable, then `PATH`.
 
-For a development install including test and lint extras:
+The Neper environment is optional. Without it, the Gmsh-based Voronoi route
+(`fm-voronoi`, `examples/voronoi_polycrystal_*.py`), the EBSD `.ctf` converter,
+and the homogenisation study all work; only Neper-backed tessellations and EBSD
+*meshing* need it. The POV-Ray render checks are optional within that: on
+linux-64, `conda install -n neper-env conda-forge::povray` and re-run step 3.
+
+`pip install -e .` is required -- without it the modules under `src/` are not
+on the import path and none of the examples will run. For a development install
+including test and lint extras:
 
 ```bash
 pip install -e ".[test,lint]"
@@ -62,22 +90,50 @@ pip install -e ".[test,lint]"
 ### Verifying the install
 
 ```bash
-python -c "import dolfinx, gmsh, festim, festim_microstructure; \
-           print(dolfinx.__version__, festim.__version__)"
-neper -V
-gmsh --version
+fm-check
+```
+
+prints the versions of the Python-side stack and where each external program
+resolves to, and exits non-zero if the FEniCSx side is broken. It looks like:
+
+```
+python-side stack
+  festim_microstructure  0.1.dev15
+  ...
+  dolfinx                0.10.0
+  festim                 2.2rc2
+  gmsh (python-gmsh)     4.13.1
+external programs (explicit path > FM_*_BIN > PATH)
+  neper    /home/you/miniforge3/envs/neper-env/bin/neper  [env var]  neper 5.0.0
+  gmsh     /home/you/miniforge3/envs/neper-env/bin/gmsh   [env var]  4.13.1
+  povray   not found      (FM_POVRAY_BIN unset)
+```
+
+For MPI, additionally:
+
+```bash
 mpirun -n 2 python -c "from mpi4py import MPI; print(MPI.COMM_WORLD.rank)"
 ```
 
-The `import gmsh` check matters: on conda-forge the `gmsh` package installs only
-the executable and shared library. The Python module comes from the separate
-`python-gmsh` package, which is why `environment.yml` lists both.
+The `gmsh (python-gmsh)` line matters: on conda-forge the `gmsh` package
+installs only the executable and shared library, and the Python module comes
+from the separate `python-gmsh` package. `environment.yml` lists `python-gmsh`;
+`environment-neper.yml` lists `gmsh`, because the executable is what `neper -M`
+calls, and it should be the one Neper was built alongside. Keeping them apart
+means the two Gmsh builds never mix.
+
+Paths with whitespace are rejected (`find_binary` raises): Neper re-tokenizes
+its arguments, so a conda prefix such as `~/my envs/neper-env` is torn into
+fragments by the time Neper sees it. Put the environments somewhere without a
+space, or symlink them.
 
 ### Updating
 
 ```bash
 conda env update -f environment.yml --prune
 pip install -e .
+conda env update -f environment-neper.yml --prune
+tools/link-neper-env.sh        # only needed if an env was recreated or moved
 ```
 
 ### Version coupling
@@ -102,7 +158,9 @@ pip check
 
 ```
 FESTIM-Microstructure/
-├── environment.yml
+├── environment.yml             # FEniCSx / FESTIM env (the one you work in)
+├── environment-neper.yml       # Neper + gmsh executable, kept separate (see Requirements)
+├── tools/link-neper-env.sh     # records the Neper paths on the FEniCSx env
 ├── pyproject.toml
 ├── README.md
 ├── docs/
@@ -113,6 +171,7 @@ FESTIM-Microstructure/
 │   │                           #   (facet tags), Grain, GrainSurface
 │   ├── solvers.py              # ATOL and the MUMPS workaround, see docs/
 │   ├── _binaries.py            # find_binary(): FM_NEPER_BIN / FM_GMSH_BIN / FM_POVRAY_BIN
+│   ├── check.py                # `fm-check`: report versions and where the programs resolve
 │   ├── meshing/
 │   │   ├── voronoi.py          # 2D/3D Voronoi polycrystals via Gmsh; `fm-voronoi`
 │   │   ├── neper.py            # neper -T / -M wrapper, stat readers, raster meshing
@@ -177,8 +236,10 @@ fm-ebsd examples/data/"D7 PBF SS316L.ctf" --out results --crop 0,306,0,306
 fm-homogenise --k-sweep 1e-6 1e-4 1e-2 3 --out rve.json
 ```
 
-Neper, Gmsh and POV-Ray are found on `PATH` or through `FM_NEPER_BIN`,
-`FM_GMSH_BIN`, `FM_POVRAY_BIN`; Neper may live in its own conda environment.
+Neper, Gmsh and POV-Ray are found through `FM_NEPER_BIN`, `FM_GMSH_BIN`,
+`FM_POVRAY_BIN` (set by `tools/link-neper-env.sh`), falling back to `PATH`;
+`fm-check` shows what resolved. Every Neper subprocess runs with those
+directories prepended to its `PATH`, so Neper finds Gmsh and POV-Ray by itself.
 Parallel runs use MPI directly, as with any DOLFINx program:
 
 ```bash

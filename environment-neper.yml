@@ -1,0 +1,33 @@
+# Conda environment for FESTIM-Microstructure: the Neper side.
+#
+#   conda env create -f environment-neper.yml
+#
+# Kept separate from environment.yml because conda-forge's `neper` is built
+# against `scotch 6.1.x` (which pins `zlib <1.3`) while `fenics-dolfinx >=0.10`
+# needs `libzlib >=1.3.2`; no single solve contains both. Nothing in the Python
+# stack links against Neper -- it is only ever a subprocess -- so there is no
+# ABI to keep consistent and nothing is lost by the split.
+#
+# This environment is never activated. After creating it, run
+# tools/link-neper-env.sh from the festim-microstructure environment, which
+# records the paths of these executables as FM_NEPER_BIN / FM_GMSH_BIN /
+# FM_POVRAY_BIN on that environment.
+#
+# Platforms: linux-64, osx-64, osx-arm64 (neper has no win-64 build).
+
+name: neper-env
+
+channels:
+  - conda-forge
+
+dependencies:
+  - neper >=5.0.0
+  # The Gmsh EXECUTABLE that `neper -M` calls for meshing. This is the `gmsh`
+  # package, not `python-gmsh`; it must be the one Neper was tested against,
+  # so it lives here rather than in the FEniCSx environment.
+  - gmsh
+  # Optional, linux-64 / linux-aarch64 only on conda-forge: `neper -V` renders
+  # the check images in meshing.ebsd.ctf through POV-Ray. Without it those
+  # images are skipped with a note; nothing else needs it.
+  #   conda install -n neper-env conda-forge::povray
+  # - povray
