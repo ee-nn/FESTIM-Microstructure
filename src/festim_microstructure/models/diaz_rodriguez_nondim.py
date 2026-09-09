@@ -10,11 +10,25 @@ thickness over many columns.
 
 WHAT A REGULAR NX x NY TILING DOES AND DOES NOT TEST
 ---------------------------------------------------
-With identical columns and no-flux lateral boundaries, every column sees the
-same environment, so 100 x 100 columns give the same per-column answer as one
-column. The regular tiling is therefore a *verification* run: if the flux
-fraction moves when NX changes, something is wrong with the coupling or the
-facet location. Set DISORDER=1 to make the array non-trivial -- it draws a
+Two codim-1 manifolds carry the GB network: the *interior* walls between
+columns and the *outer* lateral faces of the box (OUTER_WALLS, below). With
+only the interior walls, the GB length per unit area is (2 - 1/NX - 1/NY)/L,
+so a 1x2 array has 1/4 of the tiling's GB density and a 2x2 array 1/2; the
+edge columns see fewer walls than the interior ones and NX-invariance does
+NOT hold. With the outer faces declared as half walls (OUTER_WALLS = "half")
+every column has two full-wall equivalents, the density is exactly 2/L for
+any NX, NY, and the regular tiling is a genuine *verification* run: if the
+result moves when NX changes, something is wrong with the coupling or the
+facet location. OUTER_WALLS = "full" is the paper's box instead: four
+one-sided faces of full capacity, density 4/L, meant for NX = NY = 1.
+
+The two manifolds are not joined at the lines where an interior wall meets
+the outer face; FESTIM refuses a manifold that mixes interior and exterior
+facets, and a junction condition is not written. For the regular tiling this
+is exact: every wall has the same theta(z) by symmetry, so no current would
+cross the junction anyway. With DISORDER=1 it is an approximation.
+
+Set DISORDER=1 to make the array non-trivial -- it draws a
 per-boundary GB migration energy from the 0.191-0.547 eV range Wei et al.
 (2026, doi:10.1016/j.ijhydene.2025.152835) report across eight tungsten GBs,
 which spans a factor of ~4e3 in D_gb at 500 K. That is the regime no single-
@@ -93,10 +107,24 @@ it costs nothing and makes the code the isotherm the header names. N_b is
 the tetrahedral-site density (12 per bcc cell); the interstitial site count
 is what theta_b is a fraction of, so this is the same N_b as in ell_s.
 
-The GB receives 2J (two faces); the bulk loses the same. The mass-balance
-check below confirmed (in-out)/in = -3e-5 with N_FLUX_SIDES = 2, i.e. FESTIM
+An interior wall receives 2J (two faces) and the bulk loses the same; FESTIM
 applies the wall flux BC once per facet (restriction_of() returns "+" for a
-manifold inside a single volume subdomain).
+manifold inside a single volume subdomain), hence N_FLUX_SIDES = 2 there,
+confirmed by the mass-balance check ((in-out)/in = -3e-5). An outer face has
+one grain side in the domain, so its bulk BC carries a factor 1 and is
+integrated with ds (restriction None). What the outer GB does with that J
+depends on OUTER_WALLS:
+
+  "half": the face is a wall shared with a mirror column, capacity Gamma_max/2
+          and fed with J from this side. Its site fraction then obeys
+          d(theta)/dt = J/(Gamma_max/2) = 2J/Gamma_max -- the SAME equation
+          as an interior wall -- and its along-GB current is half a wall's,
+          so it is credited to the column with weight 1/2.
+  "full": the paper's box face, capacity Gamma_max fed from one side:
+          d(theta)/dt = J/Gamma_max, source factor 1, current weight 1.
+
+Either way the blocking factors, the mouth value and D_gb are site-fraction
+quantities and are unchanged.
 
 K IS CAPPED
 -----------
@@ -114,7 +142,9 @@ THE SOLVE IS DIMENSIONLESS
            flux BC on the walls, per side:
                -(Da_f u (1-theta) - Da_r theta (1 - eps u))
     GB:    dtheta/dt = (D_gb/D_b) lap(theta)
-               + 2 (Ph_f u (1-theta) - Ph_r theta (1 - eps u))
+               + n_s (Ph_f u (1-theta) - Ph_r theta (1 - eps u))
+           n_s = 2 on interior walls and "half" outer walls, 1 on "full"
+           outer walls (see THE COUPLING LAW)
 
     Da_f = K L / D_b                  Ph_f = K C L^2 / (D_b Gamma_max)
     Da_r = k_r Gamma_max L / (D_b C)  Ph_r = k_r L^2 / D_b
@@ -131,7 +161,18 @@ relative to the bulk is at most 2 (D_gb/D_b)/Lambda. eps only matters through
 (1 - eps u) and is a sub-percent correction in every mode of this file; it is
 carried so the solve does not silently assume a dilute lattice. The
 concentration scale C depends on INLET_MODE. Currents convert back with
-j_b = D_b C L jhat_b and j_gb = D_b Gamma_max jhat_gb (atoms/s).
+j_b = D_b C L jhat_b and j_gb = w D_b Gamma_max jhat_gb (atoms/s), with
+w = 1 for interior walls and w = OUTER_CURRENT_WEIGHT for outer walls.
+
+FLUX SPLIT
+----------
+The exit-plane J_GB/J is a last-cell quantity: with the drains held at
+theta = 0 next to a loaded GB, the drop from theta ~ 1 to 0 happens in the
+last cell and the GB "current" there is D_gb Gamma_max/dz, i.e. bulk hydrogen
+captured in the last cell -- the paper's own caveat about its Fig. 8
+(Sect. 3.3, p. 1085). It scales with NZ. The split is therefore also
+evaluated on interior planes (F_GB_PLANES, snapped to mesh node planes);
+those are the transport measure, the exit value is kept for comparison.
 
 INLET CONDITION (INLET_MODE)
 ----------------------------
@@ -181,8 +222,8 @@ Esteban fit they actually used.
 
 OUTPUTS
 -------
-diaz-fig7.png (phi vs 1000/T: model, phi_mono, their Eq. (6) fit),
-diaz-flux-fraction.png, diaz-columnar.csv.
+diaz-fig7-<mode>.png (phi vs 1000/T: model, phi_mono, their Eq. (6) fit),
+diaz-flux-fraction-<mode>.png (exit and interior planes)
 """
 
 from mpi4py import MPI
@@ -196,11 +237,22 @@ import ufl
 
 # geometry (SI)
 # ----------------------------------------------------------------------------
-L = 100e-9  # column side, m                     (their L, 100 nm case)
-D_THICK = 2e-6  # layer thickness, m             (the experimental 2 um)
-NX, NY = 1, 2  # columns per side; 100 -> 10 um x 10 um
+L = 50e-9  # column side, m                     (their L, 100 nm case)
+D_THICK = 200e-9  # layer thickness, m             (the experimental 2 um)
+NX, NY = 1, 1  # columns per side; 100 -> 10 um x 10 um
 CPG = 4  # mesh cells across one column, per axis
 NZ = 100  # mesh cells through the thickness
+
+# the outer lateral faces of the box: "half" (periodic-tiling equivalent,
+# density 2/L for any NX, NY), "full" (the paper's one-sided box, 4/L, use
+# with NX = NY = 1) or "none" (interior walls only, the old behaviour). See
+# the header. The interior walls exist only when NX > 1 or NY > 1.
+OUTER_WALLS = "full"
+OUTER_SOURCE_FACTOR = {"half": 2.0, "full": 1.0}
+OUTER_CURRENT_WEIGHT = {"half": 0.5, "full": 1.0}
+
+# interior planes (fractions of d) on which the flux split is evaluated
+F_GB_PLANES = (0.25, 0.5, 0.75)
 
 LX, LY = NX * L, NY * L
 AREA = LX * LY
@@ -227,7 +279,7 @@ N_B_SITES = 12.0 / A_LAT**3  # 3.8e29 m^-3, tetrahedral sites: 12 per bcc cell
 
 LAMBDA_JUMP = 1.12e-10  # m, tetrahedral-site hop in bcc W, for K
 NU_ATTEMPT = 1e13  # s^-1
-DA_H_MAX = 5.0  # cap on K h / D_b (see header); double it and check f_GB
+DA_H_MAX = 100.0  # cap on K h / D_b (see header); double it and check f_GB
 
 # Esteban et al. 2001 solubility, HTM database values (H per m^3 per Pa^1/2)
 S0_ESTEBAN = 1.75e22
@@ -238,12 +290,12 @@ PHI0_EXP = 1.74e15
 EA_EXP = 0.569  # eV
 
 # inlet
-INLET_MODE = "flux"  # "concentration" | "implantation" | "flux"
+INLET_MODE = "concentration"  # "concentration" | "implantation" | "flux"
 C_CONC = 5.6e27  # m^-3, their 5.6 H/nm^3 (Fig. 7 caption)
 PHI_IMP = 2.0 * 1e23  # H m^-2 s^-1, their 1e23 H2 m^-2 s^-1 (Fig. 8)
 R_P = 0.4e-9  # m, their near-surface region (Fig. 7 caption)
 
-N_FLUX_SIDES = 2  # confirmed by the mass-balance check
+N_FLUX_SIDES = 2  # interior walls: two grain faces, BC applied once per facet
 
 TEMPERATURES = [520.0, 566.0, 615.0, 655.0, 705.0, 770.0]  # Fig. 4 + OKMC end
 
@@ -340,6 +392,32 @@ class ColumnWalls(F.VolumeSubdomain):
         return np.concatenate([fx, fy]).astype(np.int32)
 
 
+class OuterWalls(F.VolumeSubdomain):
+    """The four lateral faces of the box as one codim-1 subdomain on the
+    domain boundary. Each face is located on its own and the sets unioned,
+    for the same reason as in ColumnWalls: a single predicate on
+    (x in {0, LX}) | (y in {0, LY}) would also catch the diagonal facets of
+    the corner cells, whose three vertices sit on two different faces, and
+    FESTIM would then (rightly) refuse the manifold as mixing interior and
+    exterior facets.
+    """
+
+    def __init__(self, id, material):
+        super().__init__(id=id, material=material, dim=2)
+
+    def locate_subdomain_entities(self, mesh):
+        tol = 0.05 * L_HAT / CPG
+        planes = [(0, 0.0), (0, LX_HAT), (1, 0.0), (1, LY_HAT)]
+        found = []
+        for axis, value in planes:
+            found.append(
+                dolfinx.mesh.locate_entities_boundary(
+                    mesh, 2, lambda x, a=axis, v=value: np.isclose(x[a], v, atol=tol)
+                )
+            )
+        return np.unique(np.concatenate(found)).astype(np.int32)
+
+
 def gb_diffusivity_field(network, T, D_b):
     """Per-boundary D_gb/D_b as a DG0 field on the network submesh.
 
@@ -377,38 +455,46 @@ def gb_diffusivity_field(network, T, D_b):
 # ----------------------------------------------------------------------------
 # flux accounting
 # ----------------------------------------------------------------------------
-def _plane_measure(c, z):
+def _plane_measure(c, z, interior):
+    """Measure over the entities of c's own mesh lying in the plane z: the
+    exterior-facet measure ds when z is the inlet or outlet plane, the
+    interior-facet measure dS otherwise (then integrands must be restricted)."""
     m = c.function_space.mesh
     fdim = m.topology.dim - 1
-    facets = dolfinx.mesh.locate_entities_boundary(
-        m, fdim, lambda x: np.isclose(x[2], z, atol=1e-10)
-    )
+    marker = lambda x: np.isclose(x[2], z, atol=1e-10)  # noqa: E731
+    if interior:
+        facets = dolfinx.mesh.locate_entities(m, fdim, marker)
+    else:
+        facets = dolfinx.mesh.locate_entities_boundary(m, fdim, marker)
     tags = dolfinx.mesh.meshtags(
         m, fdim, np.sort(facets), np.ones(facets.size, dtype=np.int32)
     )
-    return ufl.Measure("ds", domain=m, subdomain_data=tags)(1)
+    return ufl.Measure("dS" if interior else "ds", domain=m, subdomain_data=tags)(1)
 
 
-def axial_current(c, D_hat, z):
+def axial_current(c, D_hat, z, interior=False):
     """Dimensionless current in +z through the plane z, assembled.
 
     Works for both the 3D bulk field (an area integral over the plane) and the
     2D GB submesh field (a line integral over the edge of the submesh in that
-    plane), because in each case it is the exterior-facet measure of that
-    field's own mesh restricted to the plane. Positive means flow towards the
-    outlet at both the inlet and the outlet, so the two can be compared.
+    plane), because in each case it is the facet measure of that field's own
+    mesh restricted to the plane. Positive means flow towards the outlet at
+    every plane, so inlet, interior and outlet values can be compared. For an
+    interior plane the gradient is single-valued across the facet (same
+    function on both sides) and the "+" restriction is arbitrary.
     """
-    ds = _plane_measure(c, z)
+    dm = _plane_measure(c, z, interior)
     # the submesh of a plane set has no meaningful outward normal in 3D, so
     # take the axial component of the gradient directly rather than dot(.., n)
-    form = -D_hat * ufl.grad(c)[2] * ds
+    g = ufl.grad(c)[2]
+    form = -D_hat * (g("+") if interior else g) * dm
     local = dolfinx.fem.assemble_scalar(dolfinx.fem.form(form))
     return c.function_space.mesh.comm.allreduce(local, op=MPI.SUM)
 
 
 def plane_mean(c, z, area_hat):
-    """Mean of a 3D field over the plane z (dimensionless area area_hat)."""
-    ds = _plane_measure(c, z)
+    """Mean of a 3D field over the boundary plane z (dimensionless area area_hat)."""
+    ds = _plane_measure(c, z, interior=False)
     local = dolfinx.fem.assemble_scalar(dolfinx.fem.form(c * ds))
     return c.function_space.mesh.comm.allreduce(local, op=MPI.SUM) / area_hat
 
@@ -464,31 +550,90 @@ def run(T, mesh=None):
         material=F.Material(D_0=1.0, E_D=0.0),
         locator=lambda x: np.full_like(x[0], True, dtype=bool),
     )
-    network = ColumnWalls(id=2, material=F.Material(D_0=D_g_hat, E_D=0.0))
     inlet = F.SurfaceSubdomain(id=3, locator=lambda x: np.isclose(x[2], 0.0))
     outlet = F.SurfaceSubdomain(id=4, locator=lambda x: np.isclose(x[2], D_HAT))
-    # the lines where the walls meet the charged face and the sink face
+    # the lines where the walls meet the charged face and the sink face. One
+    # object serves both manifolds: FESTIM resolves which manifold a codim-2
+    # surface bounds through the species of the condition using it.
     mouths = F.SurfaceSubdomain(id=5, dim=1, locator=lambda x: np.isclose(x[2], 0.0))
     drains = F.SurfaceSubdomain(id=6, dim=1, locator=lambda x: np.isclose(x[2], D_HAT))
 
     u = F.Species("u", subdomains=[grains])  # c_b / C
-    th = F.Species("theta", subdomains=[network])  # Gamma / GAMMA_MAX
 
-    wall_bc = F.ParticleFluxBC(
-        subdomain=network,
-        species=u,
-        # the bulk loses J per side: forward capture blocked by GB occupancy,
-        # reverse release blocked by lattice occupancy. Keep this expression
-        # and the GB source below textually identical up to sign and the
-        # side factor -- that is what makes the exchange conservative.
-        value=lambda cb, cg: (
-            N_FLUX_SIDES * (Da_r * cg * (1.0 - eps * cb) - Da_f * cb * (1.0 - cg))
-        ),
-        species_dependent_value={"cb": u, "cg": th},
-    )
+    # the GB network as (manifold, species, bulk-side factor, source factor,
+    # current weight) per manifold present. Each GB species lives on exactly
+    # one manifold, which is what lets mouths/drains be reused.
+    walls = []
+    if NX > 1 or NY > 1:
+        network = ColumnWalls(id=2, material=F.Material(D_0=D_g_hat, E_D=0.0))
+        th_int = F.Species("theta_int", subdomains=[network])  # Gamma / GAMMA_MAX
+        walls.append((network, th_int, float(N_FLUX_SIDES), 2.0, 1.0))
+    if OUTER_WALLS != "none":
+        outer = OuterWalls(id=7, material=F.Material(D_0=D_g_hat, E_D=0.0))
+        th_ext = F.Species("theta_ext", subdomains=[outer])
+        walls.append(
+            (
+                outer,
+                th_ext,
+                1.0,  # one grain face in the domain: ds, applied once
+                OUTER_SOURCE_FACTOR[OUTER_WALLS],
+                OUTER_CURRENT_WEIGHT[OUTER_WALLS],
+            )
+        )
+    if not walls:
+        raise ValueError("no grain boundaries: NX = NY = 1 and OUTER_WALLS = 'none'")
+
+    # GB length per unit area credited to the columns, in units of 1/L
+    gb_density_hat = 0.0
+    if NX > 1 or NY > 1:
+        gb_density_hat += ((NX - 1) * NY + (NY - 1) * NX) / (NX * NY)
+    if OUTER_WALLS != "none":
+        gb_density_hat += OUTER_CURRENT_WEIGHT[OUTER_WALLS] * 2 * (NX + NY) / (NX * NY)
+    if comm.rank == 0:
+        print(
+            f"  walls: {[w[0].__class__.__name__ for w in walls]}  "
+            f"outer={OUTER_WALLS}  GB length/area = {gb_density_hat:.2f}/L  "
+            "(tiling 2/L, paper box 4/L)"
+        )
+
+    wall_bcs, gb_sources, drain_bcs, mouth_bcs = [], [], [], []
+    for manifold, th, n_bulk, n_src, _w in walls:
+        wall_bcs.append(
+            F.ParticleFluxBC(
+                subdomain=manifold,
+                species=u,
+                # the bulk loses J per grain face: forward capture blocked by
+                # GB occupancy, reverse release blocked by lattice occupancy.
+                # Keep this expression and the GB source below textually
+                # identical up to sign and the side factors -- that is what
+                # makes the exchange conservative.
+                value=lambda cb, cg, n=n_bulk: (
+                    n * (Da_r * cg * (1.0 - eps * cb) - Da_f * cb * (1.0 - cg))
+                ),
+                species_dependent_value={"cb": u, "cg": th},
+            )
+        )
+        gb_sources.append(
+            F.ParticleSource(
+                # the same J, as a rate of change of the site fraction
+                value=lambda cb, cg, n=n_src: (
+                    n * (Ph_f * cb * (1.0 - cg) - Ph_r * cg * (1.0 - eps * cb))
+                ),
+                species=th,
+                volume=manifold,
+                species_dependent_value={"cb": u, "cg": th},
+            )
+        )
+        drain_bcs.append(
+            F.FixedConcentrationBC(subdomain=drains, value=0.0, species=th)
+        )
+        mouth_bcs.append(
+            F.FixedConcentrationBC(subdomain=mouths, value=theta_surf, species=th)
+        )
+
     sink_bcs = [
         F.FixedConcentrationBC(subdomain=outlet, value=0.0, species=u),
-        F.FixedConcentrationBC(subdomain=drains, value=0.0, species=th),
+        *drain_bcs,
     ]
     if INLET_MODE == "flux":
         # reflecting front face carrying the whole implanted flux; the GB
@@ -500,7 +645,7 @@ def run(T, mesh=None):
         # number
         inlet_bcs = [
             F.FixedConcentrationBC(subdomain=inlet, value=1.0, species=u),
-            F.FixedConcentrationBC(subdomain=mouths, value=theta_surf, species=th),
+            *mouth_bcs,
         ]
 
     petsc_options = {
@@ -518,20 +663,10 @@ def run(T, mesh=None):
 
     model = F.HydrogenTransportProblemDiscontinuous(
         mesh=F.Mesh(mesh),
-        species=[u, th],
-        subdomains=[grains, network, inlet, outlet, mouths, drains],
-        sources=[
-            F.ParticleSource(
-                # both faces feed the GB; the same J as wall_bc, opposite sign
-                value=lambda cb, cg: (
-                    2.0 * (Ph_f * cb * (1.0 - cg) - Ph_r * cg * (1.0 - eps * cb))
-                ),
-                species=th,
-                volume=network,
-                species_dependent_value={"cb": u, "cg": th},
-            )
-        ],
-        boundary_conditions=[wall_bc, *inlet_bcs, *sink_bcs],
+        species=[u, *[w[1] for w in walls]],
+        subdomains=[grains, *[w[0] for w in walls], inlet, outlet, mouths, drains],
+        sources=gb_sources,
+        boundary_conditions=[*wall_bcs, *inlet_bcs, *sink_bcs],
         temperature=T,
         settings=F.Settings(
             atol=1e-8,
@@ -552,24 +687,43 @@ def run(T, mesh=None):
     )
     model.initialise()
     if DISORDER:
-        network.material = F.Material(
-            D_0=gb_diffusivity_field(network, T, D_b), E_D=0.0
-        )
+        # the same seeded draw indexed by wall id, so a wall gets the same
+        # barrier whichever manifold it belongs to
+        for manifold, *_ in walls:
+            manifold.material = F.Material(
+                D_0=gb_diffusivity_field(manifold, T, D_b), E_D=0.0
+            )
         model.initialise()
 
     model.run()
 
     cb = u.subdomain_to_post_processing_solution[grains]
-    cg = th.subdomain_to_post_processing_solution[network]
+    cgs = [(th.subdomain_to_post_processing_solution[m], w) for m, th, _, _, w in walls]
 
-    # dimensionless currents, then back to atoms/s
+    # dimensionless currents, then back to atoms/s; an outer wall's current is
+    # credited with its weight (header, THE COUPLING LAW)
+    def gb_current(z, interior=False):
+        return sum(
+            w * D_b * GAMMA_MAX * axial_current(cg, D_g_hat, z, interior)
+            for cg, w in cgs
+        )
+
     jb_out = D_b * C * L * axial_current(cb, 1.0, D_HAT)
-    jg_out = D_b * GAMMA_MAX * axial_current(cg, D_g_hat, D_HAT)
+    jg_out = gb_current(D_HAT)
     jb_in = D_b * C * L * axial_current(cb, 1.0, 0.0)
-    jg_in = D_b * GAMMA_MAX * axial_current(cg, D_g_hat, 0.0)
+    jg_in = gb_current(0.0)
     j_out = jb_out + jg_out
     j_in = jb_in + jg_in
     balance = (j_in - j_out) / j_in if j_in else float("nan")
+
+    # the flux split on interior planes, snapped to mesh node planes (header,
+    # FLUX SPLIT); keyed by the plane's fraction of d
+    f_gb_planes = {}
+    for frac in F_GB_PLANES:
+        z = round(frac * NZ) * D_HAT / NZ
+        jb = D_b * C * L * axial_current(cb, 1.0, z, interior=True)
+        jg = gb_current(z, interior=True)
+        f_gb_planes[frac] = jg / (jb + jg) if (jb + jg) else float("nan")
 
     # inlet concentration: imposed in the Dirichlet modes, read off the
     # solution in flux mode
@@ -577,7 +731,7 @@ def run(T, mesh=None):
     C_in = C * u_in
 
     # how much of the network is saturated, and whether Newton overshot
-    theta = cg.x.array
+    theta = np.concatenate([cg.x.array for cg, _ in cgs])
     n_loc = theta.size
     n_sat = int(np.sum(theta > 0.99))
     n_tot = mesh.comm.allreduce(n_loc, op=MPI.SUM)
@@ -595,6 +749,8 @@ def run(T, mesh=None):
         T=T,
         inv_T_1000=1000.0 / T,
         inlet_mode=INLET_MODE,
+        outer_walls=OUTER_WALLS,
+        gb_density_hat=gb_density_hat,
         D_b=D_b,
         D_gb=D_g,
         K=K,
@@ -615,6 +771,7 @@ def run(T, mesh=None):
         j_in=j_in,
         mass_balance=balance,
         f_gb=jg_out / j_out if j_out else float("nan"),
+        **{f"f_gb_{int(100 * k)}": v for k, v in f_gb_planes.items()},
         D_eff=D_eff,
         phi=phi,
         phi_mono=phi_mono,
@@ -641,7 +798,12 @@ def main():
                 f"  phi={r['phi']:.3e}  phi_mono={r['phi_mono']:.3e}  "
                 f"phi_exp={r['phi_exp']:.3e}  H2 m^-1 s^-1 Pa^-1/2\n"
                 f"  sat={r['saturated_fraction']:.2f}  theta_max={r['theta_max']:.6f}  "
-                f"(in-out)/in={r['mass_balance']:+.3e}"
+                f"(in-out)/in={r['mass_balance']:+.3e}\n"
+                "  f_GB on interior planes: "
+                + "  ".join(
+                    f"{int(100 * k)}%: {r[f'f_gb_{int(100 * k)}']:.4f}"
+                    for k in F_GB_PLANES
+                )
             )
             if abs(r["mass_balance"]) > 1e-2:
                 print(
@@ -651,6 +813,7 @@ def main():
                 print("  WARNING: theta exceeded 1; Newton overshot the GB capacity.")
 
     if comm.rank == 0:
+        tag = f"{INLET_MODE}-{OUTER_WALLS}"
         x = np.array([r["inv_T_1000"] for r in rows])
         order = np.argsort(x)
         x = x[order]
@@ -658,7 +821,7 @@ def main():
 
         # Fig. 7 layout: permeability vs 1000/T, log y
         fig, ax = plt.subplots(figsize=(6, 4.5))
-        ax.semilogy(x, get("phi"), "s-", color="purple", label=f"model ({INLET_MODE})")
+        ax.semilogy(x, get("phi"), "s-", color="purple", label=f"model ({tag})")
         ax.semilogy(x, get("phi_mono"), "k--", label=r"$S D_b/2$ (no GB)")
         ax.semilogy(
             x, get("phi_exp"), "-", color="purple", alpha=0.5, label="their Eq. (6) fit"
@@ -668,18 +831,22 @@ def main():
         ax.set_title(f"L={L * 1e9:.0f} nm, d={D_THICK * 1e6:.0f} um, Esteban S")
         ax.legend()
         fig.tight_layout()
-        fig.savefig(f"diaz-fig7-{INLET_MODE}.png", dpi=150)
+        fig.savefig(f"diaz-fig7-{tag}.png", dpi=150)
 
         fig, ax = plt.subplots(figsize=(6, 4.5))
-        ax.plot(get("T"), get("f_gb"), "o-")
+        ax.plot(get("T"), get("f_gb"), "o-", label="exit plane (last-cell value)")
+        for k in F_GB_PLANES:
+            ax.plot(get("T"), get(f"f_gb_{int(100 * k)}"), "s--", label=f"z = {k:g} d")
         ax.set_xlabel("T (K)")
         ax.set_ylabel(r"$J_{GB}/J_{tot}$")
         ax.set_title(
-            f"L={L * 1e9:.0f} nm, d={D_THICK * 1e6:.0f} um, L/d={L / D_THICK:.2f}"
+            f"L={L * 1e9:.0f} nm, d={D_THICK * 1e6:.0f} um, L/d={L / D_THICK:.2f}, "
+            f"outer={OUTER_WALLS}"
         )
+        ax.legend()
         ax.set_ylim(0, 1)
         fig.tight_layout()
-        fig.savefig(f"diaz-flux-fraction-{INLET_MODE}.png", dpi=150)
+        fig.savefig(f"diaz-flux-fraction-{tag}.png", dpi=150)
 
 
 if __name__ == "__main__":
