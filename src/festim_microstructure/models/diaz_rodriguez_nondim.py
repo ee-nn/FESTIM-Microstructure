@@ -72,20 +72,31 @@ current per unit length is D_gb * grad(Gamma). No slab width appears anywhere.
 
 THE COUPLING LAW
 ----------------
-One-way fluxes, per unit GB area and per side,
+One reversible channel, H_b + V_gb <=> H_gb + V_b, with mass-action rates
+on both sites. Per unit GB area and per side,
 
-    J = K c_b (1 - Gamma/Gamma_max)  -  k_r Gamma
+    J = K c_b (1 - Gamma/Gamma_max)  -  k_r Gamma (1 - c_b/N_b)
 
 K [m/s] is kinetic, lambda nu exp(-E_forward/kT). k_r [1/s] is fixed by
-detailed balance so that equilibrium is the McLean/Oriani site-fraction
-isotherm (McLean 1957; Oriani, Acta Metall. 18, 147, 1970)
+detailed balance (the ratio K/k_r is thermodynamic, the magnitude is not;
+Delaporte-Mathurin & Dark 2026, Eq. 8) so that J = 0 is the McLean/Oriani
+site-fraction isotherm (McLean 1957; Oriani, Acta Metall. 18, 147, 1970)
 
-    theta/(1-theta) = (c_b/N_b) exp(E_bind/kT),
+    theta/(1-theta) = [theta_b/(1-theta_b)] exp(E_bind/kT),   theta_b = c_b/N_b,
 
 which gives k_r = K/ell_s with ell_s = (Gamma_max/N_b) exp(E_bind/kT), a
-segregation length [m]. The GB receives 2J (two faces); the bulk loses the
-same. The mass-balance check below confirmed (in-out)/in = -3e-5 with
-N_FLUX_SIDES = 2, i.e. FESTIM applies the wall flux BC once per facet.
+segregation length [m]. The (1 - theta_b) factor is the empty-lattice-site
+activity; dropping it (the dilute-lattice limit) shifts the equilibrium
+theta/(1-theta) by a relative theta_b, which is <= 0.015 at the inlet in
+"concentration" mode and ~1e-8 to 1e-5 in the other two. It is kept because
+it costs nothing and makes the code the isotherm the header names. N_b is
+the tetrahedral-site density (12 per bcc cell); the interstitial site count
+is what theta_b is a fraction of, so this is the same N_b as in ell_s.
+
+The GB receives 2J (two faces); the bulk loses the same. The mass-balance
+check below confirmed (in-out)/in = -3e-5 with N_FLUX_SIDES = 2, i.e. FESTIM
+applies the wall flux BC once per facet (restriction_of() returns "+" for a
+manifold inside a single volume subdomain).
 
 K IS CAPPED
 -----------
@@ -100,19 +111,27 @@ THE SOLVE IS DIMENSIONLESS
     x = L xhat,   t = (L^2/D_b) that,   c_b = C u,   Gamma = Gamma_max theta
 
     bulk:  du/dt = lap(u)
-           flux BC on the walls, per side: -(Da_f u (1-theta) - Da_r theta)
-    GB:    dtheta/dt = (D_gb/D_b) lap(theta) + 2 (Ph_f u (1-theta) - Ph_r theta)
+           flux BC on the walls, per side:
+               -(Da_f u (1-theta) - Da_r theta (1 - eps u))
+    GB:    dtheta/dt = (D_gb/D_b) lap(theta)
+               + 2 (Ph_f u (1-theta) - Ph_r theta (1 - eps u))
 
     Da_f = K L / D_b                  Ph_f = K C L^2 / (D_b Gamma_max)
     Da_r = k_r Gamma_max L / (D_b C)  Ph_r = k_r L^2 / D_b
+    eps  = C / N_b                    (lattice site fraction at u = 1)
 
-The independent groups are {Da_f, beta, Lambda, D_gb/D_b, d/L} with
-beta = (C/N_b) exp(E_bind/kT) (inlet GB occupancy, theta/(1-theta)) and
-Lambda = C L/Gamma_max (bulk inventory across one column per unit GB
+Da_f/Da_r = Ph_f/Ph_r = beta, so at u = 1 the wall is in equilibrium at
+theta/(1-theta) = beta/(1-eps), and that is the value imposed at the mouths.
+
+The independent groups are {Da_f, beta, eps, Lambda, D_gb/D_b, d/L} with
+beta = eps exp(E_bind/kT) (inlet GB occupancy theta/(1-theta), dilute form)
+and Lambda = C L/Gamma_max (bulk inventory across one column per unit GB
 capacity). Lambda decides whether the GB can dominate: its carrying capacity
-relative to the bulk is at most 2 (D_gb/D_b)/Lambda. The concentration scale
-C depends on INLET_MODE. Currents convert back with j_b = D_b C L jhat_b and
-j_gb = D_b Gamma_max jhat_gb (atoms/s).
+relative to the bulk is at most 2 (D_gb/D_b)/Lambda. eps only matters through
+(1 - eps u) and is a sub-percent correction in every mode of this file; it is
+carried so the solve does not silently assume a dilute lattice. The
+concentration scale C depends on INLET_MODE. Currents convert back with
+j_b = D_b C L jhat_b and j_gb = D_b Gamma_max jhat_gb (atoms/s).
 
 INLET CONDITION (INLET_MODE)
 ----------------------------
@@ -219,7 +238,7 @@ PHI0_EXP = 1.74e15
 EA_EXP = 0.569  # eV
 
 # inlet
-INLET_MODE = "implantation"  # "concentration" | "implantation" | "flux"
+INLET_MODE = "flux"  # "concentration" | "implantation" | "flux"
 C_CONC = 5.6e27  # m^-3, their 5.6 H/nm^3 (Fig. 7 caption)
 PHI_IMP = 2.0 * 1e23  # H m^-2 s^-1, their 1e23 H2 m^-2 s^-1 (Fig. 8)
 R_P = 0.4e-9  # m, their near-surface region (Fig. 7 caption)
@@ -242,7 +261,9 @@ VERBOSE = 0  # SNES/KSP monitors, to tell stagnation from blow-up
 
 
 def segregation_length(T):
-    """ell_s [m]: equilibrium Gamma/c_b in the dilute limit, McLean prefactor N_s/N_b"""
+    """ell_s [m]: K/k_r. Equals Gamma/c_b at equilibrium in the dilute limit;
+    the McLean prefactor N_s/N_b times exp(E_bind/kT). Unchanged by the
+    reverse blocking factor, which enters the rate law and not this ratio."""
     return (GAMMA_MAX / N_B_SITES) * np.exp(E_BIND / (F.k_B * T))
 
 
@@ -412,9 +433,20 @@ def run(T, mesh=None):
     Ph_f = K * C * L**2 / (D_b * GAMMA_MAX)
     Ph_r = kr * L**2 / D_b
     D_g_hat = D_g / D_b
-    beta = C / N_B_SITES * np.exp(E_BIND / kT)  # inlet theta/(1-theta) at u = 1
+    eps = C / N_B_SITES  # lattice site fraction at u = 1
+    beta = eps * np.exp(E_BIND / kT)  # inlet theta/(1-theta), dilute form
     Lambda = C * L / GAMMA_MAX
-    theta_surf = beta / (1.0 + beta)
+    if eps >= 1.0:
+        raise ValueError(
+            f"C = {C:.2e} m^-3 exceeds the lattice site density {N_B_SITES:.2e}; "
+            "the site-fraction isotherm is meaningless here"
+        )
+    # the wall's equilibrium at u = 1 with the (1 - eps u) reverse blocking:
+    # Da_f (1-theta) = Da_r theta (1-eps)  ->  theta/(1-theta) = beta/(1-eps).
+    # This is what the mouths must be held at, or the inlet line is not an
+    # equilibrium point of the coupling law it sits on.
+    beta_eff = beta / (1.0 - eps)
+    theta_surf = beta_eff / (1.0 + beta_eff)
 
     if comm.rank == 0:
         print(
@@ -424,7 +456,7 @@ def run(T, mesh=None):
         )
         print(
             f"  Da_f={Da_f:.2e}  Da_r={Da_r:.2e}  Ph_f={Ph_f:.2e}  Ph_r={Ph_r:.2e}  "
-            f"beta={beta:.2e}  Lambda={Lambda:.2e}  S={S:.2e}"
+            f"beta={beta:.2e}  eps={eps:.2e}  Lambda={Lambda:.2e}  S={S:.2e}"
         )
 
     grains = F.VolumeSubdomain(
@@ -445,7 +477,13 @@ def run(T, mesh=None):
     wall_bc = F.ParticleFluxBC(
         subdomain=network,
         species=u,
-        value=lambda cb, cg: N_FLUX_SIDES * (Da_r * cg - Da_f * cb * (1.0 - cg)),
+        # the bulk loses J per side: forward capture blocked by GB occupancy,
+        # reverse release blocked by lattice occupancy. Keep this expression
+        # and the GB source below textually identical up to sign and the
+        # side factor -- that is what makes the exchange conservative.
+        value=lambda cb, cg: (
+            N_FLUX_SIDES * (Da_r * cg * (1.0 - eps * cb) - Da_f * cb * (1.0 - cg))
+        ),
         species_dependent_value={"cb": u, "cg": th},
     )
     sink_bcs = [
@@ -484,10 +522,10 @@ def run(T, mesh=None):
         subdomains=[grains, network, inlet, outlet, mouths, drains],
         sources=[
             F.ParticleSource(
-                # both faces feed the GB; blocking on the forward term only
-                # (the bulk is dilute, c_b/N_b <= 0.015, so reverse blocking
-                # is negligible)
-                value=lambda cb, cg: 2.0 * (Ph_f * cb * (1.0 - cg) - Ph_r * cg),
+                # both faces feed the GB; the same J as wall_bc, opposite sign
+                value=lambda cb, cg: (
+                    2.0 * (Ph_f * cb * (1.0 - cg) - Ph_r * cg * (1.0 - eps * cb))
+                ),
                 species=th,
                 volume=network,
                 species_dependent_value={"cb": u, "cg": th},
@@ -613,13 +651,6 @@ def main():
                 print("  WARNING: theta exceeded 1; Newton overshot the GB capacity.")
 
     if comm.rank == 0:
-        import csv
-
-        with open("diaz-columnar.csv", "w", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=list(rows[0]))
-            w.writeheader()
-            w.writerows(rows)
-
         x = np.array([r["inv_T_1000"] for r in rows])
         order = np.argsort(x)
         x = x[order]
@@ -637,7 +668,7 @@ def main():
         ax.set_title(f"L={L * 1e9:.0f} nm, d={D_THICK * 1e6:.0f} um, Esteban S")
         ax.legend()
         fig.tight_layout()
-        fig.savefig("diaz-fig7.png", dpi=150)
+        fig.savefig(f"diaz-fig7-{INLET_MODE}.png", dpi=150)
 
         fig, ax = plt.subplots(figsize=(6, 4.5))
         ax.plot(get("T"), get("f_gb"), "o-")
@@ -648,7 +679,7 @@ def main():
         )
         ax.set_ylim(0, 1)
         fig.tight_layout()
-        fig.savefig("diaz-flux-fraction.png", dpi=150)
+        fig.savefig(f"diaz-flux-fraction-{INLET_MODE}.png", dpi=150)
 
 
 if __name__ == "__main__":
