@@ -179,15 +179,10 @@ import ufl
 # ----------------------------------------------------------------------------
 L = 100e-9  # column side, m                     (their L, 100 nm case)
 D_THICK = 2e-6  # layer thickness, m             (the experimental 2 um)
-NX, NY = 2, 2  # columns per side; 100 -> 10 um x 10 um
+NX, NY = 1, 2  # columns per side; 100 -> 10 um x 10 um
 CPG = 4  # mesh cells across one column, per axis
 NZ = 100  # mesh cells through the thickness
 
-# CPG >= 2 is required for the facet locator below: with one cell per column a
-# tetrahedron can have vertices on two different column planes and would be
-# mislabelled as a boundary facet. It can be only a few across because
-# transport across a column is fast: at 705 K, D_bulk ~ 7e-9 m^2/s, so
-# (L/2)^2/D ~ 4e-7 s across the column against d^2/D ~ 6e-4 s along it.
 LX, LY = NX * L, NY * L
 AREA = LX * LY
 H_WALL = L / CPG  # wall-normal cell size, sets the K cap

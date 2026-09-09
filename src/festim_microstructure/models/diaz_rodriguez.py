@@ -86,6 +86,7 @@ D_THICK = 2e-6  # layer thickness, m             (the experimental 2 um)
 NX, NY = 2, 2  # columns per side; 100 -> 10 um x 10 um
 CPG = 4  # mesh cells across one column, per axis
 NZ = 100  # mesh cells through the thickness
+AREA = NX * NY * L**2  # m^2, total lateral area of the slab
 
 # CPG >= 2 is required for the facet locator below: with one cell per column a
 # tetrahedron can have vertices on two different column planes and would be
@@ -121,7 +122,7 @@ E_M_GB_RANGE = (0.191, 0.547)  # eV, Wei et al. 2026, eight tungsten GBs
 SEED = 0
 
 A_LAT = 3.165e-10  # m, their DFT lattice constant (Sect. 2.3)
-N_B_SITES = 6.0 / A_LAT**3  # ~1.9e29 m^-3, tetrahedral sites in bcc W
+N_B_SITES = 12.0 / A_LAT**3  # ~1.9e29 m^-3, tetrahedral sites in bcc W
 N_GB = N_GB_AREAL  # m^-2: c_gb is AREAL now; DELTA is gone
 
 
@@ -132,7 +133,7 @@ def s_partition(T):
 
 def k_forward(T):
     """Absorption coefficient, m/s. Kinetic, from E_forward."""
-    return LAMBDA_JUMP * NU_ATTEMPT * np.exp(-E_FORWARD / (F.k_B * T)) / 100
+    return LAMBDA_JUMP * NU_ATTEMPT * np.exp(-E_FORWARD / (F.k_B * T))
 
 
 def k_reverse(T):
@@ -237,8 +238,7 @@ def outlet_flux(c, D, z_out, weight=1.0):
     Works for both the 3D bulk field (an area integral over the outlet face)
     and the 2D GB submesh field (a line integral over the outlet edge of the
     submesh), because in each case it is the exterior-facet measure of that
-    field's own mesh restricted to the outlet plane. `weight` carries DELTA for
-    the GB, which turns its per-unit-width current into a current.
+    field's own mesh restricted to the outlet plane.
     """
     m = c.function_space.mesh
     fdim = m.topology.dim - 1
@@ -307,7 +307,7 @@ def run(T, mesh=None):
             F.ParticleFluxBC(
                 subdomain=network,
                 species=c_b,
-                value=lambda cb, cg: kr * cg - kf * cb * (1.0 - cg / N_GB),
+                value=lambda cb, cg: 2.0 * (kr * cg - kf * cb * (1.0 - cg / N_GB)),
                 species_dependent_value={"cb": c_b, "cg": c_gb},
             ),
             F.FixedConcentrationBC(subdomain=inlet, value=C_SURF, species=c_b),
@@ -374,7 +374,7 @@ def run(T, mesh=None):
         j_tot=j_tot,
         f_gb=j_gb / j_tot if j_tot else float("nan"),
         # permeability in their Eq. (1) sense: flux x thickness / surface conc.
-        perm=j_tot * D_THICK / C_SURF,
+        perm=j_tot * D_THICK / (C_SURF * AREA),
         saturated_fraction=sat,
     )
 
