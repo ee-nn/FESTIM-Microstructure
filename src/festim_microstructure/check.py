@@ -20,7 +20,7 @@ __all__ = ["main"]
 def _version(module):
     try:
         m = importlib.import_module(module)
-    except Exception as e:  # noqa: BLE001 - report anything, do not crash
+    except Exception as e:
         return None, f"{type(e).__name__}: {e}"
     return getattr(m, "__version__", "?"), None
 
