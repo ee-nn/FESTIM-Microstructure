@@ -70,7 +70,6 @@ OUTPUTS
 li2022-fig4ab.png   the two unit cells (cross-sections), panels A-B
 li2022-fig4.png     D_eff/D_m against f_GB for the four ratios, panels D,E,G,H,
                     with Hart, HS and the two Jiang bounds
-li2022-fig4.csv     every run
 li2022-<structure>-f<frac>.xdmf, if WRITE_XDMF, the phase tags for ParaView
 """
 
