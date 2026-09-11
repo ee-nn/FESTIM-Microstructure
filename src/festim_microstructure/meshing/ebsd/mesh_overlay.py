@@ -1,18 +1,4 @@
-"""Overlay the grain boundaries of a `neper -M map.tesr` mesh on the raster.
-
-    from festim_microstructure.meshing.ebsd.mesh_overlay import overlay
-    overlay("map.tesr", "poly.msh4", output="check-mesh.png", unit="um")
-
-The raster is drawn by cell id, with every 1D element of the mesh over it:
-black between two grains, grey on the specimen surface. Those are the `edge#`
-sets the transport driver selects its network from, so this is exactly the set
-of segments FESTIM can put a boundary on -- before the disorientation filter,
-which the driver applies and draws itself (check-network.png).
-
-The msh4 is parsed directly (no gmsh/meshio dependency); `read_tesr` and
-`read_msh4` are reused by pipeline and grain_area_change. Importing
-this module has no side effects: only `overlay` touches matplotlib state.
-"""
+"""Read EBSD raster/mesh files and overlay reconstructed boundaries."""
 
 import numpy as np
 
@@ -106,10 +92,7 @@ def edge_sides(seg, tri):
     return sides
 
 
-# Neper's integer palette, i.e. what `neper -V map.tesr` colours cells by id
-# with: the list at https://neper.info/doc/exprskeys.html minus entries of mean
-# brightness below 0.2 or above 0.8, in order. Cell id k takes entry k, so
-# 1-4 are red, green, blue, yellow as in the Neper tutorial. RGB, 4 per row.
+# Neper's cell-id palette, filtered for usable brightness; RGB, four per row.
 # fmt: off
 NEPER_PALETTE = np.array(
     [

@@ -1,15 +1,4 @@
-"""Scale bars and border trimming, shared by the pipeline's figures.
-
-    from festim_microstructure.meshing.ebsd.micrograph import annotate_png, scale_bar_ax
-    annotate_png("check-ori.png", width_units=160, unit="um", trim_border=True)
-    scale_bar_ax(ax, nx * voxsize, "um")
-
-neper -V frames a flat map in the middle of a 1200 x 900 canvas, so a rendered
-PNG needs its uniform border trimmed; after that the image width *is* the
-raster width and the bar length in pixels follows from `width_units`. The same
-bar is available for matplotlib axes, so every picture carries one. Bar length
-is the largest of 1, 2, 5 x 10^k under a quarter of the width.
-"""
+"""Image utilities shared by EBSD diagnostics."""
 
 import numpy as np
 
@@ -28,7 +17,7 @@ def format_length(value, unit):
     return f"{value:g} {'um' if unit in ('micron', 'microns') else unit}"
 
 
-# --- PIL (rendered PNGs) -----------------------------------------------------
+# PIL helpers.
 def trim(img, tol=6, margin=0):
     """Crop away a border of (near-)uniform colour equal to the corner colour."""
 
@@ -72,7 +61,7 @@ def scale_bar_image(img, width_units, unit="um", length=None, inset=0.03):
     return Image.alpha_composite(img, overlay).convert("RGB")
 
 
-# --- matplotlib --------------------------------------------------------------
+# Matplotlib helpers.
 def scale_bar_ax(ax, width_units, unit="um", length=None, color="white"):
     """Scale bar in the lower right of a matplotlib axes in data units."""
     from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
@@ -98,10 +87,7 @@ def scale_bar_ax(ax, width_units, unit="um", length=None, color="white"):
     return bar
 
 
-# Corner labels of Neper's standard stereographic triangle, as fractions of the
-# key image. The Neper tutorial draws them at (180, 390), (545, 390), (505, 30)
-# on the 800 x 400 render, and these are those positions divided through, so
-# they survive the trim and the rescale below.
+# Neper stereographic-key label positions, normalized to image size.
 IPF_KEY_LABELS = (("[001]", 0.22, 0.96), ("[011]", 0.68, 0.96), ("[111]", 0.63, 0.08))
 
 

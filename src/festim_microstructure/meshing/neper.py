@@ -1,46 +1,7 @@
-"""Neper as a mesh generator: tessellations, raster (EBSD) meshing, readers.
+"""Run Neper tessellation/meshing workflows and read their topology data.
 
-Neper is a command-line program -- there is no library to link against and no
-bindings to write -- so the integration is ``subprocess.run`` plus a mesh
-reader:
-
-* ``neper -T`` writes a tessellation (``.tess``) and, with the ``-stat*``
-  options, one line of data per tessellation vertex / edge / face. Those files
-  are the lookup tables that turn mesh tags back into geometry and physics
-  (:func:`run_neper`, :class:`StatFile`, :class:`NeperMicrostructure`).
-* ``neper -M`` meshes it. The mesh conforms to every grain boundary by
-  construction, so ``occ.fragment`` and the clipping of the Voronoi ridges both
-  disappear, and so does the Distance/Threshold background field: ``-rclface``
-  sets the element size on the faces and ``-rcl`` the size in the cells.
-* ``neper -M map.tesr`` meshes an EBSD raster directly (2D only), reconstructing
-  the boundaries as it goes (:func:`mesh_tesr`).
-* The element sets come out of ``gmshio`` as ``facet_tags`` whose value is the
-  tessellation face (3D) or edge (2D) id, so the network is picked up from tags
-  exactly as before -- no geometric locator, no midpoint test
-  (:func:`read_mesh`).
-
-Three things the scipy construction could not give at all:
-
-* ``domface``, which separates true grain boundaries from the tessellation
-  faces lying on the walls of the specimen (without it the network includes the
-  free surface and hydrogen short circuits around the outside);
-* ``theta``, the disorientation angle between the two grains, which is what
-  actually decides whether a boundary is a fast path;
-* exact topology of the triple lines and quadruple points, instead of the
-  Counter/union-find reconstruction from rounded vertex coordinates.
-
-Binaries
---------
-Neper *cannot* live in the same conda environment as DOLFINx (see
-``environment-neper.yml``), and it does not need to: it only has to be a path.
-:func:`~festim_microstructure._binaries.find_binary` resolves each program
-from, in order, an explicit argument, an environment variable (``FM_NEPER_BIN``,
-``FM_GMSH_BIN``, ``FM_POVRAY_BIN``; ``tools/link-neper-env.sh`` sets them) and
-``PATH``, and every subprocess here runs with those directories prepended to its
-``PATH`` so Neper finds Gmsh when it spawns it. ``FM_GMSH_BIN`` is the
-*executable* that Neper calls for meshing: the conda-forge package providing it
-is ``gmsh``; ``python-gmsh`` is only the bindings, so the DOLFINx environment
-has the API without the command.
+Supports generated polycrystals, 2D EBSD rasters, stat-file metadata, and
+DOLFINx mesh import while keeping Neper subprocesses separate from Python.
 """
 
 import shutil
@@ -52,8 +13,7 @@ import numpy as np
 
 from .._binaries import find_binary, subprocess_env
 
-# dolfinx and mpi4py are imported inside read_mesh, so that running Neper and
-# reading its stat files stays possible without them.
+# Keep DOLFINx imports local so Neper/stat tools remain lightweight.
 
 __all__ = [
     "EDGE_KEYS",
@@ -70,29 +30,17 @@ __all__ = [
     "run_neper",
 ]
 
-# The stat keys are all scalars, one column each, one line per entity in id
-# order. Keep these tuples and the -stat* arguments in run_neper in step.
+# Stat columns are scalar, one per entity, in id order.
 FACE_KEYS = ("domface", "theta", "area", "zmin", "zmax")
 EDGE_KEYS = ("domtype", "facenb", "length")
 VER_KEYS = ("domtype", "edgenb")
 
 
-# ------------------------------------------------------------------ binaries
+# Binaries.
 
 
 def run_interruptible(cmd, cwd=None, env=None):
-    """Run a Neper command, surviving a Ctrl+C long enough for it to finish.
-
-    ``cwd`` is used to keep every path Neper sees short and relative -- see the
-    note in :func:`run_neper` about whitespace in directory names.
-
-    Neper treats SIGINT as "stop optimizing, keep the current solution and
-    write the output". But Ctrl+C goes to the whole foreground process group,
-    so the Python parent gets it too -- and if the parent exits immediately,
-    the child is killed part-way through writing and you are left with partial
-    files, or none. Catching it here and waiting lets Neper land its output;
-    a second Ctrl+C still gets you out.
-    """
+    """Run Neper; let its first Ctrl+C finish writing the current output."""
     proc = subprocess.Popen(cmd, cwd=cwd, env=env)
     try:
         code = proc.wait()
@@ -110,21 +58,14 @@ def run_interruptible(cmd, cwd=None, env=None):
         raise subprocess.CalledProcessError(code, cmd)
 
 
-# ----------------------------------------------------- tessellation + mesh (3D)
+# 3D tessellation and mesh.
 
 
 @dataclass
 class NeperOptions:
-    """Everything ``run_neper`` passes to ``neper -T`` and ``neper -M``.
+    """Options forwarded to ``neper -T`` and ``neper -M``.
 
-    Meshing has two competing costs. The element *count* is dominated by
-    ``rcl``, since the faces are 2D and the interiors 3D. But the meshing
-    *time* is driven by the ratio ``rcl / rclface``: a steep size jump means
-    Netgen grades hard, fails the quality target more often, and multimeshing
-    retries. Neper meshes each face at ``rclface`` and then fills each
-    polyhedron from that boundary mesh at ``rcl``, grading between the two, so
-    refinement near the boundaries is preserved however coarse the interior
-    gets.
+    ``rclface`` controls GB refinement and ``rcl`` the cell interior.
     """
 
     rcl: float = 0.8
@@ -204,12 +145,6 @@ def run_neper(
     auditable, and ``-T`` -- the expensive half when the morphology needs
     optimization -- is a pure function of ``(n, seed, morpho)``, so it is cached
     on its own: a failure in ``-M`` should not cost it again.
-
-    Neper re-parses its input-file argument -- it is a structured field
-    supporting comma-separated files and colon-separated transformations -- and
-    splits it on whitespace, so an absolute path through a directory like
-    "mwes + examples" arrives as several unusable fragments. Running with cwd set
-    to the output directory and passing bare names sidesteps it entirely.
     """
     opt = options or NeperOptions()
     opt.validate()
@@ -226,9 +161,7 @@ def run_neper(
 
     morpho = opt.morpho
     if opt.rsel is not None:
-        # `rsel` avoids small edges like -reg does, but during tessellation, so
-        # it is compatible with periodicity. It combines with the `gg` alias;
-        # combining it with the `voronoi` keyword may not be accepted.
+        # ``rsel`` removes short edges while preserving periodicity.
         morpho = f"{morpho},rsel:{opt.rsel}"
 
     tess = [neper_bin, "-T", "-n", str(n), "-id", str(seed), "-morpho", morpho]
@@ -251,18 +184,14 @@ def run_neper(
         stem,
     ]
     wd = str(base.parent)
-    # Gmsh scratch: Neper writes one .geo per tessellation face and polyhedron,
-    # meshes it, reads the .msh back and deletes the pair. Giving them their own
-    # directory keeps results/ readable and makes leftovers safe to delete.
+    # Isolate Neper's per-face Gmsh scratch files.
     tmp = base.parent / "tmp"
     tmp.mkdir(exist_ok=True)
     if not base.with_suffix(".tess").exists() or force:
         run_interruptible(tess, cwd=wd, env=env)
     else:
         print(f"  reusing {base.name}.tess")
-    # -order 1: the default is 2. -format msh4: Gmsh v4; the default `msh` is
-    # Neper's own dialect of Gmsh 2.2 with extra sections generic readers do
-    # not expect.
+    # FESTIM needs first-order Gmsh v4 element sets.
     run_interruptible(
         [
             neper_bin,
@@ -304,7 +233,7 @@ def run_neper(
     )
     leftovers = list(tmp.glob("*"))
     if leftovers:
-        # -M succeeded, so anything still here is from an earlier failed run
+        # A successful run leaves only stale files from prior failures.
         for f in leftovers:
             f.unlink()
         print(f"  cleared {len(leftovers)} stale gmsh scratch files")
@@ -433,7 +362,7 @@ class NeperMicrostructure:
         return "\n".join(lines)
 
 
-# ----------------------------------------------------------- raster (EBSD, 2D)
+# 2D EBSD raster.
 
 
 @dataclass
@@ -660,7 +589,7 @@ def mesh_tesr(
     return base
 
 
-# -------------------------------------------------------------------- reader
+# Reader.
 
 
 def read_mesh(base, gdim, unit=1.0, comm=None, rank=0):

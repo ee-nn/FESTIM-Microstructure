@@ -1,34 +1,7 @@
-"""EBSD map -> conforming mesh -> the grain-boundary topology FESTIM needs, in 2D.
+"""Mesh EBSD rasters and rebuild the 2D GB topology required by FESTIM.
 
-The mesh is Neper's direct meshing of the raster (``neper -M map.tesr``, 2D
-only), so the grain boundaries are the measured ones. Neper writes no ``.tess``
-for that route (``-format tess`` segfaults in 5.0.0), so the tessellation-level
-bookkeeping -- which grains an edge separates, whether it lies on the specimen
-surface, theta, length, junctions -- is rebuilt here from the mesh
-(:class:`EbsdMicrostructure`): the msh4 carries the reconstructed boundary
-topology as 1D element sets ``edge#`` and the grains as 2D element sets
-``face#``, with face k being raster cell k, and theta follows from the two grain
-orientations under cubic symmetry using the same disorientation function that
-segmented the map.
-
-Nothing about a disorientation requires three dimensions; it is computed from
-the two grain orientations either way. The one thing 2D genuinely costs is
-connectivity: percolation thresholds for GB networks are far lower in 2D than
-in 3D, so a ``theta_min`` that fragments this network may leave the
-corresponding 3D one connected. Treat an enhancement factor from a 2D map as a
-lower bound unless the microstructure is columnar, in which case 2D is exact.
-
-Stages
-------
-1. ``.ctf`` -> ``.tesr``: :func:`festim_microstructure.meshing.ebsd.ctf.convert`
-   (pure Python; also writes the raster-level quality diagnostics).
-2. ``.tesr`` -> ``.msh4``: :func:`festim_microstructure.meshing.neper.mesh_tesr`
-   (Neper + Gmsh), wrapped here by :func:`run_ebsd_pipeline`, which also writes
-   the two diagnostics that need the mesh (:func:`mesh_diagnostics`).
-3. ``.msh4`` -> dolfinx: :func:`festim_microstructure.meshing.neper.read_mesh`
-   with ``gdim=2`` and the raster's unit, then :class:`EbsdMicrostructure`.
-
-``examples/ebsd_gb_diffusion.py`` runs the short-circuit model on the result.
+The pipeline converts ``.tesr`` to ``.msh4``, then derives edge connectivity,
+disorientation, lengths, and junctions from Neper's element sets.
 """
 
 import argparse
@@ -67,20 +40,14 @@ def unit_name(unit):
 
 @dataclass
 class EbsdOptions:
-    """What :func:`run_ebsd_pipeline` needs beyond the ``.tesr`` itself."""
+    """Inputs for EBSD raster meshing."""
 
     tesr: str
-    """The EBSD map written as a raster tessellation (Neper does not read
-    .ang/.ctf/.h5; see :mod:`.ctf`)."""
+    """Raster tessellation; convert source EBSD data first."""
     unit: float = 1e-6
-    """Metres per tesr length unit. The converter keeps the .ctf's microns so
-    that Gmsh's absolute geometric tolerances are exercised at O(1-100) rather
-    than O(1e-6); the mesh is converted once, on reading, so everything derived
-    from it is in SI."""
+    """Metres per TESR unit; conversion to SI occurs when the mesh is read."""
     theta_min: float = 10.0
-    """Keep only boundaries above this disorientation (degrees). 15 deg is the
-    usual high-angle threshold; expect it to fragment the network more readily
-    in 2D than in 3D."""
+    """Minimum GB disorientation in degrees."""
     mesh: TesrMeshOptions = None
     """Neper meshing options; defaults to :class:`TesrMeshOptions`."""
     stem: str = "poly"
@@ -94,12 +61,7 @@ class EbsdOptions:
 def run_ebsd_pipeline(
     options, workdir="results", neper_bin=None, gmsh_bin=None, force=True
 ):
-    """Mesh the EBSD map. Returns the base path (no extension).
-
-    All Neper invocations live in
-    :func:`~festim_microstructure.meshing.neper.mesh_tesr`; this only marshals
-    the parameters and runs the mesh diagnostics afterwards.
-    """
+    """Mesh an EBSD raster and return the extension-free output path."""
     base = mesh_tesr(
         options.tesr,
         stem=options.stem,
@@ -120,24 +82,9 @@ def read_extent(base, unit):
 
 
 def mesh_diagnostics(base, unit_name="um", check_images=True):
-    """The two diagnostics that need the mesh, run once Neper is done.
+    """Write mesh-overlay and grain-area diagnostics.
 
-    :func:`~festim_microstructure.meshing.neper.mesh_tesr` drives Neper and Gmsh
-    only; these come from the pipeline's library modules and are done here so
-    those modules stay importable rather than needing a command line:
-
-      check-mesh.png         the reconstructed boundary edges over the raster
-      <stem>-areachange.csv, check-area.png
-                             how much each grain changed size between the
-                             raster and the mesh
-
-    Anything that depends only on the .tesr -- the rendered maps, the quality
-    and segmentation-error figures -- belongs to the conversion and is written
-    by ``ctf.convert(diagnostics=True)`` instead.
-
-    The area table is not optional: it also checks that mesh face k is raster
-    cell k, which every theta downstream depends on, and
-    grain_area_change.measure raises if it is not.
+    The area check also verifies that mesh face ids still match raster cell ids.
     """
     base = Path(base)
     work = base.parent
@@ -177,31 +124,10 @@ class EdgeTable:
 
 
 class EbsdMicrostructure:
-    """The GB topology, rebuilt from the mesh Neper wrote.
+    """Rebuild GB topology and disorientations from Neper's EBSD mesh.
 
-    With route A there is no tessellation file to take statistics from, but the
-    msh4 carries the reconstructed topology: every 1D element set ``edge#`` is
-    one boundary edge of the raster (after interface smoothing) and every 2D
-    element set ``face#`` is raster cell k, so the grains on either side of an
-    edge are the tags of the cells its facets belong to. From that:
-
-    - ``domtype``: -1 for an edge between two grains, 1 for an edge with a
-      single grain, i.e. on the specimen surface (in 2D the domain boundary is
-      made of edges, so this is the whole story);
-    - ``theta``: cubic disorientation between the two grains' mean
-      orientations, read from ``-grainori.txt``. It is invariant under a
-      global inversion of all orientations (the misorientations are inverted
-      and conjugated, neither of which changes an angle under two-sided cubic
-      symmetry), so the active/passive question does not enter here;
-    - ``length``, ``ymin``, ``ymax``: summed / extremised over the edge's
-      facets, in metres because the mesh was scaled on reading;
-    - triple junctions: vertices where 3+ distinct edge ids meet and that do
-      not lie on the bounding box. On a raster four grains can meet at a pixel
-      corner, and those are counted too.
-
-    The adjacency is gathered across ranks because a facet on a partition
-    boundary sees only one of its two cells locally; lengths and extrema are
-    reduced. The junction count is exact in serial and a lower bound in parallel
+    Mesh ``edge#`` sets provide boundaries and ``face#`` sets retain raster cell
+    ids. Junction counts are exact in serial and lower bounds in parallel.
     """
 
     def __init__(

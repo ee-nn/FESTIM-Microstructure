@@ -1,7 +1,6 @@
-"""Periodic 2D/3D Voronoi microstructures with boundary-conforming meshes.
+"""Build periodic 2D/3D Voronoi microstructures and conforming Gmsh meshes.
 
 GBs are codimension-one facets; their physical width remains a model coefficient.
-``aspect`` stretches grains along x while preserving periodicity.
 """
 
 import argparse
@@ -19,11 +18,11 @@ __all__ = [
     "VoronoiMicrostructure3D",
     "build_mesh",
     "build_mesh_3d",
-    "grain_tags_from_seeds",
     "clip_polygon_to_box",
     "clip_to_box",
     "connected_components",
     "connected_components_3d",
+    "grain_tags_from_seeds",
     "near_faces",
     "near_segments",
     "network_tensor",

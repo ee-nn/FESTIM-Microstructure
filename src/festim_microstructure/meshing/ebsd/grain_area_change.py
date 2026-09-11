@@ -1,40 +1,4 @@
-"""How much the grains change size between the raster and the mesh.
-
-    from festim_microstructure.meshing.ebsd.grain_area_change import measure
-    res = measure("map.tesr", "poly.msh4", csv="areas.csv", png="check-area.png")
-
-`neper -M map.tesr` reconstructs the raster interfaces into a vertex/edge/face
-topology, smooths them (-tesrsmooth, Laplacian by default) and meshes the
-result, so the meshed grain is not the same set of points as the rastered one.
-
-    A_raster(k) = (voxels with cell id k) x XStep x YStep
-    A_mesh(k)   = sum of the triangle areas of the mesh's face k
-    delta(k)    = 100 (A_mesh(k) - A_raster(k)) / A_raster(k)      [%]
-
-reported as min / mean / median / max over the grains. That is smoothing and
-meshing combined -- there is no intermediate file to separate them from. To
-split them, re-run the mesh stage with TESR_SMOOTH=none into a different STEM
-and difference the two tables; what is left is the discretisation alone.
-
-delta is not bias-free: smoothing cuts pixel corners, so it shrinks a convex
-grain and grows a concave one. The signed mean over all grains is therefore
-near zero while individual grains move by percents, and both are printed. Two
-more numbers go with it, because area can be preserved while the boundary
-moves:
-
-  size (ECD)      the same change as an equivalent circular diameter, sqrt(A),
-                  which is what compares with a grain size -- about half the
-                  percent in area.
-  displaced area  the fraction of meshed area sitting over a *different* raster
-                  grain, from each triangle's centroid. Counts boundary motion
-                  regardless of sign, and is directly comparable with the ~17 %
-                  misplaced voxels that made a convex-cell Laguerre fit
-                  unusable.
-
-That centroid lookup is also the only check in the pipeline that mesh face k is
-raster cell k. If it fails, `measure` raises: every per-grain quantity
-downstream, theta included, is indexed by face id.
-"""
+"""Compare raster grain areas with their Neper-meshed counterparts."""
 
 from __future__ import annotations
 
@@ -62,12 +26,7 @@ def raster_areas(cells, vox, ncell=None):
 
 
 def triangle_areas(xyz, tri):
-    """(face tag, area, centroid) for every 2D element, by the shoelace rule.
-
-    The node tags are gathered through a flat lookup array rather than by
-    indexing the dict per triangle, which is what keeps this linear in the
-    element count on a real mesh.
-    """
+    """Return ``(face tag, area, centroid)`` for every triangle."""
     tags = np.fromiter((t for t, _ in tri), dtype=np.int64, count=len(tri))
     nodes = np.array([v[:3] for _t, v in tri], dtype=np.int64)
     coord = np.zeros((max(xyz) + 1, 2))
@@ -84,18 +43,7 @@ def triangle_areas(xyz, tri):
 
 
 def face_to_cell(cells, vox, origin, tags, area, centroid, ncell):
-    """Which raster cell each mesh face sits on, and how much area is displaced.
-
-    Every triangle's centroid is dropped into the raster and its area added to
-    the (face, cell) pair it lands on; the face is attributed to whichever cell
-    holds the most of its area. Only the pairs that actually occur are
-    accumulated -- a dense (nface, ncell) table would be 100 MB at 3500 grains
-    and is almost all zeros, since a face touches one cell and its neighbours.
-
-    Returns the mapping face tag -> cell id, the meshed area of each face, the
-    area of each face lying on its mapped cell, and the fraction of the whole
-    meshed area not over the cell of its own id -- boundary motion, unsigned.
-    """
+    """Map mesh faces to raster cells and measure unsigned displaced area."""
     ny, nx = cells.shape
     ix = np.clip(((centroid[:, 0] - origin[0]) / vox[0]).astype(int), 0, nx - 1)
     iy = np.clip(((centroid[:, 1] - origin[1]) / vox[1]).astype(int), 0, ny - 1)
@@ -107,8 +55,7 @@ def face_to_cell(cells, vox, origin, tags, area, centroid, ncell):
     w = np.bincount(inv, weights=area)
     utag, ucell = uk // (ncell + 1), uk % (ncell + 1)
 
-    # uk is sorted, so entries are already grouped by face; sorting each group
-    # by area puts the winner last
+    # Sort each face's candidate cells by accumulated area.
     order = np.lexsort((w, utag))
     ut, uc, uw = utag[order], ucell[order], w[order]
     last = np.flatnonzero(np.r_[ut[1:] != ut[:-1], True])
@@ -192,8 +139,7 @@ def area_change(tesr_path, msh4_path, allow_mismatch=False):
 
     with np.errstate(invalid="ignore", divide="ignore"):
         delta = 100.0 * (a_mesh - a_ras) / np.where(a_ras > 0, a_ras, np.nan)
-        # equivalent circular diameter: d ~ sqrt(A), so this is the same change
-        # expressed as a length rather than an area
+        # Equivalent circular diameter converts area change to a length scale.
         d_ecd = 100.0 * (np.sqrt(a_mesh / np.where(a_ras > 0, a_ras, np.nan)) - 1.0)
     res["delta"] = delta
     res["delta_ecd"] = d_ecd

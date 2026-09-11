@@ -1,63 +1,7 @@
-"""Convert an Oxford/Channel .ctf EBSD map into a Neper raster tessellation
-(.tesr), including the grain segmentation a .ctf does not carry.
+"""Convert Channel ``.ctf`` EBSD maps to Neper ``.tesr`` raster tessellations.
 
-    from festim_microstructure.meshing.ebsd.ctf import convert
-    res = convert("map.ctf", "ebsd.tesr", min_pixels=20, diagnostics=True)
-    res["segmentation_error"]["indexed"]["rms"]   # degrees
-
-then pass tesr="ebsd.tesr" to EbsdOptions in pipeline.py.
-
-There is no official converter; the transcription is straightforward but the
-segmentation is not. A .ctf holds an orientation per pixel and nothing else,
-while a .tesr needs a `**cell` section and a `**data` section putting every
-pixel in a grain. Grains are found here by flood-filling across neighbouring
-pixels whose disorientation is below `threshold`, under cubic symmetry.
-
-Every choice lives in the `Settings` dataclass, which `convert` builds from
-keyword arguments or accepts ready-made. It is dumped to
-<output>-provenance.json beside the .tesr and read back by
-`settings_from_provenance`, because the crop window, the y mirror and the
-orientation convention cannot be recovered from the .tesr itself.
-
-With diagnostics=True the conversion also writes, beside the .tesr:
-<output>-quality.png (why each rejected pixel was rejected), -segerror.png/.csv
-(the per-voxel cost of segmenting), and, when the `neper` binary resolves,
--ori.png and -grains.png, the rendered maps. Everything that depends only on
-this stage is produced here; the mesh diagnostics live with the mesh.
-
-What is written
----------------
-**general   dimension, XCells/YCells, XStep/YStep (microns unless `scale`)
-**cell      grain count, ids, crysym, one mean orientation per grain
-**data      grain id of every pixel, contiguous from 1, 0 where unindexed
-**oridata   per-pixel orientation (optional; large, needed for -V and GOS)
-**oridef    per-pixel indexing flag, 0 where the point was rejected
-
-The driver rescales to metres after meshing (TESR_UNIT), so leave `scale` at 1.
-
-Orientation convention
-----------------------
-Bunge (phi1, Phi, phi2) in degrees go to Rodrigues vectors under Neper's
-default `passive` convention. Rodrigues rather than passing the angles through
-because it removes any degrees-vs-radians ambiguity in the tesr reader; reduced
-to the cubic fundamental zone first, which also keeps the vector finite (a
-180 deg rotation has none). `orientation.self_test`, which `convert` runs
-first, pins this against Neper's own convention table.
-
-The file declares tesr format 2.2 deliberately: Neper 4.10.0 swapped the
-meaning of `active` and `passive` and bumped the version, and a file claiming
-2.1 has its `**cell/*ori` descriptor silently flipped on read
-(neut_tesr_fscanf2.c, "Fixing orientation convention") while `**oridata` is
-taken literally -- leaving the two sections in opposite conventions.
-
-Any symmetry-equivalent representative is equally correct, since the crysym is
-declared and Neper applies it. The active/passive choice is not free, so check
-check-ori.png against AZtec or MTEX; if the colours look inverted, re-run with
-active=True.
-
-Limitations: cubic only (the disorientation is a closed form specific to that
-group -- for hex or lower, segment in MTEX and import the grain ids), and
-square grids only (a hexagonal acquisition needs MTEX's `gridify` first).
+The converter segments cubic-orientation pixels, writes provenance and optional
+quality diagnostics, and preserves the orientation convention Neper expects.
 """
 
 from __future__ import annotations
@@ -90,9 +34,7 @@ from .orientation import (
 from .segmentation_error import format_report, read_tesr_full, segmentation_error
 from .segmentation_error import write_png as write_segerr_png
 
-# --- Channel conventions -----------------------------------------------------
-# Field 4 of a .ctf phase line is the Channel Laue group index. Mapped onto the
-# crystal symmetry keys Neper accepts (https://neper.info/doc/exprskeys.html).
+# Channel Laue-group indices mapped to Neper crystal-symmetry keys.
 LAUE_TO_CRYSYM = {
     1: "-1",
     2: "2/m",
@@ -109,21 +51,13 @@ LAUE_TO_CRYSYM = {
 CUBIC_LAUE = (10, 11)
 
 
-# --- conversion settings -----------------------------------------------------
+# Conversion settings.
 @dataclass
 class Settings:
-    """Every choice `convert` makes, in one object.
-
-    Passed whole to the writers, so a caller building one by hand gets exactly
-    the same behaviour and the fields reaching the provenance json have a
-    single definition. The four with a non-obvious rationale are commented; the
-    rest say what they do.
-    """
+    """Configuration for :func:`convert`, including saved provenance."""
 
     ctf: str
-    #: xmin,xmax,ymin,ymax in the .ctf's units, applied before segmentation.
-    #: Prefer this to Neper's -transform crop, which clips grains into 1-2 px
-    #: slivers that no `min_pixels` prune has seen and that abort the fit.
+    #: Crop before segmentation to avoid unpruned Neper slivers.
     crop: str | None = None
     phase: int = 1  #: phase to keep
     threshold: float = 10.0  #: grain boundary misorientation, degrees
@@ -131,25 +65,18 @@ class Settings:
     min_bands: int = 0  #: minimum Bands; 0 disables the test
     allow_error: bool = False  #: keep points whose Error column is non-zero
     min_pixels: int = 5  #: discard grains smaller than this
-    #: step size multiplier giving the tesr length unit. Do not write metres:
-    #: Neper's fit objective and its val/eps criteria are in absolute lengths,
-    #: so a metre-scale map stops the fit at iteration 1.
+    #: TESR length scale; keep it near unity for Neper's absolute tolerances.
     scale: float = 1.0
-    #: mirror in y. EBSD coordinates usually run downwards and Neper's y runs
-    #: up, so set this to put the specimen's top surface at y = Ly.
+    #: Mirror y because EBSD and Neper use opposite vertical directions.
     flip_y: bool = False
     active: bool = False  #: write orientations active rather than passive
     fill: bool = True  #: grow cells into unassigned voxels; see fill_holes
-    #: clean up enclosed grains and corner-only self-contacts, because
-    #: `neper -M` aborts on a face whose boundary is not a single loop.
+    #: Repair raster topologies that ``neper -M`` cannot reconstruct.
     topology_fix: bool = True
     voxel_ori: bool = True  #: write **oridata/**oridef (large; needed by -V)
-    #: also write <output>-quality.png, -segerror.png/.csv, and, if `neper`
-    #: resolves, the two rendered maps -ori.png and -grains.png
+    #: Write quality and segmentation diagnostics.
     diagnostics: bool = False
-    #: neper binary for the rendered check images, or None to skip them. They
-    #: are the only part of this module that shells out, and a missing binary
-    #: is a warning, not an error.
+    #: Optional Neper binary for rendered checks; absence is non-fatal.
     neper: str | None = "neper"
     povray: str = "povray"  #: neper -V renders through this
 
@@ -158,7 +85,7 @@ class Settings:
         return "um" if np.isclose(self.scale, 1.0) else f"x{self.scale:g} um"
 
 
-# --- .ctf parsing ------------------------------------------------------------
+# CTF parsing.
 class CtfMap:
     """A parsed Channel Text File: header fields plus the pixel table."""
 
@@ -233,7 +160,7 @@ class CtfMap:
         return LAUE_TO_CRYSYM.get(ph["laue"]), ph
 
 
-# --- pipeline ----------------------------------------------------------------
+# Pipeline.
 def build_grid(ctf, phase, max_mad, require_zero_error, min_bands):
     """Place the pixel table on the (ny, nx) grid and build the quality mask.
 
@@ -265,9 +192,7 @@ def build_grid(ctf, phase, max_mad, require_zero_error, min_bands):
     qgrid[iy[inside], ix[inside]] = quat[inside]
     ok[iy[good], ix[good]] = True
 
-    # Per-pixel provenance for diagnostics=True: what the .ctf itself says about
-    # each point, so a rejected pixel can be traced to the column that
-    # rejected it rather than blamed on the conversion.
+    # Preserve per-pixel quality fields for diagnostics.
     diag = {}
     for col, fill in (("Error", -1), ("MAD", np.nan), ("Bands", -1), ("Phase", -1)):
         if ctf.has(col):
@@ -379,9 +304,7 @@ def fill_holes(cellids):
     n = int(empty.sum())
     if n == 0 or n == empty.size:
         return cellids, n
-    # distance_transform_edt measures distance to the nearest zero element, so
-    # feeding it the empty mask returns, for each empty voxel, the index of the
-    # nearest non-empty one
+    # The empty-mask distance transform identifies nearest filled voxels.
     _, idx = distance_transform_edt(empty, return_indices=True)
     return cellids[tuple(idx)], n
 
@@ -576,7 +499,7 @@ def grain_mean_orientations(qgrid, cellids, ncells, sym, chunk=50_000):
     return to_fundamental_zone(means, sym)
 
 
-# --- writing -----------------------------------------------------------------
+# Writing.
 def write_tesr(path, cellids, ori_cell, ori_vox, oridef, voxsize, crysym, precision=12):
     """Write the .tesr.
 
@@ -665,7 +588,7 @@ def settings_from_provenance(path):
     return Settings(**{k: v for k, v in rec.items() if k in known})
 
 
-# --- rendered check images ---------------------------------------------------
+# Rendered checks.
 def _run(cmd, cwd, log):
     """Run a Neper command, returning True on success and reporting on failure.
 
@@ -793,7 +716,7 @@ def render_checks(tesr, width, unit="um", neper="neper", povray="povray", log=pr
     return written
 
 
-# --- diagnostics -------------------------------------------------------------
+# Diagnostics.
 def verify_readback(path, qgrid, ok, cellids, flip_y, sym):
     """Re-read the written tesr, compare with what was meant, return a report.
 

@@ -1,55 +1,7 @@
-"""How much orientation information the .ctf -> .tesr segmentation throws away.
+"""Measure orientation loss when pixels are represented by one orientation per grain.
 
-    from festim_microstructure.meshing.ebsd.segmentation_error import (
-        format_report, segmentation_error,
-    )
-    res = segmentation_error(qgrid, cellids, qcell, vox, ok=ok, threshold=10.0)
-
-ctf.convert() calls this and prints the report; to measure a .ctf/.tesr
-pair already on disk use ctf.measure_tesr_against_ctf(), which parses
-the .ctf and lines the two files up first.
-
-A .ctf carries one orientation per pixel, a .tesr one per *grain*
-(``**cell/*ori``), and that per-grain value is the only orientation the rest of
-the pipeline sees: meshing.neper.mesh_tesr reads it out with `-statcell rodrigues` and
-the transport driver builds every boundary theta from it. The difference is the
-cost of segmenting.
-
-Definition
-----------
-For a pixel i of area a_i = XStep x YStep, assigned to cell c(i),
-
-    theta_i = disorientation( q_ctf(i), q_cell(c(i)) )        [degrees]
-
-under cubic symmetry, i.e. the minimum angle over all symmetry-equivalent
-descriptions -- the same quantity the segmentation threshold is applied to.
-Reported as the discrete L2 norm of that field and its normalised form,
-
-    ||theta||_L2 = sqrt( sum_i theta_i^2 a_i )                [deg * length]
-    ||theta||_L2 / sqrt(|Omega|) = sqrt( mean_i theta_i^2 )   [deg]
-
-The second is the headline: the RMS disorientation of a pixel from the grain it
-was put in, independent of map size and directly comparable with `threshold`
-(10 deg) and with the driver's THETA_MIN. Voxels are equal-area on a square
-grid so the weighted and unweighted forms coincide; the weights are carried
-anyway so the number stays right if XStep != YStep. This is the grain
-orientation spread (GOS) in RMS form (Wright, Nowell & Field, Microsc.
-Microanal. 17 (2011) 316), reported per grain as well as over the map.
-
-Two errors, not one. With ``qvox=None`` (the default) each pixel is compared
-with its *cell* orientation: the segmentation error, of order the intragranular
-spread, and irreducible -- one orientation per grain is what a tessellation is.
-Passing ``qvox`` compares it instead with its own ``**oridata`` entry, which
-measures transcription only and should land at the ~1e-6 deg arccos noise floor
-(orientation.self_test explains the amplification); anything larger means the
-convention flipped or the files are misaligned.
-
-Alignment. The tesr covers the `crop` window of the .ctf and may have been
-mirrored by `flip_y`, neither of which is recoverable from the .tesr, so
-convert() records them in <output>-provenance.json for
-measure_tesr_against_ctf() to read back. A shape mismatch is a hard error; a
-large error with the right shape and a mirror-symmetric theta map is a wrong
-flip.
+Also supports a TESR ``**oridata`` transcription check when voxel orientations
+are available.
 """
 
 from __future__ import annotations
@@ -61,7 +13,7 @@ from .micrograph import scale_bar_ax
 from .orientation import cubic_disorientation_angle, qconj, qmul
 
 
-# --- the measurement ---------------------------------------------------------
+# Measurement.
 def theta_field(qgrid, qref):
     """Per-pixel disorientation (degrees) between two (ny, nx, 4) quat fields."""
     a = qgrid.reshape(-1, 4)
@@ -70,11 +22,7 @@ def theta_field(qgrid, qref):
 
 
 def l2_stats(theta, mask, vox, threshold=None):
-    """L2 norms and the order statistics of `theta` over the voxels in `mask`.
-
-    `vox` is (XStep, YStep) in the raster's length unit; it only sets the units
-    of the unnormalised norm and, if the voxels are not square, the weights.
-    """
+    """Return L2 and order statistics for selected disorientation values."""
     t = np.asarray(theta)[mask]
     a = vox[0] * vox[1]
     n = t.size
@@ -114,7 +62,7 @@ def per_grain_rms(theta, cellids, ncells):
 def segmentation_error(
     qgrid, cellids, qcell, vox, ok=None, threshold=None, qvox=None, backfilled=None
 ):
-    """The full diagnostic. Returns a dict of arrays and statistics.
+    """Return segmentation and optional transcription-error diagnostics.
 
     qgrid   (ny, nx, 4) per-pixel quaternions straight from the .ctf
     cellids (ny, nx)    grain id per pixel, 0 = unassigned, as in the tesr
@@ -206,7 +154,7 @@ def format_report(res, label="segmentation"):
     return lines
 
 
-# --- picture -----------------------------------------------------------------
+# Figure.
 def write_png(path, res, cellids, unit="um", dpi=150, threshold=None, log=print):
     """theta map, its distribution, and the per-grain RMS on the same map."""
     plt = use_agg()
@@ -291,7 +239,7 @@ def write_csv(path, res, log=print):
     return path
 
 
-# --- reading a written tesr back ---------------------------------------------
+# TESR reader.
 def read_tesr_full(path):
     """header, **cell/*ori, **data, **oridata, **oridef of an ascii tesr.
 
