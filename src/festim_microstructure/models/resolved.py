@@ -1,56 +1,8 @@
-"""The resolved model: one subdomain per grain, coupled through a codim-1 network.
+"""Per-grain lattice fields coupled through one codimension-one GB network.
 
-Every Voronoi cell is its own :class:`festim.VolumeSubdomain` carrying its own
-:class:`festim.Species`, so the lattice concentration is allowed to *jump* from
-one grain to the next. That is what makes a grain boundary able to resist as well
-as to conduct: the only path from one grain to another is through the network,
-and the exchange rate ``k`` of a grain with the network is a real transfer
-resistance in series with the lattice. A single bulk subdomain cannot represent
-that -- there the lattice field is continuous across every boundary, so a
-boundary can only ever be a short circuit in parallel with the lattice.
-
-The network itself stays **one** codim-1 subdomain with one species. That is what
-makes triple junctions work with no junction condition to write: the submesh
-built from all the grain-boundary facets is connected, so a single continuous
-field lives on it. FESTIM gives each adjacent grain an interior-facet integral of
-its own on which that grain is the ``"+"`` side, so a facet shared by two grains
-is integrated once per grain -- which is exactly the two-sided feeding the
-physics asks for.
-
-Units, and where ``delta`` goes
--------------------------------
-The physical boundary is a slab of width ``delta`` with tangential diffusivity
-``D_gb``, fed from the grain on each side. Per unit boundary *area*::
-
-    delta dc_gb/dt = delta D_gb lap_s(c_gb) + sum_(sides s) k_s (c_s - c_gb)
-
-FESTIM assembles the manifold equation without any thickness factor, so it is
-divided by ``delta``: the manifold material carries ``D_gb`` itself and each side
-contributes a source ``(k_s / delta) (c_s - c_gb)`` -- one term per grain, no
-factor of two, because the sum over the two adjacent grains supplies it. Each
-grain loses what it gives, ``k_s (c_gb - c_s)`` per unit area, on its own side.
-``delta`` reappears in every post-processed quantity: the network holds
-``delta * integral(c_gb)`` and carries ``delta * D_gb * grad_s(c_gb)``.
-
-Coefficients are ``fem.Constant``, never Python floats
-------------------------------------------------------
-Every coefficient that a parameter sweep varies -- ``k``, ``delta``, ``D_gb``,
-the lattice tensors -- enters the forms as a ``dolfinx.fem.Constant`` or a
-``fem.Function``, and never as a bare Python float. A float multiplying a UFL
-expression becomes a ``ufl.FloatValue`` *inside* the form, and the value of a
-``FloatValue`` is part of the form signature, which is the FFCx JIT cache key.
-Changing it therefore regenerates and re-compiles the C kernel of every block it
-appears in. With one subdomain per grain that is a residual and two Jacobian
-blocks per grain, each with its own ``dx``/``dS`` id and so its own signature, so
-a sweep over ``k`` recompiles the whole system at every point -- tens of seconds
-per solve on a mesh that takes well under a second to assemble and factor.
-A ``Constant``'s signature does not depend on its value, so the kernels are
-compiled once and the cache hits from then on.
-
-The same property is what makes :meth:`MicroModel.set_physics` possible: the
-assembled problem can be pointed at new coefficients and re-solved, so a sweep
-pays for the submeshes, the dofmaps and the kernels once per microstructure
-rather than once per point.
+Each grain exchanges ``k (c_grain - c_gb)`` with the collapsed boundary slab;
+the network equation uses ``k / delta``. Sweepable coefficients remain DOLFINx
+constants or functions to avoid FFCx recompilation.
 """
 
 from dataclasses import dataclass, field
@@ -102,16 +54,7 @@ SURFACE_ID_0 = 2_000_000  # the per-grain boundary patches are numbered from her
 
 
 class ConstantDiffusivity(F.Material):
-    """A material whose diffusivity is a ``fem.Constant`` that can be changed later.
-
-    ``festim.Material`` turns a float ``D_0`` into a *fresh* ``fem.Constant`` each
-    time a form asks for it and keeps no reference, so the value is frozen at build
-    time. That is enough for the signature (a ``Constant``'s signature does not
-    depend on its value) but leaves no handle for
-    :meth:`MicroModel.set_physics`. Here the constants are kept -- one per mesh,
-    because a manifold's self terms are integrated on its submesh while its coupling
-    terms are integrated on the parent -- and ``D`` writes through to all of them.
-    """
+    """A material retaining one mutable DOLFINx diffusivity constant per mesh."""
 
     def __init__(self, D):
         super().__init__(D_0=float(D), E_D=0.0)
@@ -128,8 +71,7 @@ class ConstantDiffusivity(F.Material):
             constant.value = dolfinx.default_scalar_type(self.D_0)
 
     def get_diffusion_coefficient(self, mesh=None, temperature=None, species=None):
-        # keyed on identity: a dolfinx Mesh is not hashable by value, and the parent
-        # mesh and each submesh are distinct objects that live as long as the model
+        # Parent mesh and each submesh need distinct constants.
         key = id(mesh)
         if key not in self._constants:
             self._constants[key] = dolfinx.fem.Constant(
@@ -139,12 +81,7 @@ class ConstantDiffusivity(F.Material):
 
 
 def check_network_covers_grain_boundaries(micro):
-    """Every interior facet separating two grains must be in the network.
-
-    If one were missed it would carry no coupling at all, and since the grains are
-    now separate subdomains the model would have a perfectly sealed wall where the
-    microstructure has a grain boundary.
-    """
+    """Return ``(all boundaries, missing boundaries)`` for a microstructure."""
     mesh, tags = micro.mesh, micro.cell_tags
     tdim = mesh.topology.dim
     mesh.topology.create_connectivity(tdim - 1, tdim)
@@ -153,11 +90,7 @@ def check_network_covers_grain_boundaries(micro):
     values = np.zeros(index_map.size_local + index_map.num_ghosts, dtype=np.int32)
     values[tags.indices] = tags.values
 
-    # Vectorised, and with one locator call rather than one per facet: a locator
-    # such as near_segments loops over every ridge internally, so calling it per
-    # facet costs n_facets x n_segments and dominates any mesh worth checking.
-    # The facets are selected the same way GrainBoundaryNetwork selects its
-    # candidates, and both share facet_midpoints.
+    # One vectorized locator call avoids an expensive facet-by-facet search.
     facets = np.arange(mesh.topology.index_map(tdim - 1).size_local, dtype=np.int32)
     offsets = facet_to_cell.offsets
     interior = facets[(offsets[facets + 1] - offsets[facets]) == 2]
@@ -194,10 +127,7 @@ class MicroModel:
         if not self._initialised:
             self.model.initialise()
             tune_direct_solver(self.model)
-            # the unknowns as initialise() leaves them: zero, or whatever
-            # create_initial_conditions() wrote. This is the state a freshly built
-            # problem solves from, and every point of a sweep has to start from it
-            # -- see solve().
+            # Preserve the cold-start state for reproducible sweep points.
             self._initial_guess = [u.x.array.copy() for u in self._unknowns]
             self._initialised = True
         return self
@@ -218,31 +148,10 @@ class MicroModel:
         return self
 
     def solve(self, warm_start=False):
-        """Solve the already-initialised problem, from the current coefficients.
+        """Solve from current coefficients, cold-starting unless requested.
 
-        The unknowns are reset to the state :meth:`initialise` left them in first,
-        so a re-solve is numerically identical to a freshly built problem. Do not
-        be tempted to leave the previous point's solution in place as a warm start:
-        FESTIM's convergence test (``festim.helpers.convergenceTest``) is
-
-            converged if  ||F|| < atol  or  ||F|| / ||F_0|| < rtol
-
-        where ``F_0`` is the residual of *this* solve's first iterate. ``ATOL`` is
-        1e-25 here, far below anything an unscaled problem reaches, so the relative
-        test is the only one that can fire. From a zero iterate ``||F_0||`` is the
-        full Dirichlet-driven load and one exact LU step takes the residual to
-        ~1e-16 of it, comfortably inside ``rtol``. From the previous point's
-        solution ``||F_0||`` is only as large as the change in the coefficients,
-        while the residual floor after a step is unchanged -- it is set by the
-        round-off of the assembly, not by the iterate -- so the ratio can never
-        reach 1e-10 and SNES iterates to ``DIVERGED_MAX_IT`` on a solve that is
-        already exact. The real cure is to nondimensionalise so that ``atol`` means
-        something (see ``ATOL`` in :mod:`festim_microstructure.solvers`); until
-        then, start cold.
-
-        Args:
-            warm_start: keep the current iterate instead. Only safe on a scaled
-                problem, or a continuation where ``atol`` can actually fire.
+        Warm starts are unsafe for these unscaled problems because FESTIM's
+        relative residual test can reject a converged round-off floor.
         """
         if not warm_start:
             self.reset_initial_guess()
@@ -265,23 +174,7 @@ class MicroModel:
         return self.initialise().solve()
 
     def set_physics(self, physics: Physics, exchange_rate=None):
-        """Point this problem at new coefficients, without rebuilding it.
-
-        Only values change: ``delta``, ``k`` and ``D_gb`` are ``fem.Constant`` and
-        the lattice tensors are a ``fem.Function``, so the submeshes, the dofmaps,
-        the compiled kernels and the sparsity pattern all stay as they are. A
-        parameter sweep is therefore one :func:`build` and one ``initialise``
-        followed by ``set_physics(...).solve()`` per point.
-
-        The geometry is *not* allowed to change: ``micro`` is the same
-        microstructure, so the network, the grains and their orientations are the
-        ones this problem was built with.
-
-        Args:
-            physics: the new material data.
-            exchange_rate: ``grain_id -> k``, as in :func:`build`. Defaults to
-                ``physics.k_exchange`` everywhere.
-        """
+        """Update coefficients without rebuilding forms, spaces, or geometry."""
         if not self.k_constants:
             raise RuntimeError(
                 "this MicroModel has no coefficient handles, so it cannot be "
@@ -299,8 +192,7 @@ class MicroModel:
                 float(exchange_rate(grain.id))
             )
         self.gb_material.D_value = physics.D_gb
-        # the lattice tensors depend on D_bulk and the anisotropy, so they move with
-        # T even when the sweep is over the boundary alone
+        # Temperature also changes the lattice tensor.
         self.tensors = fill_crystal_diffusivity_field(
             self.lattice_field, self.micro, physics
         )
@@ -319,11 +211,7 @@ class MicroModel:
 
 
 def _window(mesh, window):
-    """Indicator of an axis-aligned box, as a UFL expression on ``mesh``.
-
-    ``window`` is ``((x0, y0), (x1, y1))`` in 2D or ``((x0, y0, z0), (x1, y1, z1))``
-    in 3D; ``None`` is the whole cell.
-    """
+    """Return a UFL indicator for an axis-aligned window, or one for ``None``."""
     if window is None:
         return 1.0
     lo, hi = window
@@ -342,12 +230,9 @@ def _assemble(expr):
 
 
 def averages(mm: MicroModel, window=None):
-    """Volume averages of flux and gradient over ``window`` (the whole cell if None).
+    """Return ``(flux, gradient, measure)`` over a window or the whole cell.
 
-    Returns ``(q, grad_c, area)``. The flux sums every grain's lattice flux and
-    the network's own ``delta D_gb grad_s c_gb``. Note that ``grad_c`` is
-    the average over the grains of a field that is *discontinuous* between them
-    (the jumps are carried by the network term).
+    Flux includes the GB term ``delta * D_gb * grad(c_gb)``.
     """
     delta, D_gb = mm.physics.delta, mm.physics.D_gb
     dim = mm.micro.mesh.geometry.dim
@@ -356,15 +241,11 @@ def averages(mm: MicroModel, window=None):
     q = np.zeros(dim)
     grad_c = np.zeros(dim)
 
-    # NOTE I wonder if there is a way to use FESTIM's exports here instead of needing to
-    # assemble everything from scratch
     for c, grain in zip(mm.grain_solutions, mm.grains, strict=True):
         mesh = c.function_space.mesh
         dx = ufl.Measure("dx", domain=mesh)
         w = _window(mesh, window)
-        # as a Constant, not ufl.as_matrix of the numbers: the tensor differs from
-        # grain to grain, so as literals it gives every grain a form signature of its
-        # own and one compiled kernel each, for what is the same integrand
+        # A Constant avoids a separate compiled form per grain tensor.
         D = dolfinx.fem.Constant(mesh, np.asarray(mm.tensors[grain.id], dtype=scalar))
         flux = -D * ufl.grad(c)
         area += _assemble(w * dx)
@@ -384,8 +265,7 @@ def averages(mm: MicroModel, window=None):
 
 
 def inventory(mm: MicroModel, window=None):
-    """Helper function to calculate the hydrogen per unit area
-    of the cell, including both grains and grain boundaries."""
+    """Return inventory in grains plus the width-scaled GB network."""
     total = 0.0
     for c in mm.grain_solutions:
         mesh = c.function_space.mesh
@@ -393,7 +273,7 @@ def inventory(mm: MicroModel, window=None):
     cgb = mm.network_solution
     mesh_g = cgb.function_space.mesh
 
-    # multiply by the GB width for dimensional consistency
+    # Convert the codimension-one integral to slab inventory.
     total += mm.physics.delta * _assemble(
         _window(mesh_g, window) * cgb * ufl.Measure("dx", domain=mesh_g)
     )
@@ -414,30 +294,10 @@ def build(
     rtol=1e-10,
     petsc_options=None,
 ):
-    """Assemble the resolved problem on ``micro``.
+    """Assemble a resolved model for a microstructure and grain-surface BCs.
 
-    Args:
-        micro: a :class:`~festim_microstructure.meshing.voronoi.VoronoiMicrostructure`
-            or :class:`~festim_microstructure.meshing.voronoi.VoronoiMicrostructure3D`
-            (or anything with the same ``mesh`` / ``cell_tags`` / ``grain_ids`` /
-            ``orientations`` / ``locator`` / ``tolerance`` attributes; with
-            ``facet_tags`` and ``gb_tag`` the network is read from the tags).
-        physics: the material data.
-        bcs: an iterable of ``(name, locator, value)``. Each fixes the
-            concentration on the part of the outer boundary picked by ``locator``
-            including every adjacent grain and point where a boundary
-            meets that part of the surface (a codim-2 subdomain). ``value``
-            is a float or a callable of ``x``.
-        petsc_options: solver configuration. Defaults to FESTIM's direct solve
-            with a larger MUMPS working array. See ``tune_direct_solver`` for details.
-        exchange_rate: ``grain_id -> k``, the transfer coefficient of that grain
-            with the network. Defaults to ``physics.k_exchange`` everywhere. The
-            exchange is a property of the (network, grain) pair, so it can be made
-            to depend on the grain it faces.
-        transient: if False, a steady solve.
-
-    Returns:
-        MicroModel
+    ``bcs`` contains ``(name, locator, value)`` tuples. ``exchange_rate`` maps a
+    grain id to ``k`` and defaults to ``physics.k_exchange``.
     """
     if petsc_options is None:
         petsc_options = dict(DIRECT_SOLVER_OPTIONS)
@@ -447,7 +307,7 @@ def build(
         def exchange_rate(grain_id):
             return physics.k_exchange
 
-    # Assemble the material properties
+    # Material fields and one lattice species per grain.
     D_field, tensors = crystal_diffusivity_field(micro, physics)
     grains = [
         Grain(id=int(g), material=F.Material(D=D_field), cell_tags=micro.cell_tags)
@@ -456,7 +316,7 @@ def build(
     tdim = micro.mesh.topology.dim
     gb_material = ConstantDiffusivity(physics.D_gb)
     if getattr(micro, "facet_tags", None) is not None:
-        # the mesher tagged the boundary facets: nothing geometric to get wrong
+        # Tagged facets avoid geometric network detection.
         network = TaggedGrainBoundaryNetwork(
             NETWORK_ID, gb_material, micro.facet_tags, [micro.gb_tag], dim=tdim - 1
         )
@@ -467,13 +327,7 @@ def build(
     species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
     c_gb = F.Species("c_gb", subdomains=[network])
 
-    # delta and k as fem.Constant, NOT as floats. Both coupling terms below are
-    # parent-mesh integrals (see FESTIM's create_subdomain_formulation), so a
-    # constant on the parent mesh is the right domain for each. A float here would
-    # end up as a ufl.FloatValue inside the form, whose value is part of the form
-    # signature and hence of the FFCx JIT cache key: every sweep point would
-    # recompile the residual and both Jacobian blocks of every grain. See the
-    # module docstring.
+    # Parent-mesh Constants make coefficient sweeps reuse compiled forms.
     scalar = dolfinx.default_scalar_type
     delta_constant = dolfinx.fem.Constant(micro.mesh, scalar(physics.delta))
     k_constants = {
@@ -483,13 +337,10 @@ def build(
         for grain in grains
     }
 
-    # one exchange per grain, each naming only that grain's species. This is how
-    # FESTIM works out which side of the network the term belongs to.
-    # The two grains adjacent to a facet each contribute their own term.
+    # Each grain contributes its own side of the network exchange.
     sources = [
         F.ParticleSource(
-            # delta_constant is closed over, not a default argument: FESTIM inspects
-            # co_varnames to decide what to pass, so the signature stays (c_g, c_b, k)
+            # FESTIM inspects arguments, so close over ``delta_constant``.
             value=lambda c_g, c_b, k=k_constants[grain.id]: (
                 (k / delta_constant) * (c_b - c_g)
             ),
@@ -509,7 +360,7 @@ def build(
         for spe, grain in zip(species, grains, strict=True)
     ]
 
-    # Assign boundary conditions
+    # Grain patches and GB mouths for each prescribed outer surface.
     subdomains = [*grains, network]
     surfaces = {}
     next_id = SURFACE_ID_0
@@ -525,8 +376,7 @@ def build(
             boundary_conditions.append(
                 F.FixedConcentrationBC(subdomain=patch, value=value, species=spe)
             )
-        # where the network meets that part of the surface: codim-2 of the parent,
-        # points in 2D and curves in 3D
+        # GB mouths are codimension two in the parent mesh.
         mouths = F.SurfaceSubdomain(id=next_id, dim=tdim - 2, locator=locator)
         next_id += 1
         subdomains.append(mouths)
@@ -535,7 +385,6 @@ def build(
         )
         surfaces[name] = (patches, mouths)
 
-    # Build the codim problem
     model = F.HydrogenTransportProblemDiscontinuous(
         mesh=F.Mesh(micro.mesh),
         species=[*species, c_gb],
@@ -573,11 +422,7 @@ def build(
 
 
 def grain_areas(micro):
-    """Area of every grain, by assembling the DG0 test function against ``dx``.
-
-    That assembly gives one entry per cell holding the cell's own area, so the
-    grains are summed from it without a form per grain.
-    """
+    """Return grain areas from a single DG0 assembly."""
     mesh = micro.mesh
     V = dolfinx.fem.functionspace(mesh, ("DG", 0))
     volumes = dolfinx.fem.assemble_vector(
@@ -597,12 +442,7 @@ def mean_lattice_tensor(mm: MicroModel):
 
 
 def parent_field(mm: MicroModel, name="c"):
-    """Every grain's solution gathered into one DG1 field on the parent mesh.
-
-    Each grain lives on its own submesh, so a plain export writes one file per
-    grain. Interpolating them all into a single discontinuous field instead gives
-    one ParaView dataset in which the jump across each boundary is visible.
-    """
+    """Gather all grain solutions into one discontinuous parent-mesh field."""
     V = dolfinx.fem.functionspace(mm.model.mesh.mesh, ("DG", 1))
     field = dolfinx.fem.Function(V, name=name)
 
@@ -622,10 +462,7 @@ def parent_field(mm: MicroModel, name="c"):
 
 
 def equilibrium_error(mm: MicroModel):
-    """max ``|c_grain - c_gb|`` / max ``c_grain``. If ~0: the GBs are transparent
-    and a single-field homogeneous model can exist. If ~O(1): grains are throttled
-    off from the network and no single D_eff can reproduce the microstructure.
-    """
+    """Return the normalized grain/GB concentration mismatch."""
     import scipy.spatial
 
     cgb = mm.network_solution

@@ -1,21 +1,8 @@
-"""festim-microstructure: microstructure-resolved hydrogen transport with FESTIM.
+"""Microstructure-resolved hydrogen transport tools for FESTIM.
 
-    import festim as F
-    import festim_microstructure as fm
-
-Subpackages
------------
-``fm.meshing``         Voronoi (Gmsh) and Neper polycrystals, EBSD map import.
-``fm.models``          Fisher short circuit, the per-grain resolved model,
-                       and their coefficient fields.
-``fm.postprocessing``  Inventories, network topology checks and measures.
-
-Complete research workflows and publication reproductions are kept in the
-repository's ``examples/`` directory, outside the installed API.
-
-The heavy dependencies (dolfinx, festim, gmsh) are imported lazily by the
-submodules that need them, so ``import festim_microstructure`` and the pure
-NumPy EBSD converter (``fm.meshing.ebsd.ctf``) work without them.
+``meshing`` builds/imports polycrystals, ``models`` provides reusable transport
+models, and ``postprocessing`` provides numerical measures. Study workflows live
+in ``examples/``. Heavy dependencies are imported only by modules that need them.
 """
 
 try:

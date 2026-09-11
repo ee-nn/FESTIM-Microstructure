@@ -1,10 +1,4 @@
-"""``fm-check``: report what this installation can and cannot do.
-
-Prints the Python-side stack (dolfinx, festim, gmsh API, mpi4py) and where the
-external programs resolve to. Exit status is non-zero only if the FEniCSx side
-is broken; a missing Neper is reported but is not an error, since the Voronoi
-route and the EBSD converter work without it.
-"""
+"""``fm-check`` reports Python dependencies and external executables."""
 
 import importlib
 import os
@@ -29,12 +23,7 @@ _VERSION_RE = re.compile(r"\d+\.\d+")
 
 
 def _program_version(path, flag):
-    """First output line that looks like a version.
-
-    Both streams are scanned, because POV-Ray writes its banner to stderr and
-    precedes it with a harmless "cannot open the user configuration file
-    ~/.povray/3.7/povray.conf" line when that optional file is absent.
-    """
+    """Return the first output line that appears to contain a version."""
     try:
         out = subprocess.run(
             [path, flag], capture_output=True, text=True, timeout=20, check=False

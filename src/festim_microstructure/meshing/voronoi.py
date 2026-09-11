@@ -1,25 +1,7 @@
-"""Periodic Voronoi microstructures and the meshes that conform to them.
+"""Periodic 2D/3D Voronoi microstructures with boundary-conforming meshes.
 
-2D: ridges are segments, clipped to the box by Liang-Barsky, and the mesh is
-built with ``occ.fragment`` so its facets lie on every ridge
-(:func:`voronoi_segments`, :func:`build_mesh`, :class:`VoronoiMicrostructure`).
-
-3D: a ridge is a convex polygon, clipped by Sutherland-Hodgman against the six
-half-spaces of the box, and the grain-boundary facets are tagged with a physical
-group so they can be picked up from the facet tags
-(:func:`voronoi_faces`, :func:`build_mesh_3d`).
-
-The grain boundaries are *lines*, not thin bands: nothing here resolves the
-physical boundary width ``delta``. That width only ever appears as a
-coefficient, which is what lets a 1 nm boundary sit inside a 20 um cell. What
-the mesh must do is put facets exactly on the ridges, so that a codim-1 subdomain
-can be built from them.
-
-Grains can be elongated (``aspect``): the seeds are Voronoi-tessellated in a
-coordinate stretched along x, so the grains come out with an aspect ratio while
-staying a proper periodic tessellation. An equiaxed tessellation homogenises to a
-nearly isotropic tensor, so the elongation is what makes the anisotropy
-identification worth doing.
+GBs are codimension-one facets; their physical width remains a model coefficient.
+``aspect`` stretches grains along x while preserving periodicity.
 """
 
 import argparse
@@ -29,8 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.spatial import Voronoi
 
-# gmsh, dolfinx and mpi4py are imported inside the two mesh builders, so that the
-# tessellation geometry above them stays importable (and testable) without them.
+# Mesh dependencies stay local so geometry utilities remain lightweight.
 
 __all__ = [
     "GB_TAG_3D",

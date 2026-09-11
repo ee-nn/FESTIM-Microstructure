@@ -1,20 +1,13 @@
-"""Orientation algebra: quaternions, the cubic symmetry group, disorientation.
+"""Quaternion and cubic-symmetry utilities for EBSD orientation data.
 
-Imports nothing else in the pipeline, so it is the bottom of the import graph
-(segmentation_error, ctf and pipeline all sit above it).
-
-Quaternions are (w, x, y, z), unit, w >= 0 where a canonical sign matters.
-Euler angles are Bunge (phi1, Phi, phi2) under Neper's `passive` convention:
-the rotation carrying the sample frame onto the crystal frame, which is the
-standard reading of Bunge angles and what a .ctf stores. Crystal symmetry
-multiplies on the right (see `crystal_equivalents`). `self_test` pins all of
-this against values Neper publishes; `ctf.convert` runs it.
+Quaternions use ``(w, x, y, z)`` and Bunge's passive convention; crystal
+symmetry acts on the right.
 """
 
 import numpy as np
 
 
-# --- quaternion helpers ------------------------------------------------------
+# Quaternion helpers.
 def cubic_symmetry_quaternions():
     """The 24 rotations of the cubic group as unit quaternions: identity, nine
     90/180/270 deg about <100>, six 180 deg about <110>, eight 120/240 about
@@ -72,30 +65,17 @@ def euler_bunge_to_quat(phi1, Phi, phi2, degrees=True):
         (c * np.cos(sigma), s * np.cos(delta), s * np.sin(delta), c * np.sin(sigma)),
         axis=-1,
     )
-    # a quaternion and its negative are the same rotation; fix the sign so that
-    # averaging and fundamental-zone reduction are well defined
+    # Canonicalize the sign for averaging and fundamental-zone reduction.
     return np.where(q[..., :1] < 0, -q, q)
 
 
 def crystal_equivalents(q, sym):
-    """All symmetry-equivalent descriptions of the orientations q, (n, 24, 4).
-
-    Symmetry multiplies on the *right*: q maps sample to crystal, so an
-    operator S relabelling crystal axes composes as q * S. S * q would rotate
-    the sample frame instead and is a different orientation -- checked against
-    Neper, where `-statedge theta` is 0 for (q, q*S) and 17 deg for (q, S*q).
-    """
+    """Return right-multiplied cubic equivalents with shape ``(n, 24, 4)``."""
     return qmul(q[:, None, :], sym[None, :, :])
 
 
 def to_fundamental_zone(q, sym, chunk=50_000):
-    """Pick, for each orientation, the symmetry equivalent closest to identity.
-
-    Any equivalent is as correct as any other -- Neper applies the declared
-    symmetry itself. This one is chosen because its rotation angle is at most
-    ~62.8 deg for cubic, so q0 never nears zero and the Rodrigues vector stays
-    finite.
-    """
+    """Choose the cubic equivalent closest to identity for each orientation."""
     out = np.empty_like(q)
     for lo in range(0, len(q), chunk):
         blk = q[lo : lo + chunk]

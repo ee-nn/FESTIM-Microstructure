@@ -47,15 +47,11 @@ from festim_microstructure.models import resolved as mm
 
 __all__ = ["homogeneous_model", "permeation_bcs", "steady_consistency", "uptake"]
 
-ATOL = mm.ATOL  # see the note there: an unscaled problem stalls at a loose atol
+ATOL = mm.ATOL
 
 
 def permeation_bcs(size, direction, c_in=1.0, c_out=0.0):
-    """Concentration fixed on the two faces normal to ``direction``.
-
-    The other two faces carry nothing, which in a finite element formulation is
-    the natural condition -- zero flux.
-    """
+    """Fix concentration on opposite faces normal to ``direction``."""
     axis = "xy".index(direction)
     return [
         ("inlet", lambda x, a=axis: np.isclose(x[a], 0.0), c_in),
@@ -64,21 +60,14 @@ def permeation_bcs(size, direction, c_in=1.0, c_out=0.0):
 
 
 def steady_consistency(micro, physics, candidates, verbose=True):
-    """Test A: how well ``q_bar = -D_eff grad_c_bar`` holds under permeation.
-
-    ``candidates`` is a ``{label: tensor}`` mapping, scored side by side. Which of
-    the two estimators predicts better is a result, not something to assume: the
-    whole-cell one is biased upward by the Taylor condition, the window one is
-    unbiased but noisier on a small cell.
-    """
+    """Score candidate tensors against a permeation boundary condition."""
     rows = {}
     for direction in ("x", "y"):
         model = mm.build(
             micro, physics, bcs=permeation_bcs(micro.size, direction)
         ).run()
         q, grad_c, _ = mm.averages(model)
-        # the driven component is the one the test is about; the transverse one is
-        # near zero on both sides and its relative error is meaningless
+        # Relative transverse errors are meaningless near zero flux.
         i = "xy".index(direction)
         if verbose:
             print(f"  driven along {direction}: q_{direction} = {q[i]:+.5e}")
@@ -106,14 +95,7 @@ def homogeneous_model(
     stepsize=None,
     atol=ATOL,
 ):
-    """A plain rectangle carrying the anisotropic tensor.
-
-    ``festim.Material`` takes ``D_0`` as a matrix, so the identified tensor goes
-    in directly. (``E_D`` stays a scalar: one activation energy for every
-    direction, the prefactor carrying the anisotropy. A tensor that varies in
-    space -- a graded microstructure -- would be passed as ``D`` instead, as a
-    tensor-valued ``fem.Function``.)
-    """
+    """Build a homogeneous rectangle carrying the anisotropic tensor."""
     mesh = dolfinx.mesh.create_rectangle(
         MPI.COMM_WORLD, [np.array([0.0, 0.0]), np.array([size, size])], [n, n]
     )
@@ -150,12 +132,7 @@ def homogeneous_model(
 
 
 def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
-    """Test B: inventory during uptake from the top face, resolved vs homogeneous.
-
-    The end time is set from the tensor itself -- about the time the slow axis
-    needs to cross the cell -- so that the comparison covers the whole transient
-    rather than its first moments.
-    """
+    """Compare resolved and homogeneous uptake over one slow-axis crossing time."""
     size = micro.size
     slow = min(np.linalg.eigvalsh(0.5 * (D_eff + D_eff.T)))
     final_time = 0.35 * size**2 / slow

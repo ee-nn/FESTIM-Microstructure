@@ -118,8 +118,7 @@ import numpy as np
 import ufl
 from scipy.spatial import cKDTree
 
-# physics (SI)
-# ----------------------------------------------------------------------------
+# Physics (SI).
 T = 1073.0  # K; only scales D_m (their Sect. 3.4)
 D0_M = 5.13e-8  # m^2/s, Liu et al. 2014, cited in their Sect. 2.3
 E_M = 0.21  # eV
@@ -127,8 +126,7 @@ RATIOS = [100.0, 10.0, 0.2, 0.1]  # D_GB/D_m of their panels D, E, G, H
 C_IN = 0.4e24  # m^-3, their 0.4 and 0.1 (arbitrary units)
 C_OUT = 0.1e24
 
-# microstructures
-# ----------------------------------------------------------------------------
+# Microstructures.
 B = 96e-9  # m, cube side: their 3D box (Sect. 2.3)
 DX = 1e-9  # m, their grid spacing (Sect. 2.3)
 SEED = 0
@@ -138,7 +136,7 @@ ISO_N = round(B / DX)  # 96 cells per side, their grid
 ISO_SEEDS = (
     6  # seeds per side -> 216 grains, g = 16 nm, ~6 per edge as in their Fig. 4A
 )
-# band width / grain spacing; f_GB ~ 0.3-0.7
+# Band width / grain spacing; target ``f_GB`` is 0.3--0.7.
 ISO_W_OVER_G = [0.11, 0.15, 0.20, 0.26, 0.33]
 
 COL_N = round(B / DX)  # 96 cells per side in x-y
@@ -166,9 +164,7 @@ def D_m(T):
     return D0_M * np.exp(-E_M / (F.k_B * T))
 
 
-# ----------------------------------------------------------------------------
-# Voronoi foams as point classifiers
-# ----------------------------------------------------------------------------
+# Voronoi foams as point classifiers.
 @dataclass(frozen=True)
 class Foam:
     """A periodic Voronoi tessellation of a cube (dim=3) or of the x-y plane
@@ -224,9 +220,7 @@ class Foam:
         return self.face_distance(points) > 0.5 * w
 
 
-# ----------------------------------------------------------------------------
-# one simulation
-# ----------------------------------------------------------------------------
+# One simulation.
 @dataclass(frozen=True)
 class Case:
     structure: str
@@ -370,9 +364,7 @@ def run(case, ratio, mesh, cells_grain, cells_gb, f_gb, comm):
             F.FixedConcentrationBC(subdomain=inlet, value=C_IN, species=H),
             F.FixedConcentrationBC(subdomain=outlet, value=C_OUT, species=H),
         ],
-        # the residual scales with D C h ~ 1e5 (3D) to D C ~ 1e15 (2D) in these
-        # units, far above atol, so convergence is decided by rtol and the
-        # solver cannot stop at iteration 0 on a zero initial guess
+        # The large residual makes the relative tolerance decisive.
         settings=F.Settings(atol=1e-8, rtol=1e-10, transient=False),
         exports=[],
         petsc_options=PETSC_OPTIONS_3D if case.structure == "iso" else None,
@@ -381,7 +373,7 @@ def run(case, ratio, mesh, cells_grain, cells_gb, f_gb, comm):
     model.run()
     c = H.post_processing_solution
 
-    # D as a DG0 field from the same classification, for the flux forms
+    # Use the same classification for the DG0 flux field.
     V0 = dolfinx.fem.functionspace(mesh, ("DG", 0))
     D = dolfinx.fem.Function(V0, name="D")
     D.x.array[:] = Dgb
@@ -415,9 +407,7 @@ def run(case, ratio, mesh, cells_grain, cells_gb, f_gb, comm):
     )
 
 
-# ----------------------------------------------------------------------------
-# reference formulas from the paper
-# ----------------------------------------------------------------------------
+# Reference formulas from the paper.
 def hart(f, r):
     """Their Eq. 28: phases in parallel. Exact for Col_I along the columns."""
     return 1.0 + f * (r - 1.0)
@@ -429,9 +419,7 @@ def hashin_shtrikman(f, r):
     return r + (1.0 - f) / (1.0 / (1.0 - r) + f / (3.0 * r))
 
 
-# ----------------------------------------------------------------------------
-# figures
-# ----------------------------------------------------------------------------
+# Figures.
 GRAIN_RGB = (1.0, 0.93, 0.15)  # their yellow grains
 BAND_RGB = (0.13, 0.40, 0.85)  # their blue boundaries
 
@@ -577,7 +565,7 @@ def main():
                     )
     if comm.rank != 0:
         return
-    # the measured f_GB of each sweep member (one entry per band width)
+    # One measured ``f_GB`` per band width.
     fi = [q["f_gb"] for q in rows if q["structure"] == "iso"][:: len(RATIOS)]
     fc = [q["f_gb"] for q in rows if q["structure"] == "col_z"][:: len(RATIOS)]
     draw_fig4ab(

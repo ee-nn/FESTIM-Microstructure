@@ -1,47 +1,7 @@
-r"""Identify an anisotropic diffusivity for the grain-boundary network.
+"""Identify an anisotropic effective diffusivity from resolved cell problems.
 
-Two steady cell problems are solved on the resolved microstructure, one per
-direction of an imposed macroscopic gradient ``G``. Each gives an average flux,
-and the two together give every entry of the ``2 x 2`` tensor:
-
-    q_bar = - D_eff . grad_c_bar
-
-with, over an averaging window ``W``,
-
-    q_bar     = (1/|W|) [ sum_g int_(Omega_g /\ W) -D_g grad(c_g) dx
-                          + int_(Gamma /\ W) -delta D_gb grad_s(c_gb) ds ]
-    grad_c_bar = (1/|W|) sum_g int_(Omega_g /\ W) grad(c_g) dx
-
-The second flux term is the whole point: it is what is carried *along* the
-boundaries, and it is what makes ``D_eff`` differ from the lattice value at all.
-
-Boundary conditions, and why there are two estimates
-----------------------------------------------------
-Without ``dolfinx_mpc`` there are no periodic constraints available, so the cell
-problems use the uniform-gradient (Taylor) condition ``c = G.x`` on the entire
-outer boundary -- on every grain that touches it and on the network at its
-mouths. That is a *constraint* on the fluctuation, so it stiffens the cell: it
-clamps the short circuits to the macroscopic field exactly where they leave, and
-the resulting ``D_eff`` is an upper estimate that only relaxes to the true one as
-the cell grows.
-
-The cheap fix is to average over an interior window instead, where the clamping
-has been forgotten. Then ``grad_c_bar`` is no longer ``G``, so both averages are
-collected into matrices and
-
-    D_eff = - Q H^-1,   Q = [q^(x) q^(y)],  H = [grad_c_bar^(x) grad_c_bar^(y)]
-
-The gap between the two estimates, and their drift with cell size, is the honest
-error bar on the identification. Both are printed.
-
-When a single ``D_eff`` exists at all
--------------------------------------
-Because each grain is its own subdomain, the lattice concentration may jump from
-grain to grain, and a homogeneous single-field model can only be equivalent to
-the microstructure if those jumps are small -- if the boundaries are transparent
-enough that ``c_gb = c_grain`` locally. ``equilibrium error`` in the report
-measures exactly that, and ``--k-sweep`` walks the exchange rate from the regime
-where it holds to the regime where it does not.
+Whole-cell Taylor estimates are upper bounds; interior-window estimates reduce
+boundary clamping. A large grain/GB mismatch means no single-field ``D_eff``.
 """
 
 import argparse
@@ -70,15 +30,7 @@ def make_microstructure(size, grain_size, aspect=1.0, seed=0, cells_per_grain=10
 
 
 def hart_bound(model: mm.MicroModel):
-    """``<D_lattice> + (delta D_gb / A) sum_i l_i t_i (x) t_i``.
-
-    The parallel (Hart / Voigt) estimate: every boundary conducts along its own
-    tangent as if the macroscopic gradient reached it undisturbed, and the grains
-    conduct in parallel with it. It ignores tortuosity, connectivity and the
-    transfer resistance at the boundaries, so it is an upper bound; how much of it
-    the identification reaches says how much of the network's raw conductance the
-    microstructure actually delivers.
-    """
+    """Return the parallel Hart/Voigt bound for the resolved microstructure."""
     micro, physics = model.micro, model.physics
     tensor = network_tensor(micro.segments)
     return mm.mean_lattice_tensor(model) + physics.delta * physics.D_gb / micro.area * (
@@ -287,11 +239,7 @@ def main(argv=None):
                 micro, physics, window_fraction=args.window_fraction, verbose=False
             )
             D = np.asarray(ident.D_window)
-            # past a few percent the grains no longer sit at the boundary value, the
-            # macroscopic field is not one field any more, and the number in the
-            # D columns is an artefact: the flux still runs along the network while
-            # <grad c> inside the isolated grains collapses, so the ratio diverges.
-            # It is reported because the divergence is the diagnosis.
+            # A large mismatch signals dual-porosity, not a usable ``D_eff``.
             verdict = "ok" if ident.equilibrium_error < 0.05 else "NO SINGLE D_eff"
             print(
                 f"  k = {k:9.3e} m/s  R_int/R_grain = "

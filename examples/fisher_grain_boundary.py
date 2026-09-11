@@ -1,32 +1,6 @@
-"""Fisher grain-boundary diffusion, as a codimension-1 subdomain.
+"""Compare a codimension-one Fisher GB model with the Whipple/Le Claire result.
 
-A short-circuit diffusion problem: a specimen is held at a constant surface
-concentration, and a grain boundary perpendicular to that surface carries hydrogen far
-deeper than lattice diffusion alone would, leaking sideways into the grain as it goes.
-This is the classical Fisher (1951) model; Whipple and Le Claire solved it analytically,
-and the script checks the simulation against that solution at the end.
-
-Geometry -- the problem is symmetric about the grain boundary plane, so only half of it
-is modelled. ``x`` runs across the grain, ``y`` runs into the depth::
-
-      y=0   ┌───────────────┐   surface, c = C0
-            │Γ              │
-            │Γ    grain     │   Γ = the grain boundary, a codim-1 subdomain at x=0
-            │Γ    (D_B)     │       carrying its own equation with D_GB >> D_B
-            │Γ              │
-      y=LY  └───────────────┘
-           x=0            x=LX  <- mid-grain symmetry plane, zero flux
-
-Requires the codim-1 machinery *and* Dirichlet conditions on the boundary of a manifold
-(the ``dim`` argument of ``SurfaceSubdomain``), which is what pins the grain boundary to
-the surface concentration at its mouth. The exchange units are explained in
-:mod:`festim_microstructure.models.fisher`; in this symmetric half-cell the half-slab
-of width ``delta / 2`` collects from one face only, ``J / (delta / 2)``, which is the
-same coefficient ``2 J / delta`` the full-slab convention gives.
-
-Run::
-
-    python examples/fisher_grain_boundary.py
+The symmetric half-cell has one GB at ``x=0`` and a charged surface at ``y=0``.
 """
 
 from dataclasses import dataclass
@@ -78,15 +52,11 @@ def eval_on(fn, points):
 def main(s=Setup()):
     D_B, D_GB, LX, LY = s.D_B, s.D_GB, s.LX, s.LY
 
-    # Fisher's model assumes *local equilibrium* between the grain boundary and the
-    # lattice in contact with it, rather than a finite exchange rate. FESTIM's
-    # coupling is kinetic, so equilibrium is approached by making k large compared
-    # with the bulk transport it competes with, sqrt(D_B / T_END). The script
-    # reports how well that holds.
+    # Large ``k`` approaches Fisher's local-equilibrium assumption.
     mesh = dolfinx.mesh.create_rectangle(
         MPI.COMM_WORLD, [np.array([0.0, 0.0]), np.array([LX, LY])], [s.NX, s.NY]
     )
-    # the grain boundary: a line inside a 2D mesh, with its own transport equation
+    # A line subdomain carries the GB transport equation.
     gb = F.VolumeSubdomain(
         id=ShortCircuitProblem.NETWORK_ID,
         material=F.Material(D_0=D_GB, E_D=0.0),
@@ -124,7 +94,7 @@ def main(s=Setup()):
     for y in (0.0, 0.25, 0.5, 0.75, 1.0):
         print(f"   y = {y:.2f}   c_gb = {np.interp(y, y_gb, c_gb_vals):.4e}")
 
-    # how close the kinetic exchange gets to Fisher's local-equilibrium assumption
+    # Check the local-equilibrium approximation.
     probe = np.linspace(0.05 / 1e4, 1.0 / 1e4, 20)
     pts = np.column_stack([np.zeros_like(probe), probe, np.zeros_like(probe)])
     ratio = eval_on(cb_fn, pts) / np.interp(probe, y_gb, c_gb_vals)
@@ -132,9 +102,7 @@ def main(s=Setup()):
         f"\nlocal equilibrium c_b(0,y)/c_gb(y): {ratio.min():.4f} .. {ratio.max():.4f}"
     )
 
-    # Whipple / Le Claire: in type-B kinetics the section-averaged concentration obeys
-    #     ln(cbar) linear in y**(6/5), and
-    #     delta*D_gb = 1.322 sqrt(D_B/t) (-slope)**(-5/3)
+    # Whipple/Le Claire type-B fit: ln(cbar) vs. y**(6/5).
     depths = np.linspace(0.15, 1.0, 25)
     xs = np.linspace(0.0, LX, 200)
     cbar = np.array(

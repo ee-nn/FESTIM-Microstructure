@@ -1,14 +1,4 @@
-"""Material data and the coefficient fields the models are built from.
-
-:class:`Physics` holds the transport parameters of a polycrystal (lattice and
-boundary Arrhenius laws, boundary width, exchange rate). The two field builders
-put per-grain and per-boundary coefficients on the mesh:
-
-* :func:`crystal_diffusivity_field` -- one lattice tensor per grain, as a DG0
-  tensor field on the parent mesh;
-* :func:`gb_diffusivity_field` -- one diffusivity per boundary, as a DG0 scalar
-  field on the network submesh, chosen by the boundary's disorientation.
-"""
+"""Material parameters and per-grain/per-boundary diffusivity fields."""
 
 from dataclasses import dataclass
 
@@ -26,13 +16,7 @@ __all__ = [
 
 @dataclass
 class Physics:
-    """Material data. Defaults are tungsten-like, in the short-circuit regime.
-
-    ``E_D_bulk`` is Frauenfelder's lattice migration energy and ``E_D_gb`` a
-    typical DFT boundary value; at 500 K that is a diffusivity contrast of ~800,
-    which with a boundary area fraction of a few 1e-3 is what puts the material
-    in the regime where the network decides the transport.
-    """
+    """Transport parameters; defaults are tungsten-like and GB-dominated."""
 
     T: float = 500.0
     D_0_bulk: float = 1.9e-7  # m2/s
@@ -42,7 +26,7 @@ class Physics:
     delta: float = 1e-9  # m, boundary width
     k_exchange: float = 3.0  # m/s, grain <-> boundary transfer coefficient
     crystal_anisotropy: float = 1.0  # -, geometrically set by the metal's lattice
-    # this is usually 1.0 for most metals (cubic symmetry). Set to >1 for HCP/tetragonal
+    # Cubic metals use 1; HCP/tetragonal metals may need a larger value.
 
     @property
     def D_bulk(self):
@@ -60,37 +44,21 @@ class Physics:
         return self.D_gb / self.D_bulk
 
     def crystal_tensor(self, orientation):
-        """The lattice diffusivity of a grain whose fast axis is at ``orientation``.
-
-        The two principal values are ``D_bulk * sqrt(a)`` and ``D_bulk / sqrt(a)``,
-        so their geometric mean is ``D_bulk`` whatever the anisotropy ``a``, and
-        an untextured aggregate of them still averages to the lattice value.
-        """
-        # NOTE this function should probably be called something more specific,
-        # such as lattice_diffusivity_tensor
+        """Return the 2D lattice diffusivity tensor for a grain orientation."""
         root = np.sqrt(self.crystal_anisotropy)
         principal = np.diag([self.D_bulk * root, self.D_bulk / root])
-        # coordinate transformation from the principal frame to the home frame
+        # Rotate from the crystal frame to the specimen frame.
         c, s = np.cos(orientation), np.sin(orientation)
         rotation = np.array([[c, -s], [s, c]])
         return rotation @ principal @ rotation.T
 
     @property
     def equilibration_length(self):
-        """Characteristic along a boundary over which it equilibrates with the grains.
-
-        Much smaller than grain size implies local equilibrium, ``c_gb = c_grain``,
-        which is the regime in which a single-field homogeneous model is valid.
-        """
+        """Return the GB equilibration length; it should be below grain size."""
         return np.sqrt(self.delta * self.D_gb / (2 * self.k_exchange))
 
     def interface_resistance_ratio(self, grain_size):
-        """Ratio of transfer resistance of one boundary crossing to the lattice
-        resistance of one grain, ``(2/k) / (d/D_bulk)``.
-
-        < 1 means GBs are transparent and the polycrystal behaves as if the
-        lattice field were continuous.
-        """
+        """Return ``(2/k)/(grain_size/D_bulk)``; values below one are transparent."""
         return (2.0 / self.k_exchange) / (grain_size / self.D_bulk)
 
     def report(self, grain_size=None):
@@ -114,19 +82,7 @@ class Physics:
 
 
 def crystal_diffusivity_field(micro, physics):
-    """A DG0 tensor field on the parent mesh holding each grain's lattice tensor.
-
-    ``festim.Material`` takes a ``fem.Function`` for ``D``, and the subdomain
-    integrals are parent-mesh integrals indexed by the grain id, so one field
-    shared by every grain is enough: each grain's term only ever reads the cells
-    of that grain.
-
-    ``micro`` must provide ``mesh``, ``cell_tags``, ``grain_ids`` and
-    ``orientations`` (one angle per grain, radians). The tensor has the mesh's
-    dimension: in 3D the fast axis is rotated about z by the orientation angle
-    and the third principal value is ``D_bulk`` (an isotropic lattice is
-    ``D_bulk`` times the identity in either dimension).
-    """
+    """Create a parent-mesh DG0 tensor field with one lattice tensor per grain."""
     mesh = micro.mesh
     gdim = mesh.geometry.dim
     V = dolfinx.fem.functionspace(mesh, ("DG", 0, (gdim, gdim)))
@@ -135,15 +91,7 @@ def crystal_diffusivity_field(micro, physics):
 
 
 def fill_crystal_diffusivity_field(D, micro, physics):
-    """Write the lattice tensors of ``physics`` into an existing field.
-
-    The other half of :func:`crystal_diffusivity_field`, split out so that the
-    coefficients of an already-assembled problem can be changed without building a
-    new function space -- see
-    :meth:`~festim_microstructure.models.resolved.MicroModel.set_physics`.
-
-    Returns the ``grain_id -> tensor`` dictionary.
-    """
+    """Update an existing lattice field and return its grain-to-tensor mapping."""
     V = D.function_space
     gdim = V.mesh.geometry.dim
     tensors = {}
@@ -165,29 +113,9 @@ def fill_crystal_diffusivity_field(D, micro, physics):
 
 
 def gb_diffusivity_field(network, theta, d_low, d_high, theta_c=15.0):
-    """A per-boundary diffusivity as a DG0 field on the network submesh.
+    """Create a DG0 GB field selected by disorientation threshold.
 
-    Low-angle boundaries are not fast paths, and the disorientation is a
-    property of the tessellation (Neper's face table) or of the specimen (EBSD),
-    so the natural refinement of the model is a diffusivity that varies from
-    boundary to boundary. It has to enter as a coefficient on the *one* submesh:
-    splitting the network into a high-angle and a low-angle subdomain would give
-    two disconnected submeshes and put the junction conditions straight back.
-
-    Args:
-        network: a :class:`~festim_microstructure.subdomains.TaggedGrainBoundaryNetwork`
-            whose submesh exists, i.e. after ``model.initialise()``.
-        theta: disorientation of every tessellation face / edge, in degrees, in
-            id order (``theta[k]`` belongs to entity ``k + 1``). Both
-            :class:`~festim_microstructure.meshing.neper.NeperMicrostructure` and
-            :class:`~festim_microstructure.meshing.ebsd.pipeline.EbsdMicrostructure`
-            expose it as ``micro.theta``.
-        d_low, d_high: diffusivity below / at-or-above ``theta_c``.
-
-    CHECK before relying on this: it depends on the submesh-to-parent map that
-    the subdomain exposes, whose attribute name has moved between FESTIM
-    versions, and on ``create_submesh`` preserving the order of the located
-    facets.
+    The tagged network must be initialized so its parent-cell map exists.
     """
     submesh = network.submesh
     parent = None
@@ -203,10 +131,7 @@ def gb_diffusivity_field(network, theta, d_low, d_high, theta_c=15.0):
             "expected names, or is not a TaggedGrainBoundaryNetwork. Read it off "
             "dolfinx.mesh.create_submesh directly."
         )
-    # entity_ids_of_facets is aligned with the facet list returned by
-    # locate_subdomain_entities, and create_submesh keeps that order, so the
-    # parent map indexes straight into it: parent[c] is the position of submesh
-    # cell c in the located facet list, hence its tessellation id.
+    # Parent-cell positions index the aligned located-facet tag array.
     theta = np.asarray(theta)
     V = dolfinx.fem.functionspace(submesh, ("DG", 0))
     d = dolfinx.fem.Function(V, name="D_gb")

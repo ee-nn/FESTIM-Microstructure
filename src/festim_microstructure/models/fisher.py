@@ -1,37 +1,7 @@
-"""Fisher-type short-circuit diffusion: a lattice and a grain-boundary network.
+"""Fisher short-circuit diffusion with one bulk and one GB-network field.
 
-A specimen is held at a constant surface concentration, and the grain-boundary
-network carries hydrogen far deeper than lattice diffusion alone would, leaking
-sideways into the grains as it goes. This is the classical Fisher (1951)
-picture, with the network declared as **one** codim-1 subdomain carrying **one**
-species, so that hydrogen crosses from one boundary to another at every
-junction with no junction condition to write.
-
-Because every grain is the same material, the grains are a *single* volume
-subdomain, and the network sits inside it rather than between two subdomains.
-FESTIM decides that the coupling is an interior-facet integral from the mesh
-topology, not from the number of subdomains the manifold separates. (The
-per-grain formulation, where the lattice concentration may jump across a
-boundary, is :mod:`festim_microstructure.models.resolved`.)
-
-UNITS -- the one thing to get right
------------------------------------
-The grain boundary is physically a slab of width ``delta`` that has been
-collapsed onto a surface. ``c_gb`` is the concentration *inside* that slab
-(H/m3, the same unit as the bulk), so the two halves of the exchange are not
-the same number:
-
-* the bulk loses a **flux** ``J = k (c_b - c_gb)`` (H/m2/s) through the grain
-  boundary plane;
-* the slab gains a **volumetric rate** ``2 J / delta`` (H/m3/s).
-
-``1 / delta`` converts a per-area flux into a per-volume rate inside the slab,
-and the factor ``2`` is because the full slab collects from both of its faces.
-What must stay paired is that both halves are written from the *same* ``J``:
-that is what makes the exchange conservative. Fisher's model assumes *local
-equilibrium* between the boundary and the lattice in contact with it; FESTIM's
-coupling is kinetic, so equilibrium is approached by making ``k`` large
-compared with the bulk transport it competes with, ``sqrt(D_b / t_end)``.
+The collapsed GB slab receives ``2 k (c_b - c_gb) / delta`` while the bulk
+loses the matching flux. The resolved model instead has one bulk field per grain.
 """
 
 from dataclasses import dataclass, field
@@ -68,25 +38,9 @@ class ShortCircuitParams:
 
 
 class ShortCircuitProblem:
-    """The subdomains and species of a short-circuit problem, built once.
+    """Build and reuse a Fisher model for a mesh and GB network.
 
-    The same ``grains`` / ``network`` / ``c_b`` / ``c_gb`` objects are reused
-    across solves (for instance the fast case and the ``D_gb = D_b`` reference
-    case), exactly as the original scripts did.
-
-    Args:
-        mesh: the dolfinx mesh.
-        network: a :class:`~festim_microstructure.subdomains.GrainBoundaryNetwork`
-            or :class:`~festim_microstructure.subdomains.TaggedGrainBoundaryNetwork`
-            (its ``material`` is overwritten by :meth:`solve`).
-        charged_surface: locator ``(3, n) -> bool`` for the surface held at
-            ``c0``. It is applied twice: to the outer boundary of the grains,
-            and -- evaluated on the network itself, so as a ``dim = tdim - 2``
-            subdomain -- to the points/curves where a boundary meets that
-            surface, the network's "mouths". Fixing only the grains would leave
-            the mouths free and let the short circuits leak out of the cell.
-        params: :class:`ShortCircuitParams`.
-        bulk_material: overrides the default ``F.Material(D_0=D_b, E_D=0)``.
+    The charged-surface locator is also applied to network mouths.
     """
 
     GRAINS_ID, NETWORK_ID, SURFACE_ID, MOUTHS_ID = 1, 2, 3, 4
@@ -102,9 +56,7 @@ class ShortCircuitProblem:
         )
         self.network = network
         self.surface = F.SurfaceSubdomain(id=self.SURFACE_ID, locator=charged_surface)
-        # every point (2D) or curve (3D) where a grain boundary meets the charged
-        # surface, in one object: the locator runs on the network itself, so
-        # dim = mesh dimension - 2
+        # Network mouths are codimension two in the parent mesh.
         self.mouths = F.SurfaceSubdomain(
             id=self.MOUTHS_ID, dim=tdim - 2, locator=charged_surface
         )
@@ -113,14 +65,7 @@ class ShortCircuitProblem:
         self.model = None
 
     def build(self, d_gb=None, exports=(), gb_material=None):
-        """Assemble a :class:`festim.HydrogenTransportProblemDiscontinuous`.
-
-        ``d_gb`` defaults to ``params.D_gb``; pass ``params.D_b`` for the
-        reference case in which the boundaries are not short circuits at all.
-        ``gb_material`` overrides the network material entirely (for a
-        per-boundary ``D_gb`` field, see
-        :func:`~festim_microstructure.models.properties.gb_diffusivity_field`).
-        """
+        """Assemble the problem; override the GB diffusivity or material if needed."""
         p = self.params
         d_gb = p.D_gb if d_gb is None else d_gb
         self.network.material = gb_material or F.Material(D_0=d_gb, E_D=0.0)
@@ -131,7 +76,7 @@ class ShortCircuitProblem:
             species=[c_b, c_gb],
             subdomains=[self.grains, network, self.surface, self.mouths],
             sources=[
-                # ... and the slab gains it, as a volumetric rate (see UNITS)
+                # The slab gains the two-sided exchange as a volumetric rate.
                 F.ParticleSource(
                     value=lambda cb, cg: (2.0 / delta) * k * (cb - cg),
                     species=c_gb,
@@ -140,9 +85,7 @@ class ShortCircuitProblem:
                 )
             ],
             boundary_conditions=[
-                # the bulk loses the flux J = k (c_b - c_gb) through the grain
-                # boundary. FESTIM's flux convention is the influx, hence the
-                # reversed sign
+                # FESTIM expresses influx, hence ``k * (c_gb - c_b)``.
                 F.ParticleFluxBC(
                     subdomain=network,
                     species=c_b,
@@ -196,15 +139,10 @@ class ShortCircuitProblem:
 
 
 def beta_parameter(delta, D_gb, D_b, t_end):
-    """Le Claire's type-B parameter ``delta (D_gb/D_b - 1) / (2 sqrt(D_b t))``.
-
-    A short circuit needs ``beta >> 1``.
-    """
+    """Return Le Claire's type-B parameter; short circuits need ``beta >> 1``."""
     return delta * (D_gb / D_b - 1) / (2 * np.sqrt(D_b * t_end))
 
 
 def hart_bound(f_gb, D_gb, D_b):
-    """``f D_gb + (1 - f) D_b``: the upper bound if every boundary ran straight
-    along the gradient. A real network is tortuous and only partly connected to
-    the source, so the observed enhancement is well below it."""
+    """Return the parallel (Hart) upper bound ``f D_gb + (1 - f) D_b``."""
     return f_gb * D_gb + (1 - f_gb) * D_b

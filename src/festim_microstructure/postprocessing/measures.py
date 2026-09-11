@@ -1,10 +1,4 @@
-"""Integrals and topology checks on a solved short-circuit problem.
-
-Everything here takes dolfinx / FESTIM objects and returns numbers; the
-per-grain (resolved) model has its own versions in
-:mod:`festim_microstructure.models.resolved` because they need the model's
-tensors and window.
-"""
+"""Integrals and topology checks for solved microstructure models."""
 
 from mpi4py import MPI
 
@@ -34,8 +28,7 @@ def submesh_measure(subdomain):
     """Total length (2D network) or area (3D network) of the submesh."""
     sub = subdomain.submesh
     geom = sub.geometry
-    # dolfinx >= 0.9 exposes one dofmap per coordinate element; the scalar
-    # attribute is deprecated there and absent in later releases
+    # Newer DOLFINx exposes one dofmap per coordinate element.
     dofmap = geom.dofmaps[0] if hasattr(geom, "dofmaps") else geom.dofmap
     tdim = sub.topology.dim
     n_local = sub.topology.index_map(tdim).size_local
@@ -60,17 +53,9 @@ def submesh_measure(subdomain):
 
 
 def component_count(subdomain):
-    """Connected components of the network submesh.
+    """Return the network component count, or ``None`` in parallel.
 
-    In 2D the network is a graph of segments meeting at points, so connectivity
-    runs through vertices; in 3D it is triangles meeting along edges. More than
-    one component is expected once a disorientation threshold starts removing
-    boundaries, and it is worth knowing: a component that does not touch the
-    charged surface is never fed, and a fragmented network is no longer the
-    single connected object the codim-1 formulation was chosen for.
-
-    Serial only -- in parallel the adjacency is partitioned and this would
-    count per-rank pieces, so ``None`` is returned.
+    Cells join through vertices in 2D and edges in 3D.
     """
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -96,12 +81,6 @@ def component_count(subdomain):
 
 
 def junction_only_below(entities, axis, top, tol=1e-9):
-    """Deepest coordinate reached by a boundary that touches the charged surface.
-
-    Below this depth no boundary is fed directly, so whatever the network holds
-    there has crossed at least one junction. ``entities`` is a list of point
-    arrays (segments as ``(2, 2)``, polygons as ``(n, 3)``); ``axis`` is the
-    depth coordinate and ``top`` the charged surface's position on it.
-    """
+    """Return the depth below which transport requires a network junction."""
     touching = [e for e in entities if np.asarray(e)[:, axis].max() > top - tol]
     return min((np.asarray(e)[:, axis].min() for e in touching), default=top)

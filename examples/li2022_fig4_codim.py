@@ -1,68 +1,8 @@
-"""Reproduce Li et al. (2022), Front. Mater. 9:935129, Fig. 4, as a codim-1 problem,
-using the repo's resolved model.
+"""Reproduce Li et al. (2022), Fig. 4, with the codimension-one GB model.
 
-The boundary is a zero-thickness manifold *given* a thickness ``delta``:
-tangential conductance ``delta D_gb`` along it (the network's own equation)
-and a transverse resistance ``delta / D_gb`` across it. The second is what the
-resolved model's per-grain subdomains are for: the lattice field may jump
-across a boundary, and each grain exchanges with the network at ``k`` per
-unit area on its own side. With no segregation (Li et al. have none) the
-two-sided exchange gives a steady transverse flux ``(k/2)(c1 - c2)``, and a
-slab gives ``D_gb (c1 - c2)/delta``, so
-
-    k = 2 D_gb / delta
-
-is the whole of the new physics. Everything else is the repo:
-``VoronoiMicrostructure`` / ``VoronoiMicrostructure3D`` for the geometry and
-mesh, ``Physics`` for the coefficients, ``resolved.build`` / ``MicroModel.run``
-for the problem, ``resolved.averages`` for their Eq. 21 and
-``submesh_measure`` for the boundary area.
-
-WHAT THE THIN-BOUNDARY MODEL IS, AND WHERE IT STOPS
----------------------------------------------------
-A manifold occupies no volume, so the lattice fills the whole box and the
-model lacks the ``(1 - f_GB)`` factor that a band of volume fraction
-``f_GB = delta S_v`` removes from the lattice. In parallel that is
-
-    codim:       D_eff/D_m = 1 + f_GB r            (exact)
-    volumetric:  D_eff/D_m = 1 + f_GB (r - 1)      (their Hart line, Eq. 28)
-
-so the codim result is the volumetric one to leading order in ``f_GB``, and
-the neglected term is ``f_GB D_m``: relative error ``f_GB / (1 + f_GB r)``,
-which is ~1 % at r = 100 even at f_GB = 0.3, but is the *entire* effect when
-r < 1. The thin-boundary model is an expansion in ``delta S_v``; it breaks
-down when the boundary width stops being negligible against the grain size
--- for a 1 nm boundary and a foam, f_GB = 0.1 at 30 nm grains, 0.3 at 10 nm.
-Their sweep, f_GB = 0.3-0.7, is grains of 4-10 nm: a boundary phase with
-grains in it. Real 10-1000 nm grains sit at f_GB = 0.003-0.3, where the
-neglected terms are smaller than the error of calling the boundary a slab in
-the first place, and where the codim model is the right tool: one mesh per
-microstructure for every ``delta``, a boundary concentration of its own, and
-room for segregation and trapping.
-
-So two sweeps run on the same meshes: their axis, drawn on their four panels
-with their references so the O(f_GB) departure is visible, and the thin range.
-
-STRUCTURES
-----------
-  iso:    ``VoronoiMicrostructure3D``, a periodic Poisson-Voronoi foam meshed
-          conformingly by gmsh in their 96 nm box, one cell tag per grain.
-  col_x:  ``VoronoiMicrostructure``, the 2D cross-section of prismatic
-          columns; flux across the columns.
-  col_z:  flux along the columns. In the codim model this is analytic,
-          ``1 + f_GB r``: with a uniform axial gradient every grain and the
-          network carry the same linear profile, the exchange terms vanish and
-          the currents add. It is drawn, not simulated.
-
-D_m, T, the imposed concentrations and the references (Hart, Eq. 28; HS,
-Eq. 33) are as in li2022_fig4_voronoi.py. Each target ``f_GB`` sets
-``delta = f_GB / S_v`` and ``k = 2 D_gb / delta``; the volumetric file's
-warning about locator tolerances applies (coordinates are ~1e-9 m).
-
-OUTPUTS
--------
-li2022-fig4-codim.png       their range, their four panels, with Hart and HS
-li2022-fig4-codim-thin.png  f_GB from 0.003 to 0.7 on a log axis
+The resolved model gives a GB tangential conductance ``delta * D_gb`` and uses
+``k = 2 * D_gb / delta`` to match transverse slab resistance. It compares the
+thin-boundary result with volumetric Hart and Hashin-Shtrikman references.
 """
 
 from mpi4py import MPI
@@ -78,8 +18,7 @@ from festim_microstructure.meshing.voronoi import (
 from festim_microstructure.models.resolved import Physics, averages, build
 from festim_microstructure.postprocessing.measures import submesh_measure
 
-# physics (SI)
-# ----------------------------------------------------------------------------
+# Physics (SI).
 T = 1073.0  # K
 D0_M = 5.13e-8  # m^2/s, Liu et al. 2014, cited in their Sect. 2.3
 E_M = 0.21  # eV
@@ -87,8 +26,7 @@ RATIOS = [100.0, 10.0, 0.2, 0.1]  # D_GB/D_m of their panels D, E, G, H
 C_IN = 0.4e24  # m^-3
 C_OUT = 0.1e24
 
-# microstructures
-# ----------------------------------------------------------------------------
+# Microstructures.
 B = 96e-9  # m, their 3D box
 SEED = 0
 ISO_SEEDS = 12  # the mesher cuts more pieces than this; raise once it runs
@@ -100,7 +38,7 @@ BULK_COARSENING = 4.0
 F_GB_THEIRS = [0.3, 0.4, 0.5, 0.6, 0.7]
 F_GB_THIN = [0.003, 0.01, 0.03, 0.1]
 
-# (structure, flux axis); col_z is analytic and not in this list
+# ``col_z`` is analytic and therefore not simulated.
 SIMULATED = [("col_x", 0), ("iso", 2)]
 LABEL = {"col_z": "Col_I(Z)", "col_x": "Col_I(X)", "iso": "Iso"}
 K_B = 8.617333e-5  # eV/K
@@ -158,19 +96,7 @@ def make(structure, comm):
 
 
 def prepare(micro, bcs):
-    """The assembled problem for one microstructure, and the ``S_v`` of its network.
-
-    Assembled once and re-used for every point of the sweep: ``delta``, ``k`` and
-    ``D_gb`` are ``fem.Constant``, so ``set_physics`` moves the problem from one
-    point to the next without touching the submeshes, the dofmaps or the compiled
-    kernels. Building per point instead costs a full FFCx recompilation of the
-    residual and both Jacobian blocks of every grain, because a float coefficient
-    goes into the form signature and hence into the JIT cache key.
-
-    The physics it is built with is a placeholder for that reason -- only the
-    geometry matters at this stage -- and ``S_v`` needs the network submesh, which
-    exists only once the problem is initialised.
-    """
+    """Build once and return the model plus its network area density ``S_v``."""
     mm = build(micro, physics_for(1.0, 0.01, 1.0 / B), bcs).initialise()
     dim = micro.mesh.geometry.dim
     return mm, submesh_measure(mm.network) / B**dim
@@ -195,9 +121,7 @@ def run(mm, axis, S_v, ratio, f_gb):
     )
 
 
-# ----------------------------------------------------------------------------
-# references and figures
-# ----------------------------------------------------------------------------
+# References and figures.
 def hart(f, r):
     """Their Eq. 28 (volumetric, parallel)."""
     return 1.0 + f * (r - 1.0)

@@ -1,17 +1,6 @@
-"""Locating the external programs (Neper, Gmsh, POV-Ray) without importing dolfinx.
+"""Resolve Neper, Gmsh, and POV-Ray from an argument, ``FM_*_BIN``, or ``PATH``.
 
-Neper cannot share a conda environment with DOLFINx (conda-forge's ``neper``
-pins ``zlib < 1.3`` through ``scotch 6.1``, DOLFINx needs ``libzlib >= 1.3.2``),
-so it lives in ``environment-neper.yml`` and is reached by path. Each program
-is resolved from, in order:
-
-1. an explicit path passed by the caller;
-2. its environment variable -- ``FM_NEPER_BIN``, ``FM_GMSH_BIN``,
-   ``FM_POVRAY_BIN`` -- which ``tools/link-neper-env.sh`` records on the
-   FEniCSx environment so they are exported on ``conda activate``;
-3. ``PATH``.
-
-Kept dependency-free so that the pure-NumPy EBSD converter can use it too.
+The module is dependency-free so EBSD conversion can run without DOLFINx.
 """
 
 import os
@@ -31,14 +20,7 @@ _INSTALL_HINT = (
 
 
 def find_binary(name, explicit=None, env_var=None, required=True):
-    """Resolve a program: explicit path, then ``env_var``, then ``PATH``.
-
-    ``env_var`` defaults to the entry for ``name`` in :data:`ENV_VARS`.
-
-    Neper re-tokenizes its arguments and splits its input-file field on
-    whitespace, so a path with a space in it arrives as several unusable
-    fragments; such paths are rejected here rather than later and less clearly.
-    """
+    """Resolve a program; reject whitespace paths because Neper re-tokenizes them."""
     if env_var is None:
         env_var = ENV_VARS.get(name)
     candidates = [explicit]
@@ -70,12 +52,7 @@ def find_binary(name, explicit=None, env_var=None, required=True):
 
 
 def subprocess_env(*binaries, base=None):
-    """A copy of the environment with the directories of ``binaries`` first on PATH.
-
-    Neper spawns Gmsh (and, for ``-V``, POV-Ray) by name unless given a path,
-    and the two live in an environment that is never activated. Prepending their
-    directories is the equivalent of activating it for the child process only.
-    """
+    """Return an environment whose resolved binary directories lead ``PATH``."""
     env = dict(os.environ if base is None else base)
     dirs = []
     for b in binaries:
