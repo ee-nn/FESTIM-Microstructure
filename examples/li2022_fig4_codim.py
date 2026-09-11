@@ -282,8 +282,8 @@ def main():
         mm, S_v = prepare(micro, bcs)
         if comm.rank == 0:
             print(
-                f"{LABEL[structure]}: {micro.n_grains} grains, S_v = {S_v * 1e-9:.4f} /nm; "
-                f"delta = {0.3 / S_v * 1e9:.2f} nm at f_GB = 0.3, {0.01 / S_v * 1e9:.3f} nm at 0.01"
+                f"{LABEL[structure]}: {micro.n_grains} grains, S_v = {S_v * 1e-9:.4f} /nm; "  # noqa: E501
+                f"delta = {0.3 / S_v * 1e9:.2f} nm at f_GB = 0.3, {0.01 / S_v * 1e9:.3f} nm at 0.01"  # noqa: E501
             )
         for f_gb in [*F_GB_THIN, *F_GB_THEIRS]:
             for ratio in RATIOS:
@@ -293,7 +293,7 @@ def main():
                 if comm.rank == 0:
                     print(
                         f"  f_GB={f_gb:5.3f} delta={r['delta_nm']:6.2f} nm r={ratio:6g}"
-                        f"D_eff/D_m={r['D_eff_over_D_m']:9.4f}  HS={hashin_shtrikman(f_gb, ratio):9.4f}  "
+                        f"D_eff/D_m={r['D_eff_over_D_m']:9.4f}  HS={hashin_shtrikman(f_gb, ratio):9.4f}  "  # noqa: E501
                         f"(equilibration length {r['equilibration_length_nm']:.2f} nm)"
                     )
     if comm.rank != 0:

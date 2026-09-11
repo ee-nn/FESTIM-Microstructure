@@ -1102,7 +1102,7 @@ def measure_tesr_against_ctf(
     opt = settings or Settings(ctf=str(ctf_path))
 
     ctf = CtfMap(ctf_path)
-    crysym, phase = ctf.crysym(opt.phase)
+    _crysym, phase = ctf.crysym(opt.phase)
     if phase is None or phase["laue"] not in CUBIC_LAUE:
         raise ValueError(
             "cubic phases only: the disorientation used here is cubic-specific"

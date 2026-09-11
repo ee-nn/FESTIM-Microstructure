@@ -560,7 +560,7 @@ def main():
                     )
                     print(
                         f"    r={ratio:6g}  D_eff/D_m={r['D_eff_over_D_m']:8.4f}  "
-                        f"(Eq. 21 avg {r['D_eff_avg_over_D_m']:8.4f}, in/out {r['flux_balance']:+.1e})  "
+                        f"(Eq. 21 avg {r['D_eff_avg_over_D_m']:8.4f}, in/out {r['flux_balance']:+.1e})  "  # noqa: E501
                         f"{'Hart' if structure == 'col_z' else 'HS'}={ref:8.4f}"
                     )
     if comm.rank != 0:

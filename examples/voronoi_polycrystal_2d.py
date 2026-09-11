@@ -80,7 +80,7 @@ def main(s=Setup()):
 
     # microstructure
     segments = voronoi_segments(s.n_seeds, L, np.random.default_rng(s.seed))
-    mesh, cell_tags, n_grains = build_mesh(segments, L, s.h_gb, s.h_bulk)
+    mesh, _cell_tags, n_grains = build_mesh(segments, L, s.h_gb, s.h_bulk)
     tol = 1e-7  # distance below which a point counts as lying on a ridge
     network = GrainBoundaryNetwork(
         id=ShortCircuitProblem.NETWORK_ID,

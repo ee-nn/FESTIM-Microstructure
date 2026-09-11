@@ -44,7 +44,7 @@ def test_env_var_name_defaults_from_table(tmp_path, monkeypatch):
 def test_missing_required_raises_with_install_hint(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.delenv("FM_NEPER_BIN", raising=False)
-    with pytest.raises(FileNotFoundError, match="environment-neper.yml"):
+    with pytest.raises(FileNotFoundError, match="environment-neper.yml"):  # noqa: RUF043
         B.find_binary("neper")
     assert B.find_binary("neper", required=False) is None
 
