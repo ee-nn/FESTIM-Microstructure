@@ -1,4 +1,4 @@
-"""Li et al. (2022), Front. Mater. 9:935129, Fig. 4, as a codim-1 problem,
+"""Reproduce Li et al. (2022), Front. Mater. 9:935129, Fig. 4, as a codim-1 problem,
 using the repo's resolved model.
 
 The boundary is a zero-thickness manifold *given* a thickness ``delta``:

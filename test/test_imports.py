@@ -78,8 +78,6 @@ def test_submodule_imports(stubbed_heavy_deps, name):
         "festim_microstructure.check:main",
         "festim_microstructure.meshing.voronoi:main",
         "festim_microstructure.meshing.ebsd.pipeline:main",
-        "festim_microstructure.models.homogenisation:main",
-        "festim_microstructure.models.validation:main",
     ],
 )
 def test_console_script_targets_exist(stubbed_heavy_deps, target):

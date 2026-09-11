@@ -1,4 +1,4 @@
-"""Li et al. (2022), Front. Mater. 9:935129, Fig. 4: the effective diffusion
+"""Reproduce Li et al. (2022), Front. Mater. 9:935129, Fig. 4: the effective diffusion
 coefficient of H in polycrystalline W with a *volumetric* grain-boundary
 phase, on Voronoi microstructures.
 

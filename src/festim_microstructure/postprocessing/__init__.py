@@ -1,3 +1,3 @@
-"""Measures on solved problems and the figures for the docs."""
+"""Reusable numerical measures for solved microstructure problems."""
 
-__all__ = ["figures", "measures"]
+__all__ = ["measures"]

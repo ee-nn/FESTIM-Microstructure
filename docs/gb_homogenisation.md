@@ -8,7 +8,8 @@ A workflow in three steps:
    through the boundary network declared as a single codim-1 subdomain
    (`models/resolved.py`).
 3. **Identify an anisotropic `D_eff`** for a homogeneous model, and then check
-   that it predicts things it was not fitted to (`models/homogenisation.py`, `models/validation.py`).
+   that it predicts things it was not fitted to (`examples/gb_homogenisation.py`,
+   `examples/gb_validation.py`).
 
 Voronoi cells stand in for the Neper microstructure. Nothing above the mesh
 generator depends on that choice: `Microstructure` only has to supply a list of

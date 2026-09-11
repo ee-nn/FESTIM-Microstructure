@@ -186,13 +186,14 @@ FESTIM-Microstructure/
 │   │   ├── fisher.py           # ShortCircuitProblem: one lattice + one network
 │   │   ├── properties.py       # Physics, per-grain / per-boundary coefficient fields
 │   │   ├── resolved.py         # one subdomain per grain, coupled through the network
-│   │   ├── homogenisation.py   # identify an anisotropic D_eff; `fm-homogenise`
-│   │   ├── validation.py       # does D_eff predict what it was not fitted to?
-│   │   └── diaz_rodriguez*.py  # Diaz-Rodriguez et al. (2022) benchmarks
 │   └── postprocessing/
 │       ├── measures.py         # inventory, submesh length/area, component count
-│       └── figures.py          # the figures in docs/
-├── examples/                   # one runnable driver per workflow, plus data/
+├── examples/                   # runnable workflows; not part of the library API
+│   ├── gb_homogenisation.py    # RVE identification study
+│   ├── gb_validation.py        # validation of the RVE result
+│   ├── gb_figures.py           # bespoke figures for the study
+│   ├── li2022_fig4*.py         # Li et al. (2022) reproduction scripts
+│   └── ...                     # usage examples and data/
 └── test/                       # pytest; the FEniCS-dependent tests skip without it
 ```
 
@@ -215,8 +216,9 @@ from festim_microstructure.models.fisher import ShortCircuitParams, ShortCircuit
 from festim_microstructure.subdomains import GrainBoundaryNetwork
 ```
 
-Each example is a `Setup` dataclass plus a `main()`; edit the dataclass or
-import `main` and pass your own:
+Examples are executable workflows, intentionally kept outside the installed
+API. Edit their setup values or copy the relevant package-level building blocks
+into your own script:
 
 ```bash
 python examples/voronoi_polycrystal_2d.py       # in-process Gmsh tessellation
@@ -228,6 +230,8 @@ python examples/fisher_grain_boundary.py        # single boundary vs Le Claire
 python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6 --out rve.json
 python examples/gb_validation.py --out validation.json
 python examples/gb_figures.py --rve rve.json --validation validation.json
+python examples/li2022_fig4.py                 # volumetric-band reproduction
+python examples/li2022_fig4_codim.py           # codim-1 reproduction
 ```
 
 Console entry points from `pyproject.toml`:
@@ -235,7 +239,6 @@ Console entry points from `pyproject.toml`:
 ```bash
 fm-voronoi --n-grains 64 --domain-size 100e-6 --aspect 4 --out poly2d.msh
 fm-ebsd examples/data/"D7 PBF SS316L.ctf" --out results --crop 0,306,0,306
-fm-homogenise --k-sweep 1e-6 1e-4 1e-2 3 --out rve.json
 ```
 
 Neper, Gmsh and POV-Ray are found through `FM_NEPER_BIN`, `FM_GMSH_BIN`,
