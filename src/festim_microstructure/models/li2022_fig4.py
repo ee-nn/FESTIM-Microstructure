@@ -495,9 +495,10 @@ def main():
                     }[structure]
                     bounds = jiang_bounds(cell.f_gb, ratio)
                     print(
-                        f"{cell.label:26s} r={ratio:6g}  n={cell.n_side:3d}^{cell.dim}  "
+                        f"{cell.label:26s} r={ratio:6g}  n={cell.n_side:3d}^{cell.dim} "
                         f"D_eff/D_m={r['D_eff_over_D_m']:8.4f}  "
-                        f"(vol.avg {r['D_eff_avg_over_D_m']:8.4f}, in/out {r['flux_balance']:+.1e})  "
+                        f"(vol.avg {r['D_eff_avg_over_D_m']:8.4f},   "
+                        f"in/out {r['flux_balance']:+.1e})"
                         + (
                             f"ref={ref:8.4f}"
                             if ref is not None
