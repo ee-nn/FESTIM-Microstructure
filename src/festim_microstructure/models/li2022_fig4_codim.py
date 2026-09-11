@@ -63,10 +63,7 @@ OUTPUTS
 -------
 li2022-fig4-codim.png       their range, their four panels, with Hart and HS
 li2022-fig4-codim-thin.png  f_GB from 0.003 to 0.7 on a log axis
-li2022-fig4-codim.csv       every run
 """
-
-import csv
 
 from mpi4py import MPI
 
@@ -300,10 +297,6 @@ def main():
                     )
     if comm.rank != 0:
         return
-    with open("li2022-fig4-codim.csv", "w", newline="") as fh:
-        wr = csv.DictWriter(fh, fieldnames=list(rows[0]))
-        wr.writeheader()
-        wr.writerows(rows)
     draw(rows, "li2022-fig4-codim.png", 0.25, 0.75, logx=False)
     draw(rows, "li2022-fig4-codim-thin.png", 0.002, 0.8, logx=True)
 
