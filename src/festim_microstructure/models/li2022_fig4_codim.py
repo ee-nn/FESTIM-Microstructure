@@ -157,17 +157,28 @@ def make(structure, comm):
     )
 
 
-def boundary_area_per_volume(micro, bcs):
-    """S_v from the network submesh, which exists once a problem is initialised."""
-    mm = build(micro, physics_for(1.0, 0.01, 1.0 / B), bcs)
-    mm.model.initialise()
+def prepare(micro, bcs):
+    """The assembled problem for one microstructure, and the ``S_v`` of its network.
+
+    Assembled once and re-used for every point of the sweep: ``delta``, ``k`` and
+    ``D_gb`` are ``fem.Constant``, so ``set_physics`` moves the problem from one
+    point to the next without touching the submeshes, the dofmaps or the compiled
+    kernels. Building per point instead costs a full FFCx recompilation of the
+    residual and both Jacobian blocks of every grain, because a float coefficient
+    goes into the form signature and hence into the JIT cache key.
+
+    The physics it is built with is a placeholder for that reason -- only the
+    geometry matters at this stage -- and ``S_v`` needs the network submesh, which
+    exists only once the problem is initialised.
+    """
+    mm = build(micro, physics_for(1.0, 0.01, 1.0 / B), bcs).initialise()
     dim = micro.mesh.geometry.dim
-    return submesh_measure(mm.network) / B**dim
+    return mm, submesh_measure(mm.network) / B**dim
 
 
-def run(micro, axis, bcs, S_v, ratio, f_gb):
+def run(mm, axis, S_v, ratio, f_gb):
     physics = physics_for(ratio, f_gb, S_v)
-    mm = build(micro, physics, bcs).run()
+    mm.set_physics(physics).solve()
     q, _, _ = averages(mm)  # their Eq. 21: volume-averaged flux
     D_eff = q[axis] * B / (C_IN - C_OUT)
     return dict(
@@ -278,7 +289,7 @@ def main():
     for structure, axis in SIMULATED:
         micro = make(structure, comm)
         bcs = boundary_conditions(axis, B, 1e-6 * B)
-        S_v = boundary_area_per_volume(micro, bcs)
+        mm, S_v = prepare(micro, bcs)
         if comm.rank == 0:
             print(
                 f"{LABEL[structure]}: {micro.n_grains} grains, S_v = {S_v * 1e-9:.4f} /nm; "
@@ -286,7 +297,7 @@ def main():
             )
         for f_gb in [*F_GB_THIN, *F_GB_THEIRS]:
             for ratio in RATIOS:
-                r = run(micro, axis, bcs, S_v, ratio, f_gb)
+                r = run(mm, axis, S_v, ratio, f_gb)
                 r["structure"] = structure
                 rows.append(r)
                 if comm.rank == 0:
