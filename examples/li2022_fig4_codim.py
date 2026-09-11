@@ -10,6 +10,7 @@ from mpi4py import MPI
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from festim_microstructure.meshing.voronoi import (
     VoronoiMicrostructure,
@@ -137,6 +138,69 @@ def hashin_shtrikman(f, r):
     return r + (1.0 - f) / (1.0 / (1.0 - r) + f / (3.0 * r))
 
 
+GRAIN_COLOR = "#f5e63b"
+GB_COLOR = "#2166d1"
+
+
+def draw_isometric(ax, micro, title):
+    """Draw the codimension-one network inside a grain-coloured cube."""
+    B_nm = micro.size * 1e9
+    t = np.linspace(0.0, B_nm, 2)
+    U, V = np.meshgrid(t, t)
+    for X, Y, Z in ((B_nm + 0 * U, U, V), (U, 0 * U, V), (U, V, B_nm + 0 * U)):
+        ax.plot_surface(X, Y, Z, color=GRAIN_COLOR, alpha=0.55, shade=False)
+
+    if micro.mesh.geometry.dim == 3:
+        polygons = [face * 1e9 for face in micro.faces]
+    else:
+        polygons = [
+            np.array(
+                [
+                    [p[0], p[1], 0.0],
+                    [q[0], q[1], 0.0],
+                    [q[0], q[1], micro.size],
+                    [p[0], p[1], micro.size],
+                ]
+            )
+            * 1e9
+            for p, q in micro.segments
+        ]
+    ax.add_collection3d(
+        Poly3DCollection(polygons, facecolor=GB_COLOR, edgecolor=GB_COLOR, alpha=0.72)
+    )
+    ax.view_init(elev=24, azim=-55)
+    ax.set_box_aspect((1, 1, 1))
+    ticks = np.linspace(0, B_nm, 4)
+    ax.set(
+        xticks=ticks,
+        yticks=ticks,
+        zticks=ticks,
+        xlim=(0, B_nm),
+        ylim=(0, B_nm),
+        zlim=(0, B_nm),
+    )
+    ax.set_xlabel("x (nm)", labelpad=4)
+    ax.set_ylabel("y (nm)", labelpad=4)
+    ax.set_zlabel("z (nm)", labelpad=4)
+    ax.tick_params(labelsize=7)
+    ax.set_title(title, fontsize=10)
+
+
+def draw_fig4ab(iso, columns, f_gb):
+    """Write the codim isometric and columnar microstructure figure."""
+    fig = plt.figure(figsize=(9, 4.5))
+    for i, (micro, label) in enumerate(((iso, "Iso"), (columns, "Col-I")), start=1):
+        ax = fig.add_subplot(1, 2, i, projection="3d")
+        draw_isometric(
+            ax,
+            micro,
+            f"{label}: {micro.n_grains} grains, f_GB = {f_gb:.2f} (codim)",
+        )
+    fig.tight_layout()
+    fig.savefig("li2022-fig4ab-codim.png", dpi=300)
+    plt.close(fig)
+
+
 def draw(rows, fname, f_lo, f_hi, logx):
     fig, axes = plt.subplots(2, 2, figsize=(9, 7))
     f = np.geomspace(f_lo, f_hi, 200) if logx else np.linspace(f_lo, f_hi, 200)
@@ -158,16 +222,16 @@ def draw(rows, fname, f_lo, f_hi, logx):
             label="Iso, codim",
         ),
     }
+    sampled_f = sorted({row["f_gb"] for row in rows if f_lo <= row["f_gb"] <= f_hi})
     for axp, r in zip(axes.flat, RATIOS, strict=True):
+        axp.plot(f, hart(f, r), "-", color="0.6", label="Hart bound (volumetric)")
         axp.plot(
-            f, hart(f, r), "-", color="0.6", label="Hart, their Eq. 28 (volumetric)"
-        )
-        axp.plot(
-            f,
-            codim_parallel(f, r),
-            "--",
+            sampled_f,
+            codim_parallel(np.asarray(sampled_f), r),
+            marker="*",
+            ms=8,
+            ls="none",
             color="tab:red",
-            lw=0.9,
             label="Col_I(Z), codim: 1 + f r (exact)",
         )
         axp.plot(
@@ -175,7 +239,7 @@ def draw(rows, fname, f_lo, f_hi, logx):
             hashin_shtrikman(f, r),
             ":",
             color="tab:blue",
-            label="HS, their Eq. 33 (volumetric)",
+            label="Hashin-Shtrikman (volumetric)",
         )
         for key, st in style.items():
             sub = sorted(
@@ -192,7 +256,7 @@ def draw(rows, fname, f_lo, f_hi, logx):
             if r > 1:
                 axp.set_yscale("log")
         axp.set_xlim(f_lo, f_hi)
-        axp.legend(fontsize=6, loc="lower right" if r > 1 else "upper right")
+        axp.legend(fontsize=10, loc="lower right" if r > 1 else "upper right")
     for axp in axes[1]:
         axp.set_xlabel("boundary volume fraction $f_{GB} = \\delta\\,S_v$")
     for axp in axes[:, 0]:
@@ -202,7 +266,7 @@ def draw(rows, fname, f_lo, f_hi, logx):
         fontsize=10,
     )
     fig.tight_layout()
-    fig.savefig(fname, dpi=150)
+    fig.savefig(fname, dpi=300)
 
 
 # ----------------------------------------------------------------------------
@@ -210,8 +274,10 @@ def main():
     mpl.use("Agg")
     comm = MPI.COMM_WORLD
     rows = []
+    micros = {}
     for structure, axis in SIMULATED:
         micro = make(structure, comm)
+        micros[structure] = micro
         bcs = boundary_conditions(axis, B, 1e-6 * B)
         mm, S_v = prepare(micro, bcs)
         if comm.rank == 0:
@@ -232,7 +298,7 @@ def main():
                     )
     if comm.rank != 0:
         return
-    draw(rows, "li2022-fig4-codim.png", 0.25, 0.75, logx=False)
+    draw_fig4ab(micros["iso"], micros["col_x"], F_GB_THEIRS[0])
     draw(rows, "li2022-fig4-codim-thin.png", 0.002, 0.8, logx=True)
 
 
