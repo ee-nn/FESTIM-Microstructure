@@ -17,7 +17,7 @@ cost of segmenting.
 
 Definition
 ----------
-For voxel i of area a_i = XStep x YStep, assigned to cell c(i),
+For a pixel i of area a_i = XStep x YStep, assigned to cell c(i),
 
     theta_i = disorientation( q_ctf(i), q_cell(c(i)) )        [degrees]
 
@@ -63,7 +63,7 @@ from .orientation import cubic_disorientation_angle, qconj, qmul
 
 # --- the measurement ---------------------------------------------------------
 def theta_field(qgrid, qref):
-    """Per-voxel disorientation (degrees) between two (ny, nx, 4) quat fields."""
+    """Per-pixel disorientation (degrees) between two (ny, nx, 4) quat fields."""
     a = qgrid.reshape(-1, 4)
     b = qref.reshape(-1, 4)
     return cubic_disorientation_angle(qmul(qconj(a), b)).reshape(qgrid.shape[:2])
@@ -227,7 +227,7 @@ def write_png(path, res, cellids, unit="um", dpi=150, threshold=None, log=print)
     ax = axes[0]
     im = ax.imshow(theta, cmap="inferno", vmin=0, vmax=vmax, **kw)
     fig.colorbar(im, ax=ax, fraction=0.046).set_label("theta (deg)")
-    ax.set_title(f"per-voxel segmentation error: RMS {a['rms']:.2f} deg")
+    ax.set_title(f"per-pixel segmentation error: RMS {a['rms']:.2f} deg")
     ax.set_xlabel(f"clipped at p99 = {vmax:.2f} deg")
     ax.set_xticks([])
     ax.set_yticks([])
