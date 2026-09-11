@@ -117,19 +117,29 @@ def crystal_diffusivity_field(micro, physics):
     of that grain.
 
     ``micro`` must provide ``mesh``, ``cell_tags``, ``grain_ids`` and
-    ``orientations`` (one angle per grain, radians).
+    ``orientations`` (one angle per grain, radians). The tensor has the mesh's
+    dimension: in 3D the fast axis is rotated about z by the orientation angle
+    and the third principal value is ``D_bulk`` (an isotropic lattice is
+    ``D_bulk`` times the identity in either dimension).
     """
     mesh = micro.mesh
-    V = dolfinx.fem.functionspace(mesh, ("DG", 0, (2, 2)))
+    gdim = mesh.geometry.dim
+    V = dolfinx.fem.functionspace(mesh, ("DG", 0, (gdim, gdim)))
     D = dolfinx.fem.Function(V, name="D_lattice")
     tensors = {}
+    n = gdim * gdim
     for grain_id in micro.grain_ids:
         tensor = physics.crystal_tensor(micro.orientations[grain_id - 1])
+        if gdim == 3:
+            full = np.eye(3) * physics.D_bulk
+            full[:2, :2] = tensor
+            tensor = full
         tensors[grain_id] = tensor
         cells = micro.cell_tags.find(grain_id)
         dofs = V.dofmap.list[cells].reshape(-1)
-        for component in range(4):
-            D.x.array[4 * dofs + component] = tensor.reshape(-1)[component]
+        flat = tensor.reshape(-1)
+        for component in range(n):
+            D.x.array[n * dofs + component] = flat[component]
     D.x.scatter_forward()
     return D, tensors
 
