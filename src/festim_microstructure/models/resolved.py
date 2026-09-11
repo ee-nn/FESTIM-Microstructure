@@ -43,7 +43,12 @@ import numpy as np
 import ufl
 
 from ..solvers import ATOL, DIRECT_SOLVER_OPTIONS, tune_direct_solver
-from ..subdomains import Grain, GrainBoundaryNetwork, GrainSurface
+from ..subdomains import (
+    Grain,
+    GrainBoundaryNetwork,
+    GrainSurface,
+    TaggedGrainBoundaryNetwork,
+)
 from .properties import Physics, crystal_diffusivity_field
 
 __all__ = [
@@ -138,12 +143,18 @@ class MicroModel:
 
 
 def _window(mesh, window):
-    """Indicator of an axis-aligned box, as a UFL expression on ``mesh``."""
+    """Indicator of an axis-aligned box, as a UFL expression on ``mesh``.
+
+    ``window`` is ``((x0, y0), (x1, y1))`` in 2D or ``((x0, y0, z0), (x1, y1, z1))``
+    in 3D; ``None`` is the whole cell.
+    """
     if window is None:
         return 1.0
-    (x0, y0), (x1, y1) = window
+    lo, hi = window
     x = ufl.SpatialCoordinate(mesh)
-    inside = ufl.And(ufl.And(x[0] > x0, x[0] < x1), ufl.And(x[1] > y0, x[1] < y1))
+    inside = ufl.And(x[0] > lo[0], x[0] < hi[0])
+    for i in range(1, len(lo)):
+        inside = ufl.And(inside, ufl.And(x[i] > lo[i], x[i] < hi[i]))
     return ufl.conditional(inside, 1.0, 0.0)
 
 
@@ -163,9 +174,10 @@ def averages(mm: MicroModel, window=None):
     (the jumps are carried by the network term).
     """
     delta, D_gb = mm.physics.delta, mm.physics.D_gb
+    dim = mm.micro.mesh.geometry.dim
     area = 0.0
-    q = np.zeros(2)
-    grad_c = np.zeros(2)
+    q = np.zeros(dim)
+    grad_c = np.zeros(dim)
 
     # NOTE I wonder if there is a way to use FESTIM's exports here instead of needing to
     # assemble everything from scratch
@@ -176,7 +188,7 @@ def averages(mm: MicroModel, window=None):
         D = ufl.as_matrix(mm.tensors[grain.id].tolist())
         flux = -D * ufl.grad(c)
         area += _assemble(w * dx)
-        for i in range(2):
+        for i in range(dim):
             q[i] += _assemble(w * flux[i] * dx)
             grad_c[i] += _assemble(w * ufl.grad(c)[i] * dx)
 
@@ -184,7 +196,7 @@ def averages(mm: MicroModel, window=None):
     mesh_g = cgb.function_space.mesh
     dx_g = ufl.Measure("dx", domain=mesh_g)
     w_g = _window(mesh_g, window)
-    for i in range(2):
+    for i in range(dim):
         q[i] -= _assemble(w_g * delta * D_gb * ufl.grad(cgb)[i] * dx_g)
 
     return q / area, grad_c / area, area
@@ -225,8 +237,10 @@ def build(
 
     Args:
         micro: a :class:`~festim_microstructure.meshing.voronoi.VoronoiMicrostructure`
+            or :class:`~festim_microstructure.meshing.voronoi.VoronoiMicrostructure3D`
             (or anything with the same ``mesh`` / ``cell_tags`` / ``grain_ids`` /
-            ``orientations`` / ``locator`` / ``tolerance`` attributes).
+            ``orientations`` / ``locator`` / ``tolerance`` attributes; with
+            ``facet_tags`` and ``gb_tag`` the network is read from the tags).
         physics: the material data.
         bcs: an iterable of ``(name, locator, value)``. Each fixes the
             concentration on the part of the outer boundary picked by ``locator``
@@ -258,12 +272,17 @@ def build(
         Grain(id=int(g), material=F.Material(D=D_field), cell_tags=micro.cell_tags)
         for g in micro.grain_ids
     ]
-    network = GrainBoundaryNetwork(
-        id=NETWORK_ID,
-        material=F.Material(D_0=physics.D_gb, E_D=0.0),
-        locator=micro.locator,
-        dim=micro.mesh.topology.dim - 1,
-    )
+    tdim = micro.mesh.topology.dim
+    gb_material = F.Material(D_0=physics.D_gb, E_D=0.0)
+    if getattr(micro, "facet_tags", None) is not None:
+        # the mesher tagged the boundary facets: nothing geometric to get wrong
+        network = TaggedGrainBoundaryNetwork(
+            NETWORK_ID, gb_material, micro.facet_tags, [micro.gb_tag], dim=tdim - 1
+        )
+    else:
+        network = GrainBoundaryNetwork(
+            id=NETWORK_ID, material=gb_material, locator=micro.locator, dim=tdim - 1
+        )
     species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
     c_gb = F.Species("c_gb", subdomains=[network])
 
@@ -306,7 +325,9 @@ def build(
             boundary_conditions.append(
                 F.FixedConcentrationBC(subdomain=patch, value=value, species=spe)
             )
-        mouths = F.SurfaceSubdomain(id=next_id, dim=0, locator=locator)
+        # where the network meets that part of the surface: codim-2 of the parent,
+        # points in 2D and curves in 3D
+        mouths = F.SurfaceSubdomain(id=next_id, dim=tdim - 2, locator=locator)
         next_id += 1
         subdomains.append(mouths)
         boundary_conditions.append(
