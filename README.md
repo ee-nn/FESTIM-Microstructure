@@ -1,5 +1,7 @@
 # FESTIM-Microstructure
 
+⚠️ This repo is in its early stages and is actively being built. ⚠️ 
+
 Microstructure-resolved hydrogen transport modelling built on
 [FESTIM](https://festim.readthedocs.io/).
 
