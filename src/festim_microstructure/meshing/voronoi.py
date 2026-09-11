@@ -35,8 +35,10 @@ from scipy.spatial import Voronoi
 __all__ = [
     "GB_TAG_3D",
     "VoronoiMicrostructure",
+    "VoronoiMicrostructure3D",
     "build_mesh",
     "build_mesh_3d",
+    "grain_tags_from_seeds",
     "clip_polygon_to_box",
     "clip_to_box",
     "connected_components",
@@ -709,6 +711,106 @@ class VoronoiMicrostructure:
             f" h_gb = {1e9 * self.h_gb:.0f} nm",
         ]
         return "\n".join(lines)
+
+
+# ------------------------------------------------------------ 3D polycrystal
+
+
+def grain_tags_from_seeds(mesh, seeds, size):
+    """Cell tags for a mesh that conforms to the periodic Voronoi of ``seeds``.
+
+    Each cell takes the index of the nearest seed *image* (the seeds tiled over
+    the 3x3x3 neighbourhood, as :func:`voronoi_faces` tiles them). Every facet
+    of a conforming mesh lies on a bisector plane of two seeds, so a cell is
+    never straddling and the classification is exact. Pieces cut off by image
+    seeds get ids of their own, as the 2D mesher's ``fragment`` gives them.
+    Returns ``(cell_tags, grain_ids)``; ids are 1-based and global across ranks.
+    """
+    import dolfinx
+    from scipy.spatial import cKDTree
+
+    seeds = np.asarray(seeds)
+    dim = seeds.shape[1]
+    shifts = np.stack(np.meshgrid(*[[-1, 0, 1]] * dim, indexing="ij"), -1)
+    images = (seeds[None] + shifts.reshape(-1, dim)[:, None] * size).reshape(-1, dim)
+    tdim = mesh.topology.dim
+    imap = mesh.topology.index_map(tdim)
+    n = imap.size_local + imap.num_ghosts
+    mid = dolfinx.mesh.compute_midpoints(mesh, tdim, np.arange(n, dtype=np.int32))
+    _, idx = cKDTree(images).query(mid[:, :dim])
+    values = (idx + 1).astype(np.int32)
+    tags = dolfinx.mesh.meshtags(mesh, tdim, np.arange(n, dtype=np.int32), values)
+    present = np.unique(np.concatenate(mesh.comm.allgather(np.unique(values))))
+    return tags, present.astype(np.int32)
+
+
+@dataclass
+class VoronoiMicrostructure3D:
+    """A 3D Voronoi polycrystal meshed conformingly, with one cell tag per grain.
+
+    The same contract as :class:`VoronoiMicrostructure`, so
+    :func:`~festim_microstructure.models.resolved.build` accepts it. The network
+    is provided as facet tags (``facet_tags``, ``gb_tag``) rather than a
+    geometric locator; ``locator`` is still available (:func:`near_faces`) for
+    the coverage check.
+
+    The gmsh model is built in units of ``size`` and rescaled afterwards:
+    OpenCASCADE's absolute tolerance (~1e-7) exceeds a sub-micron box.
+    """
+
+    size: float
+    n_seeds: int
+    seed: int
+    seeds: np.ndarray  # (n_seeds, 3), metres
+    faces: list  # polygons, metres
+    mesh: object
+    cell_tags: object
+    facet_tags: object
+    grain_ids: np.ndarray
+    orientations: np.ndarray  # one angle per grain id (indexed by id - 1)
+    h_gb: float
+    gb_tag: int = GB_TAG_3D
+
+    @classmethod
+    def create(
+        cls, size, n_seeds, seed=0, cells_per_grain=8, bulk_coarsening=4.0, comm=None
+    ):
+        rng = np.random.default_rng(seed)
+        seeds_unit = rng.uniform(0.0, 1.0, (n_seeds, 3))  # the draw voronoi_faces makes
+        faces_unit = voronoi_faces(n_seeds, 1.0, np.random.default_rng(seed))
+        spacing_unit = n_seeds ** (-1.0 / 3.0)
+        h_gb_unit = spacing_unit / cells_per_grain
+        mesh, facet_tags = build_mesh_3d(
+            faces_unit, 1.0, h_gb_unit, bulk_coarsening * h_gb_unit, comm=comm
+        )
+        mesh.geometry.x[:] *= size
+        cell_tags, grain_ids = grain_tags_from_seeds(mesh, seeds_unit * size, size)
+        # orientations are indexed by grain id, which here is the image-seed index
+        orientations = rng.uniform(0.0, np.pi, int(grain_ids.max()))
+        return cls(
+            size,
+            n_seeds,
+            seed,
+            seeds_unit * size,
+            [f * size for f in faces_unit],
+            mesh,
+            cell_tags,
+            facet_tags,
+            grain_ids,
+            orientations,
+            h_gb_unit * size,
+        )
+
+    @property
+    def n_grains(self):
+        return len(self.grain_ids)
+
+    @property
+    def tolerance(self):
+        return 0.05 * self.h_gb
+
+    def locator(self, points):
+        return near_faces(points, self.faces, self.tolerance)
 
 
 def main(argv=None):
