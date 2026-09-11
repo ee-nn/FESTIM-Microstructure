@@ -48,6 +48,7 @@ from ..subdomains import (
     GrainBoundaryNetwork,
     GrainSurface,
     TaggedGrainBoundaryNetwork,
+    facet_midpoints,
 )
 from .properties import Physics, crystal_diffusivity_field
 
@@ -84,30 +85,25 @@ def check_network_covers_grain_boundaries(micro):
     mesh, tags = micro.mesh, micro.cell_tags
     tdim = mesh.topology.dim
     mesh.topology.create_connectivity(tdim - 1, tdim)
-    mesh.topology.create_connectivity(tdim - 1, 0)
     facet_to_cell = mesh.topology.connectivity(tdim - 1, tdim)
-    facet_to_vertex = mesh.topology.connectivity(tdim - 1, 0)
     index_map = tags.topology.index_map(tdim)
     values = np.zeros(index_map.size_local + index_map.num_ghosts, dtype=np.int32)
     values[tags.indices] = tags.values
 
-    # NOTE why don't we just pass the result of local_subdomain_entities
-    # from GrainBoundarayNetwork here instead? That could avoid some code duplication.
-
-    x = mesh.geometry.x
-    n_facets = mesh.topology.index_map(tdim - 1).size_local
-    missed = 0
-    total = 0
-    for f in range(n_facets):
-        # NOTE Once again, I could see this becoming slow for large meshes
-        cells = facet_to_cell.links(f)
-        if len(cells) != 2 or values[cells[0]] == values[cells[1]]:
-            continue
-        total += 1
-        midpoint = x[facet_to_vertex.links(f)].mean(axis=0)
-        if not micro.locator(midpoint.reshape(3, 1))[0]:
-            missed += 1
-    return total, missed
+    # Vectorised, and with one locator call rather than one per facet: a locator
+    # such as near_segments loops over every ridge internally, so calling it per
+    # facet costs n_facets x n_segments and dominates any mesh worth checking.
+    # The facets are selected the same way GrainBoundaryNetwork selects its
+    # candidates, and both share facet_midpoints.
+    facets = np.arange(mesh.topology.index_map(tdim - 1).size_local, dtype=np.int32)
+    offsets = facet_to_cell.offsets
+    interior = facets[(offsets[facets + 1] - offsets[facets]) == 2]
+    pair = facet_to_cell.array[offsets[interior][:, None] + np.arange(2)]
+    boundaries = interior[values[pair[:, 0]] != values[pair[:, 1]]]
+    if boundaries.size == 0:
+        return 0, 0
+    on_network = micro.locator(facet_midpoints(mesh, boundaries).T)
+    return int(boundaries.size), int(np.count_nonzero(~on_network))
 
 
 @dataclass

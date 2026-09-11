@@ -37,6 +37,38 @@ __all__ = [
 ]
 
 
+def facet_midpoints(mesh, facets):
+    """Midpoints of ``facets``, vectorised through the adjacency offsets.
+
+    A facet of a simplex mesh has ``tdim`` vertices, so the facet-to-vertex
+    adjacency has constant width and its flat array can be gathered in one
+    fancy-index instead of a ``links()`` call per facet. Same indexing as the
+    loop it replaces: topology vertex indices into ``mesh.geometry.x``, which
+    coincide for the P1 simplex meshes this package builds.
+
+    Returns an ``(n, 3)`` array; transpose it for a DOLFINx-style locator.
+    """
+    tdim = mesh.topology.dim
+    mesh.topology.create_connectivity(tdim - 1, 0)
+    facet_to_vertex = mesh.topology.connectivity(tdim - 1, 0)
+    offsets = facet_to_vertex.offsets
+    vertices = facet_to_vertex.array[offsets[facets][:, None] + np.arange(tdim)]
+    return mesh.geometry.x[vertices].mean(axis=1)
+
+
+def interior_facet_mask(mesh, facets):
+    """Which of ``facets`` are interior, i.e. shared by two cells.
+
+    The number of cells a facet connects to is the width of its slice in the
+    adjacency list, as FESTIM works it out in
+    ``HydrogenTransportProblem.manifold_is_interior``.
+    """
+    tdim = mesh.topology.dim
+    mesh.topology.create_connectivity(tdim - 1, tdim)
+    offsets = mesh.topology.connectivity(tdim - 1, tdim).offsets
+    return (offsets[facets + 1] - offsets[facets]) == 2
+
+
 class Grain(F.VolumeSubdomain):
     """One grain (Voronoi cell), located from its gmsh physical group.
 
@@ -91,23 +123,12 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
 
     def locate_subdomain_entities(self, mesh):
         tdim = mesh.topology.dim
-        mesh.topology.create_connectivity(tdim - 1, 0)
-        facet_to_vertex = mesh.topology.connectivity(tdim - 1, 0)
         candidates = dolfinx.mesh.locate_entities(mesh, tdim - 1, self.network_locator)
         if candidates.size == 0:
             return candidates.astype(np.int32)
-        x = mesh.geometry.x
-        midpoints = np.array(
-            [x[facet_to_vertex.links(f)].mean(axis=0) for f in candidates]
-        )
-        # TODO again, switch to a vectorized format to reduced computational overhead
-        keep = self.network_locator(midpoints.T)
+        keep = self.network_locator(facet_midpoints(mesh, candidates).T)
         if self.drop_exterior:
-            mesh.topology.create_connectivity(tdim - 1, tdim)
-            facet_to_cell = mesh.topology.connectivity(tdim - 1, tdim)
-            interior = np.array(
-                [len(facet_to_cell.links(f)) == 2 for f in candidates], dtype=bool
-            )  # TODO see above
+            interior = interior_facet_mask(mesh, candidates)
             self.n_dropped = int((keep & ~interior).sum())
             keep &= interior
         return candidates[keep].astype(np.int32)
@@ -163,10 +184,16 @@ class GrainSurface(F.SurfaceSubdomain):
         tdim = mesh.topology.dim
         mesh.topology.create_connectivity(tdim - 1, tdim)
         facet_to_cell = mesh.topology.connectivity(tdim - 1, tdim)
-        cells = set(self.cell_tags.find(self.grain_id).tolist())
         facets = dolfinx.mesh.locate_entities_boundary(mesh, tdim - 1, self.locator)
 
-        keep = [f for f in facets if any(c in cells for c in facet_to_cell.links(f))]
-        # TODO again, switch to a vectorized format to reduced computational overhead
-
-        return np.array(keep, dtype=np.int32)
+        # Index the adjacency list's flat array through its offsets rather than
+        # calling links() per facet, as FESTIM does in
+        # HydrogenTransportProblem.manifold_is_interior: this runs once per grain
+        # per boundary condition over every boundary facet of the mesh, so the
+        # Python loop it replaces costs n_grains x n_bcs x n_boundary_facets
+        # iterations on every build. locate_entities_boundary returns exterior
+        # facets only, and an exterior facet has exactly one adjacent cell, which
+        # sits at offsets[facet].
+        adjacent = facet_to_cell.array[facet_to_cell.offsets[facets]]
+        keep = np.isin(adjacent, self.cell_tags.find(self.grain_id))
+        return facets[keep].astype(np.int32)
