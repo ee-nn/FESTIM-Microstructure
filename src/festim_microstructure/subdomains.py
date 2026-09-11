@@ -179,8 +179,21 @@ class GrainSurface(F.SurfaceSubdomain):
         super().__init__(id=id, locator=locator)
         self.grain_id = grain_id
         self.cell_tags = cell_tags
+        self._cache = {}
 
     def locate_boundary_facet_indices(self, mesh):
+        # every patch is located twice -- once by resolved.build, to find out whether
+        # this grain touches the surface at all, and once by FESTIM when it builds the
+        # facet tags -- and with one patch per grain per boundary condition that is
+        # 2 x n_grains x n_bcs sweeps of every boundary facet of the mesh. Keyed on
+        # mesh identity, because the answer is a property of (this patch, that mesh).
+        key = id(mesh)
+        if key in self._cache:
+            return self._cache[key]
+        self._cache[key] = self._locate(mesh)
+        return self._cache[key]
+
+    def _locate(self, mesh):
         tdim = mesh.topology.dim
         mesh.topology.create_connectivity(tdim - 1, tdim)
         facet_to_cell = mesh.topology.connectivity(tdim - 1, tdim)

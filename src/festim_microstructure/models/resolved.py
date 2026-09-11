@@ -31,6 +31,26 @@ factor of two, because the sum over the two adjacent grains supplies it. Each
 grain loses what it gives, ``k_s (c_gb - c_s)`` per unit area, on its own side.
 ``delta`` reappears in every post-processed quantity: the network holds
 ``delta * integral(c_gb)`` and carries ``delta * D_gb * grad_s(c_gb)``.
+
+Coefficients are ``fem.Constant``, never Python floats
+------------------------------------------------------
+Every coefficient that a parameter sweep varies -- ``k``, ``delta``, ``D_gb``,
+the lattice tensors -- enters the forms as a ``dolfinx.fem.Constant`` or a
+``fem.Function``, and never as a bare Python float. A float multiplying a UFL
+expression becomes a ``ufl.FloatValue`` *inside* the form, and the value of a
+``FloatValue`` is part of the form signature, which is the FFCx JIT cache key.
+Changing it therefore regenerates and re-compiles the C kernel of every block it
+appears in. With one subdomain per grain that is a residual and two Jacobian
+blocks per grain, each with its own ``dx``/``dS`` id and so its own signature, so
+a sweep over ``k`` recompiles the whole system at every point -- tens of seconds
+per solve on a mesh that takes well under a second to assemble and factor.
+A ``Constant``'s signature does not depend on its value, so the kernels are
+compiled once and the cache hits from then on.
+
+The same property is what makes :meth:`MicroModel.set_physics` possible: the
+assembled problem can be pointed at new coefficients and re-solved, so a sweep
+pays for the submeshes, the dofmaps and the kernels once per microstructure
+rather than once per point.
 """
 
 from dataclasses import dataclass, field
@@ -50,10 +70,15 @@ from ..subdomains import (
     TaggedGrainBoundaryNetwork,
     facet_midpoints,
 )
-from .properties import Physics, crystal_diffusivity_field
+from .properties import (
+    Physics,
+    crystal_diffusivity_field,
+    fill_crystal_diffusivity_field,
+)
 
 __all__ = [
     "ATOL",
+    "ConstantDiffusivity",
     "Grain",
     "GrainBoundaryNetwork",
     "GrainSurface",
@@ -64,6 +89,7 @@ __all__ = [
     "check_network_covers_grain_boundaries",
     "crystal_diffusivity_field",
     "equilibrium_error",
+    "fill_crystal_diffusivity_field",
     "grain_areas",
     "inventory",
     "mean_lattice_tensor",
@@ -73,6 +99,43 @@ __all__ = [
 
 NETWORK_ID = 1_000_000  # above every grain id
 SURFACE_ID_0 = 2_000_000  # the per-grain boundary patches are numbered from here
+
+
+class ConstantDiffusivity(F.Material):
+    """A material whose diffusivity is a ``fem.Constant`` that can be changed later.
+
+    ``festim.Material`` turns a float ``D_0`` into a *fresh* ``fem.Constant`` each
+    time a form asks for it and keeps no reference, so the value is frozen at build
+    time. That is enough for the signature (a ``Constant``'s signature does not
+    depend on its value) but leaves no handle for
+    :meth:`MicroModel.set_physics`. Here the constants are kept -- one per mesh,
+    because a manifold's self terms are integrated on its submesh while its coupling
+    terms are integrated on the parent -- and ``D`` writes through to all of them.
+    """
+
+    def __init__(self, D):
+        super().__init__(D_0=float(D), E_D=0.0)
+        self._constants = {}
+
+    @property
+    def D_value(self):
+        return self.D_0
+
+    @D_value.setter
+    def D_value(self, value):
+        self.D_0 = float(value)
+        for constant in self._constants.values():
+            constant.value = dolfinx.default_scalar_type(self.D_0)
+
+    def get_diffusion_coefficient(self, mesh=None, temperature=None, species=None):
+        # keyed on identity: a dolfinx Mesh is not hashable by value, and the parent
+        # mesh and each submesh are distinct objects that live as long as the model
+        key = id(mesh)
+        if key not in self._constants:
+            self._constants[key] = dolfinx.fem.Constant(
+                mesh, dolfinx.default_scalar_type(self.D_0)
+            )
+        return self._constants[key]
 
 
 def check_network_covers_grain_boundaries(micro):
@@ -119,11 +182,128 @@ class MicroModel:
     c_gb: F.Species
     tensors: dict
     surfaces: dict = field(default_factory=dict)
+    lattice_field: object = None  # the DG0 tensor field holding D_m per grain
+    k_constants: dict = field(default_factory=dict)  # grain id -> exchange rate
+    delta_constant: object = None
+    gb_material: ConstantDiffusivity | None = None
+    _initialised: bool = False
+    _initial_guess: list | None = None  # the unknowns as initialise() left them
+
+    def initialise(self):
+        """Build the function spaces, forms and solver. Idempotent."""
+        if not self._initialised:
+            self.model.initialise()
+            tune_direct_solver(self.model)
+            # the unknowns as initialise() leaves them: zero, or whatever
+            # create_initial_conditions() wrote. This is the state a freshly built
+            # problem solves from, and every point of a sweep has to start from it
+            # -- see solve().
+            self._initial_guess = [u.x.array.copy() for u in self._unknowns]
+            self._initialised = True
+        return self
+
+    @property
+    def _unknowns(self):
+        """The functions the SNES solves for, in the solver's own order."""
+        u = self.model.solver.u
+        return list(u) if isinstance(u, list | tuple) else [u]
+
+    def reset_initial_guess(self):
+        """Put the unknowns back to the state :meth:`initialise` left them in."""
+        if self._initial_guess is None:
+            raise RuntimeError("initialise() the model before solving it")
+        for u, guess in zip(self._unknowns, self._initial_guess, strict=True):
+            u.x.array[:] = guess
+            u.x.scatter_forward()
+        return self
+
+    def solve(self, warm_start=False):
+        """Solve the already-initialised problem, from the current coefficients.
+
+        The unknowns are reset to the state :meth:`initialise` left them in first,
+        so a re-solve is numerically identical to a freshly built problem. Do not
+        be tempted to leave the previous point's solution in place as a warm start:
+        FESTIM's convergence test (``festim.helpers.convergenceTest``) is
+
+            converged if  ||F|| < atol  or  ||F|| / ||F_0|| < rtol
+
+        where ``F_0`` is the residual of *this* solve's first iterate. ``ATOL`` is
+        1e-25 here, far below anything an unscaled problem reaches, so the relative
+        test is the only one that can fire. From a zero iterate ``||F_0||`` is the
+        full Dirichlet-driven load and one exact LU step takes the residual to
+        ~1e-16 of it, comfortably inside ``rtol``. From the previous point's
+        solution ``||F_0||`` is only as large as the change in the coefficients,
+        while the residual floor after a step is unchanged -- it is set by the
+        round-off of the assembly, not by the iterate -- so the ratio can never
+        reach 1e-10 and SNES iterates to ``DIVERGED_MAX_IT`` on a solve that is
+        already exact. The real cure is to nondimensionalise so that ``atol`` means
+        something (see ``ATOL`` in :mod:`festim_microstructure.solvers`); until
+        then, start cold.
+
+        Args:
+            warm_start: keep the current iterate instead. Only safe on a scaled
+                problem, or a continuation where ``atol`` can actually fire.
+        """
+        if not warm_start:
+            self.reset_initial_guess()
+        self.model.run()
+        snes = getattr(getattr(self.model, "solver", None), "solver", None)
+        if snes is not None:
+            reason = snes.getConvergedReason()
+            if reason <= 0:
+                raise RuntimeError(
+                    f"the Newton solve did not converge (SNES reason {reason}). "
+                    f"With delta = {self.physics.delta:.3e} m and k = "
+                    f"{self.physics.k_exchange:.3e} m/s the exchange block is "
+                    f"{self.physics.k_exchange / self.physics.delta:.3e} against a "
+                    f"lattice block of order {self.physics.D_bulk:.3e}; see "
+                    "tune_direct_solver for the MUMPS fill-in this costs."
+                )
+        return self
 
     def run(self):
-        self.model.initialise()
-        tune_direct_solver(self.model)
-        self.model.run()
+        return self.initialise().solve()
+
+    def set_physics(self, physics: Physics, exchange_rate=None):
+        """Point this problem at new coefficients, without rebuilding it.
+
+        Only values change: ``delta``, ``k`` and ``D_gb`` are ``fem.Constant`` and
+        the lattice tensors are a ``fem.Function``, so the submeshes, the dofmaps,
+        the compiled kernels and the sparsity pattern all stay as they are. A
+        parameter sweep is therefore one :func:`build` and one ``initialise``
+        followed by ``set_physics(...).solve()`` per point.
+
+        The geometry is *not* allowed to change: ``micro`` is the same
+        microstructure, so the network, the grains and their orientations are the
+        ones this problem was built with.
+
+        Args:
+            physics: the new material data.
+            exchange_rate: ``grain_id -> k``, as in :func:`build`. Defaults to
+                ``physics.k_exchange`` everywhere.
+        """
+        if not self.k_constants:
+            raise RuntimeError(
+                "this MicroModel has no coefficient handles, so it cannot be "
+                "retuned; it was not produced by build()"
+            )
+        if exchange_rate is None:
+
+            def exchange_rate(grain_id):
+                return physics.k_exchange
+
+        self.physics = physics
+        self.delta_constant.value = dolfinx.default_scalar_type(physics.delta)
+        for grain in self.grains:
+            self.k_constants[grain.id].value = dolfinx.default_scalar_type(
+                float(exchange_rate(grain.id))
+            )
+        self.gb_material.D_value = physics.D_gb
+        # the lattice tensors depend on D_bulk and the anisotropy, so they move with
+        # T even when the sweep is over the boundary alone
+        self.tensors = fill_crystal_diffusivity_field(
+            self.lattice_field, self.micro, physics
+        )
         return self
 
     @property
@@ -171,6 +351,7 @@ def averages(mm: MicroModel, window=None):
     """
     delta, D_gb = mm.physics.delta, mm.physics.D_gb
     dim = mm.micro.mesh.geometry.dim
+    scalar = dolfinx.default_scalar_type
     area = 0.0
     q = np.zeros(dim)
     grad_c = np.zeros(dim)
@@ -181,7 +362,10 @@ def averages(mm: MicroModel, window=None):
         mesh = c.function_space.mesh
         dx = ufl.Measure("dx", domain=mesh)
         w = _window(mesh, window)
-        D = ufl.as_matrix(mm.tensors[grain.id].tolist())
+        # as a Constant, not ufl.as_matrix of the numbers: the tensor differs from
+        # grain to grain, so as literals it gives every grain a form signature of its
+        # own and one compiled kernel each, for what is the same integrand
+        D = dolfinx.fem.Constant(mesh, np.asarray(mm.tensors[grain.id], dtype=scalar))
         flux = -D * ufl.grad(c)
         area += _assemble(w * dx)
         for i in range(dim):
@@ -192,8 +376,9 @@ def averages(mm: MicroModel, window=None):
     mesh_g = cgb.function_space.mesh
     dx_g = ufl.Measure("dx", domain=mesh_g)
     w_g = _window(mesh_g, window)
+    delta_D_gb = dolfinx.fem.Constant(mesh_g, scalar(delta * D_gb))
     for i in range(dim):
-        q[i] -= _assemble(w_g * delta * D_gb * ufl.grad(cgb)[i] * dx_g)
+        q[i] -= _assemble(w_g * delta_D_gb * ufl.grad(cgb)[i] * dx_g)
 
     return q / area, grad_c / area, area
 
@@ -269,7 +454,7 @@ def build(
         for g in micro.grain_ids
     ]
     tdim = micro.mesh.topology.dim
-    gb_material = F.Material(D_0=physics.D_gb, E_D=0.0)
+    gb_material = ConstantDiffusivity(physics.D_gb)
     if getattr(micro, "facet_tags", None) is not None:
         # the mesher tagged the boundary facets: nothing geometric to get wrong
         network = TaggedGrainBoundaryNetwork(
@@ -282,13 +467,32 @@ def build(
     species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
     c_gb = F.Species("c_gb", subdomains=[network])
 
-    delta = physics.delta
+    # delta and k as fem.Constant, NOT as floats. Both coupling terms below are
+    # parent-mesh integrals (see FESTIM's create_subdomain_formulation), so a
+    # constant on the parent mesh is the right domain for each. A float here would
+    # end up as a ufl.FloatValue inside the form, whose value is part of the form
+    # signature and hence of the FFCx JIT cache key: every sweep point would
+    # recompile the residual and both Jacobian blocks of every grain. See the
+    # module docstring.
+    scalar = dolfinx.default_scalar_type
+    delta_constant = dolfinx.fem.Constant(micro.mesh, scalar(physics.delta))
+    k_constants = {
+        grain.id: dolfinx.fem.Constant(
+            micro.mesh, scalar(float(exchange_rate(grain.id)))
+        )
+        for grain in grains
+    }
+
     # one exchange per grain, each naming only that grain's species. This is how
     # FESTIM works out which side of the network the term belongs to.
     # The two grains adjacent to a facet each contribute their own term.
     sources = [
         F.ParticleSource(
-            value=lambda c_g, c_b, k=exchange_rate(grain.id): (k / delta) * (c_b - c_g),
+            # delta_constant is closed over, not a default argument: FESTIM inspects
+            # co_varnames to decide what to pass, so the signature stays (c_g, c_b, k)
+            value=lambda c_g, c_b, k=k_constants[grain.id]: (
+                (k / delta_constant) * (c_b - c_g)
+            ),
             species=c_gb,
             volume=network,
             species_dependent_value={"c_b": spe, "c_g": c_gb},
@@ -299,7 +503,7 @@ def build(
         F.ParticleFluxBC(
             subdomain=network,
             species=spe,
-            value=lambda c_g, c_b, k=exchange_rate(grain.id): k * (c_g - c_b),
+            value=lambda c_g, c_b, k=k_constants[grain.id]: k * (c_g - c_b),
             species_dependent_value={"c_b": spe, "c_g": c_gb},
         )
         for spe, grain in zip(species, grains, strict=True)
@@ -352,7 +556,19 @@ def build(
     )
     model.show_progress_bar = transient
     return MicroModel(
-        model, micro, physics, grains, network, species, c_gb, tensors, surfaces
+        model,
+        micro,
+        physics,
+        grains,
+        network,
+        species,
+        c_gb,
+        tensors,
+        surfaces,
+        lattice_field=D_field,
+        k_constants=k_constants,
+        delta_constant=delta_constant,
+        gb_material=gb_material,
     )
 
 

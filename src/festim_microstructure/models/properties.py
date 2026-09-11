@@ -16,7 +16,12 @@ import dolfinx
 import festim as F
 import numpy as np
 
-__all__ = ["Physics", "crystal_diffusivity_field", "gb_diffusivity_field"]
+__all__ = [
+    "Physics",
+    "crystal_diffusivity_field",
+    "fill_crystal_diffusivity_field",
+    "gb_diffusivity_field",
+]
 
 
 @dataclass
@@ -126,6 +131,21 @@ def crystal_diffusivity_field(micro, physics):
     gdim = mesh.geometry.dim
     V = dolfinx.fem.functionspace(mesh, ("DG", 0, (gdim, gdim)))
     D = dolfinx.fem.Function(V, name="D_lattice")
+    return D, fill_crystal_diffusivity_field(D, micro, physics)
+
+
+def fill_crystal_diffusivity_field(D, micro, physics):
+    """Write the lattice tensors of ``physics`` into an existing field.
+
+    The other half of :func:`crystal_diffusivity_field`, split out so that the
+    coefficients of an already-assembled problem can be changed without building a
+    new function space -- see
+    :meth:`~festim_microstructure.models.resolved.MicroModel.set_physics`.
+
+    Returns the ``grain_id -> tensor`` dictionary.
+    """
+    V = D.function_space
+    gdim = V.mesh.geometry.dim
     tensors = {}
     n = gdim * gdim
     for grain_id in micro.grain_ids:
@@ -141,7 +161,7 @@ def crystal_diffusivity_field(micro, physics):
         for component in range(n):
             D.x.array[n * dofs + component] = flat[component]
     D.x.scatter_forward()
-    return D, tensors
+    return tensors
 
 
 def gb_diffusivity_field(network, theta, d_low, d_high, theta_c=15.0):
