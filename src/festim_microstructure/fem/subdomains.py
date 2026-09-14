@@ -122,12 +122,15 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
         return facets.astype(np.int32)
 
     def _from_tags(self):
+        assert self.facet_tags is not None
+        assert self.entity_ids is not None
         keep = np.isin(self.facet_tags.values, self.entity_ids)
         return self.facet_tags.indices[keep], self.facet_tags.values[keep].astype(
             np.int32
         )
 
     def _from_locator(self, mesh):
+        assert self.network_locator is not None
         tdim = mesh.topology.dim
         candidates = dolfinx.mesh.locate_entities(mesh, tdim - 1, self.network_locator)
         if candidates.size == 0:

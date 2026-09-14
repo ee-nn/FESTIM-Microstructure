@@ -177,7 +177,7 @@ class MicroModel:
                 "retuned; it was not produced by build()"
             )
         self.physics = physics
-        self.delta_constant.value = dolfinx.default_scalar_type(physics.delta)
+        self.delta_constant.value[...] = dolfinx.default_scalar_type(physics.delta)
         for grain in self.grains:
             self.k_constants[grain.id].value = dolfinx.default_scalar_type(
                 float(
