@@ -31,7 +31,6 @@ from festim_microstructure.ebsd.orientation import (
     euler_bunge_to_quat,
     quat_to_rodrigues,
     rodrigues_to_quat,
-    self_test,
     to_fundamental_zone,
 )
 from festim_microstructure.ebsd.segmentation import (
@@ -400,7 +399,6 @@ class CtfConversion:
         )
 
     def run(self, output=None) -> ConversionResult:
-        self_test()
         self.read().segment().clean().orient().measure().write(output).diagnose()
         self._summarise()
         return self.result()
