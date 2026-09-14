@@ -41,9 +41,9 @@ import dolfinx
 import festim as F
 import numpy as np
 import ufl
-from gb_homogenisation import identify, make_microstructure
 
 from festim_microstructure.models import resolved as mm
+from gb_homogenisation import identify, make_microstructure
 
 __all__ = ["homogeneous_model", "permeation_bcs", "steady_consistency", "uptake"]
 

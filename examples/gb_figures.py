@@ -581,9 +581,8 @@ def main(argv=None):
         written.append(figure_validation(validation, "fig_validation.png"))
 
     if not args.skip_fields:
-        from gb_homogenisation import make_microstructure
-
         from festim_microstructure.models import resolved as mm
+        from gb_homogenisation import make_microstructure
 
         micro = make_microstructure(
             args.field_size, args.grain_size, args.aspect, 0, args.cells_per_grain
