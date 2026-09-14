@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import festim as F
 import numpy as np
 
+from festim_microstructure.fem.subdomains import GrainBoundaryNetwork
 from festim_microstructure.meshing.voronoi import (
     MeshSizing,
     build_mesh,
@@ -36,7 +37,6 @@ from festim_microstructure.postprocessing.measures import (
     junction_only_below,
     submesh_measure,
 )
-from festim_microstructure.subdomains import GrainBoundaryNetwork
 
 
 @dataclass

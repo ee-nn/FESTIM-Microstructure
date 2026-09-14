@@ -19,6 +19,7 @@ from pathlib import Path
 import festim as F
 import numpy as np
 
+from festim_microstructure.fem.subdomains import TaggedGrainBoundaryNetwork
 from festim_microstructure.meshing.neper import (
     NeperMicrostructure,
     NeperOptions,
@@ -38,7 +39,6 @@ from festim_microstructure.postprocessing.measures import (
     inventory,
     submesh_measure,
 )
-from festim_microstructure.subdomains import TaggedGrainBoundaryNetwork
 
 
 @dataclass
@@ -72,9 +72,7 @@ def main(s=Setup()):
         options=s.neper,
         run=NeperRun(stem=s.stem, workdir=str(s.workdir), force=s.force),
     )
-    micro = NeperMicrostructure.from_base(
-        base, theta_min=s.theta_min, options=s.neper
-    )
+    micro = NeperMicrostructure.from_base(base, theta_min=s.theta_min, options=s.neper)
     mesh, cell_tags, facet_tags = read_mesh(base, gdim=3)
 
     network = TaggedGrainBoundaryNetwork(

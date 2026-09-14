@@ -141,7 +141,7 @@ def build_mesh_3d(faces, size, sizing, comm=None, msh_path=None):
     Returns ``(mesh, facet_tags)``. Every fragment of the box is the same
     material and goes in one volume group (id 1); the grain-boundary facets are
     tagged :data:`GB_TAG_3D`, so the network is picked up from the facet tags by
-    :class:`~festim_microstructure.subdomains.TaggedGrainBoundaryNetwork`.
+    :class:`~festim_microstructure.fem.subdomains.TaggedGrainBoundaryNetwork`.
     """
     from mpi4py import MPI
 

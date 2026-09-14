@@ -14,15 +14,15 @@ import festim as F
 import numpy as np
 import ufl
 
-from ..microstructure import MeshedMicrostructure, require
-from ..solvers import ATOL, DIRECT_SOLVER_OPTIONS, tune_direct_solver
-from ..subdomains import (
+from ..fem.solvers import ATOL, DIRECT_SOLVER_OPTIONS, tune_direct_solver
+from ..fem.subdomains import (
     Grain,
     GrainBoundaryNetwork,
     GrainSurface,
     TaggedGrainBoundaryNetwork,
     facet_midpoints,
 )
+from ..microstructure import MeshedMicrostructure, require
 from .properties import (
     Physics,
     crystal_diffusivity_field,

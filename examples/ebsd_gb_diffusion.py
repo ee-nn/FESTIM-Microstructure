@@ -20,6 +20,7 @@ from pathlib import Path
 import festim as F
 import numpy as np
 
+from festim_microstructure.fem.subdomains import TaggedGrainBoundaryNetwork
 from festim_microstructure.meshing.ebsd.pipeline import (
     EbsdMicrostructure,
     EbsdOptions,
@@ -40,7 +41,6 @@ from festim_microstructure.postprocessing.measures import (
     inventory,
     submesh_measure,
 )
-from festim_microstructure.subdomains import TaggedGrainBoundaryNetwork
 
 HERE = Path(__file__).resolve().parent
 

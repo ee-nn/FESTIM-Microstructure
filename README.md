@@ -204,16 +204,42 @@ dolfinx or FESTIM installed; the mesh builders and models import them lazily.
 
 ## Usage
 
+The names you are most likely to want sit on the package itself:
+
 ```python
 import festim as F
 import festim_microstructure as fm
+
+micro = fm.VoronoiMicrostructure.create(size=100e-6, n_seeds=64)
+model = fm.build(micro, fm.Physics(T=600.0), bcs).run()
+```
+
+`dir(fm)` lists the top-level API. Attribute access is lazy, so
+`import festim_microstructure` costs nothing and dolfinx is imported only when
+a name that needs it is first touched -- `fm.VoronoiMicrostructure` pulls in
+NumPy and SciPy, `fm.build` pulls in FESTIM.
+
+Everything else stays reachable through the subpackages, which resolve the
+same way:
+
+```python
+fm.meshing.voronoi.network_tensor
+fm.meshing.ebsd.ctf.CtfConversion
+fm.models.resolved.averages
+fm.fem.subdomains.GrainBoundaryNetwork
+fm.postprocessing.measures.submesh_measure
+```
+
+Explicit imports work as before and are what the examples use:
+
+```python
 from festim_microstructure.meshing.voronoi import (
     build_mesh,
     near_segments,
     voronoi_segments,
 )
 from festim_microstructure.models.fisher import ShortCircuitParams, ShortCircuitProblem
-from festim_microstructure.subdomains import GrainBoundaryNetwork
+from festim_microstructure.fem.subdomains import GrainBoundaryNetwork
 ```
 
 Examples are executable workflows, intentionally kept outside the installed
@@ -239,11 +265,11 @@ Generate meshes through Python functions:
 ```python
 from pathlib import Path
 
-from festim_microstructure.meshing.voronoi import VoronoiMicrostructure
+import festim_microstructure as fm
 from festim_microstructure.meshing.ebsd.ctf import convert
-from festim_microstructure.meshing.ebsd.pipeline import EbsdOptions, run_ebsd_pipeline
+from festim_microstructure.meshing.ebsd.pipeline import run_ebsd_pipeline
 
-micro = VoronoiMicrostructure.create(
+micro = fm.VoronoiMicrostructure.create(
     size=100e-6, n_seeds=64, aspect=4, cells_per_grain=10, msh_path="poly2d.msh"
 )
 print(micro.report())
@@ -256,10 +282,10 @@ result = convert(
     min_pixels=15, max_mad=1.5, allow_error=True,
     crop="0,306,0,306", diagnostics=True,
 )
-base = run_ebsd_pipeline(EbsdOptions(tesr=str(tesr)), workdir=workdir)
+base = run_ebsd_pipeline(fm.EbsdOptions(tesr=str(tesr)), workdir=workdir)
 ```
 
-Configure EBSD meshing with `EbsdOptions(mesh=TesrMeshOptions(...))`
+Configure EBSD meshing with `fm.EbsdOptions(mesh=fm.TesrMeshOptions(...))`
 (`TesrMeshOptions` is in `meshing.neper`). Pass binary paths with
 `convert(..., neper=...)` and
 `run_ebsd_pipeline(..., neper_bin=..., gmsh_bin=...)`.
