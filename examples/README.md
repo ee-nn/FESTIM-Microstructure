@@ -17,3 +17,21 @@ specialised helpers through namespaces such as `fm.voronoi`, `fm.meshing`,
   study, run in that order.
 - `li2022_fig4.py` and `li2022_fig4_codim.py` reproduce and compare the two
   grain-boundary formulations used for Li et al. (2022), Fig. 4.
+
+## Outputs
+
+Each script writes generated files under `examples/results/<script_name>/`,
+independent of the directory from which it is run. For example, the 2D Voronoi
+exports are in `examples/results/voronoi_polycrystal_2d/`. Meshes, diagnostics,
+figures, and JSON files use the same per-script layout. Rerunning a script can
+replace its own outputs; different scripts use separate folders.
+
+The EBSD conversion writes `results/ebsd_ctf_to_tesr/d7.tesr`, which
+`ebsd_gb_diffusion.py` reads by default. The original CTF stays in `examples/data/`.
+
+`gb_figures.py` reads `results/gb_homogenisation/identified.json` and
+`results/gb_validation/validation.json` by default and writes to
+`results/gb_figures/`. Its `--rve` and `--validation` options accept other input
+paths. For the two JSON-producing scripts, `--out` is relative to that script's
+results folder and must stay inside it. Homogenisation field exports include
+the cell size and seed in their names to preserve each case in a sweep.

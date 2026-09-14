@@ -7,10 +7,13 @@ boundary clamping. A large grain/GB mismatch means no single-field ``D_eff``.
 import argparse
 import json
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import numpy as np
 
 import festim_microstructure as fm
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
 __all__ = ["Identification", "hart_bound", "identify", "make_microstructure"]
 
@@ -178,8 +181,17 @@ def main(argv=None):
     parser.add_argument("--cells-per-grain", type=int, default=8)
     parser.add_argument("--window-fraction", type=float, default=0.5)
     parser.add_argument("--export", action="store_true")
-    parser.add_argument("--out", type=str, default="identified.json")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("identified.json"),
+        help="output filename, relative to examples/results/gb_homogenisation/",
+    )
     args = parser.parse_args(argv)
+    args.out = (OUTPUT_DIR / args.out).resolve()
+    if not args.out.is_relative_to(OUTPUT_DIR):
+        parser.error("--out must stay within " + str(OUTPUT_DIR))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
 
     results, sweep = [], []
     for size in args.sizes:
@@ -197,7 +209,11 @@ def main(argv=None):
                 micro,
                 physics,
                 window_fraction=args.window_fraction,
-                export_prefix="corrector" if args.export else None,
+                export_prefix=(
+                    OUTPUT_DIR / f"corrector_size_{size}_seed_{seed}"
+                    if args.export
+                    else None
+                ),
             )
             print(ident.report())
             print(flush=True)

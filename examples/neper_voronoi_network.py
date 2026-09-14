@@ -18,7 +18,6 @@ Run::
     mpirun -n 4 python examples/neper_voronoi_network.py
 """
 
-from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import festim as F
@@ -26,148 +25,144 @@ import numpy as np
 
 import festim_microstructure as fm
 
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
-@dataclass
-class Setup:
-    L: float = 1.0  # specimen size (Neper's default domain is cube(1,1,1))
-    n_cells: int = 100  # number of grains; Neper is happy into the 1e5 range
-    seed: int = 1  # -id, the rng seed, so the microstructure is reproducible
+# Simulation parameters
+L = 1.0  # specimen size (Neper's default domain is cube(1,1,1))
+n_cells = 100  # number of grains; Neper is happy into the 1e5 range
+seed = 1  # -id, the rng seed, so the microstructure is reproducible
 
-    D_B: float = 1e-3
-    D_GB: float = 30.0
-    delta: float = 1e-3
-    k_exchange: float = 1.0
-    c0: float = 1.0
-    t_end: float = 3.0
-    dt: float = 0.05
+D_B = 1e-3
+D_GB = 30.0
+delta = 1e-3
+k_exchange = 1.0
+c0 = 1.0
+t_end = 3.0
+dt = 0.05
 
-    theta_min: float = 0.0  # keep only boundaries above this disorientation (deg)
-    theta_dependent_D: bool = False  # see gb_diffusivity_field, CHECK before enabling
-    neper: fm.NeperOptions = field(default_factory=fm.NeperOptions)
-    stem: str = "poly"
-    workdir: Path = Path(__file__).resolve().parent / "results"
-    force: bool = False
+theta_min = 0.0  # keep only boundaries above this disorientation (deg)
+theta_dependent_D = False  # see gb_diffusivity_field, CHECK before enabling
+neper = fm.NeperOptions()
+stem = "poly"
+workdir = OUTPUT_DIR
+force = False
 
+# Build the microstructure and simulation
+base = fm.meshing.neper.run_neper(
+    n_cells,
+    seed,
+    options=neper,
+    run=fm.NeperRun(stem=stem, workdir=str(workdir), force=force),
+)
+micro = fm.NeperMicrostructure.from_base(base, theta_min=theta_min, options=neper)
+mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=3)
 
-def main(s=Setup()):
-    L, D_B, D_GB = s.L, s.D_B, s.D_GB
+# The tessellation knows the topology; this is the same polycrystal as the
+# model sees it: one tagged subdomain per grain, the network as face ids.
+# Untextured, and crystal_anisotropy is 1 below, so the angles never enter.
+poly = fm.TaggedPolycrystal(
+    mesh=mesh,
+    cell_tags=cell_tags,
+    facet_tags=facet_tags,
+    gb_tag=micro.network_ids,
+    name=f"neper {n_cells} cells, seed {seed}",
+)
+physics = fm.Physics(
+    T=500.0,  # with E_D = 0 on both phases, nothing depends on it
+    D_0_bulk=D_B,
+    E_D_bulk=0.0,
+    D_0_gb=D_GB,
+    E_D_gb=0.0,
+    delta=delta,
+    k_exchange=k_exchange,
+    crystal_anisotropy=1.0,
+)
+bcs = [("charged", lambda x: np.isclose(x[2], L), c0)]
+solve = fm.SolveOptions(
+    transient=True, final_time=t_end, stepsize=dt, atol=1e-14, rtol=1e-12
+)
 
-    base = fm.meshing.neper.run_neper(
-        s.n_cells,
-        s.seed,
-        options=s.neper,
-        run=fm.NeperRun(stem=s.stem, workdir=str(s.workdir), force=s.force),
+model = fm.build(poly, physics, bcs, solve=solve)
+if theta_dependent_D:
+    # the submesh has to exist before a field can live on it, so initialise
+    # once, swap the material in, and initialise again
+    model.initialise()
+    model.network.material = F.Material(
+        D_0=fm.materials.gb_diffusivity_field(model.network, micro.theta, D_B, D_GB),
+        E_D=0.0,
     )
-    micro = fm.NeperMicrostructure.from_base(
-        base, theta_min=s.theta_min, options=s.neper
-    )
-    mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=3)
+    model.initialise(force=True)
+model.run()
+fm.exports.averages.write_vtx(model, str(base.parent / "neper"), time=t_end)
+network, cgb_fast = model.network, model.network_solution
 
-    # The tessellation knows the topology; this is the same polycrystal as the
-    # model sees it: one tagged subdomain per grain, the network as face ids.
-    # Untextured, and crystal_anisotropy is 1 below, so the angles never enter.
-    poly = fm.TaggedPolycrystal(
-        mesh=mesh,
-        cell_tags=cell_tags,
-        facet_tags=facet_tags,
-        gb_tag=micro.network_ids,
-        name=f"neper {s.n_cells} cells, seed {s.seed}",
-    )
-    physics = fm.Physics(
-        T=500.0,  # with E_D = 0 on both phases, nothing depends on it
-        D_0_bulk=D_B,
-        E_D_bulk=0.0,
-        D_0_gb=D_GB,
-        E_D_gb=0.0,
-        delta=s.delta,
-        k_exchange=s.k_exchange,
-        crystal_anisotropy=1.0,
-    )
-    bcs = [("charged", lambda x: np.isclose(x[2], L), s.c0)]
-    solve = fm.SolveOptions(
-        transient=True, final_time=s.t_end, stepsize=s.dt, atol=1e-14, rtol=1e-12
-    )
+# Inspect the mesh and boundary network
+print(micro.report(n_cells=n_cells))
+area_mesh, area_tess = (
+    fm.exports.measures.submesh_measure(network),
+    micro.network_measure,
+)
+n_comp = fm.exports.measures.component_count(network)
+n_mesh_cells = mesh.topology.index_map(3).size_global
+print(f"  mesh                            : {n_mesh_cells} cells")
+print(
+    f"  network captured by the submesh : {area_mesh:.4f} of {area_tess:.4f}"
+    f" ({100 * area_mesh / area_tess:.2f} %)"
+)
+if n_comp is not None:
+    print(f"  connected components            : {n_comp}")
+print(
+    f"  interior facets                 : {model.model.manifold_is_interior(network)}"
+)
 
-    model = fm.build(poly, physics, bcs, solve=solve)
-    if s.theta_dependent_D:
-        # the submesh has to exist before a field can live on it, so initialise
-        # once, swap the material in, and initialise again
-        model.initialise()
-        model.network.material = F.Material(
-            D_0=fm.materials.gb_diffusivity_field(
-                model.network, micro.theta, D_B, D_GB
-            ),
-            E_D=0.0,
-        )
-        model.initialise(force=True)
-    model.run()
-    fm.exports.averages.write_vtx(model, str(base.parent / "neper"), time=s.t_end)
-    network, cgb_fast = model.network, model.network_solution
+# Analyse grain-boundary transport
+fast = fm.exports.averages.inventory(model)
+depth = micro.junction_only_below(L)
+gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
+deep = gb_z < depth
+c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
-    # what we built
-    print(micro.report(n_cells=s.n_cells))
-    area_mesh, area_tess = (
-        fm.exports.measures.submesh_measure(network),
-        micro.network_measure,
-    )
-    n_comp = fm.exports.measures.component_count(network)
-    n_cells = mesh.topology.index_map(3).size_global
-    print(f"  mesh                            : {n_cells} cells")
-    print(
-        f"  network captured by the submesh : {area_mesh:.4f} of {area_tess:.4f}"
-        f" ({100 * area_mesh / area_tess:.2f} %)"
-    )
-    if n_comp is not None:
-        print(f"  connected components            : {n_comp}")
-    print(
-        f"  interior facets                 : "
-        f"{model.model.manifold_is_interior(network)}"
-    )
+# A second build, not model.set_physics(...): a transient problem cannot be
+# re-run from t = 0 in place.
+reference_physics = fm.Physics(
+    T=500.0,
+    D_0_bulk=D_B,
+    E_D_bulk=0.0,
+    D_0_gb=D_B,
+    E_D_gb=0.0,
+    delta=delta,
+    k_exchange=k_exchange,
+    crystal_anisotropy=1.0,
+)
+reference = fm.build(poly, reference_physics, bcs, solve=solve).run()
+ref = fm.exports.averages.inventory(reference)
 
-    # effect of the network
-    fast = fm.exports.averages.inventory(model)
-    depth = micro.junction_only_below(L)
-    gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
-    deep = gb_z < depth
-    c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
+print(
+    f"\nafter t = {t_end} (lattice diffusion alone reaches "
+    f"~{2 * np.sqrt(D_B * t_end):.3g})"
+)
+print(f"  inventory with fast boundaries : {fast:.4e}")
+print(f"  inventory with D_gb = D_b      : {ref:.4e}")
+print(f"  enhancement                    : x {fast / ref:.1f}")
+f_gb = delta * area_tess / L**3
+print(f"  boundary volume fraction f     : {f_gb:.3e}")
+print(
+    f"  Hart bound f D_gb + (1-f) D_b  : "
+    f"{fm.materials.hart_bound(f_gb, D_GB, D_B):.3e}"
+    f"  (vs D_b = {D_B:.3e})"
+)
+beta = fm.materials.beta_parameter(delta, D_GB, D_B, t_end)
+print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
+print(
+    f"  interface / lattice resistance : "
+    f"{physics.interface_resistance_ratio(L * n_cells ** (-1 / 3)):.1e}"
+    f"  (Fisher is the 0 limit)"
+)
 
-    # A second build, not model.set_physics(...): a transient problem cannot be
-    # re-run from t = 0 in place.
-    reference = fm.build(
-        poly, replace(physics, D_0_gb=D_B, E_D_gb=0.0), bcs, solve=solve
-    ).run()
-    ref = fm.exports.averages.inventory(reference)
-
-    print(
-        f"\nafter t = {s.t_end} (lattice diffusion alone reaches "
-        f"~{2 * np.sqrt(D_B * s.t_end):.3g})"
-    )
-    print(f"  inventory with fast boundaries : {fast:.4e}")
-    print(f"  inventory with D_gb = D_b      : {ref:.4e}")
-    print(f"  enhancement                    : x {fast / ref:.1f}")
-    f_gb = s.delta * area_tess / L**3
-    print(f"  boundary volume fraction f     : {f_gb:.3e}")
-    print(
-        f"  Hart bound f D_gb + (1-f) D_b  : "
-        f"{fm.materials.hart_bound(f_gb, D_GB, D_B):.3e}"
-        f"  (vs D_b = {D_B:.3e})"
-    )
-    beta = fm.materials.beta_parameter(s.delta, D_GB, D_B, s.t_end)
-    print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
-    print(
-        f"  interface / lattice resistance : "
-        f"{physics.interface_resistance_ratio(L * s.n_cells ** (-1 / 3)):.1e}"
-        f"  (Fisher is the 0 limit)"
-    )
-
-    c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=2, depth=depth)
-    print("\njunction transport: no boundary touching the charged face reaches below")
-    print(f"z = {depth:.3f}, so everything the network holds there has")
-    print("crossed at least one triple line.")
-    print(f"  max c on the network there     : {c_deep:.4e}")
-    print(f"  mean c in the grains there     : {c_grain_deep:.4e}")
-    print(f"  ratio                          : x {c_deep / c_grain_deep:.0f}")
-
-
-if __name__ == "__main__":
-    main()
+c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=2, depth=depth)
+print("\njunction transport: no boundary touching the charged face reaches below")
+print(f"z = {depth:.3f}, so everything the network holds there has")
+print("crossed at least one triple line.")
+print(f"  max c on the network there     : {c_deep:.4e}")
+print(f"  mean c in the grains there     : {c_grain_deep:.4e}")
+print(f"  ratio                          : x {c_deep / c_grain_deep:.0f}")

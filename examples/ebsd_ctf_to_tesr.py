@@ -10,11 +10,14 @@ from pathlib import Path
 
 import festim_microstructure as fm
 
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 HERE = Path(__file__).resolve().parent
 
 res = fm.ebsd.convert.convert(
     str(HERE / "data" / "D7 PBF SS316L.ctf"),
-    str(HERE / "data" / "d7.tesr"),
+    str(OUTPUT_DIR / "d7.tesr"),
     min_pixels=15,
     diagnostics=True,
     max_mad=1.5,

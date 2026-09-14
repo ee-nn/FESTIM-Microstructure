@@ -34,6 +34,7 @@ identification itself.
 import argparse
 import json
 from dataclasses import asdict
+from pathlib import Path
 from typing import cast
 
 from mpi4py import MPI
@@ -45,6 +46,8 @@ import ufl
 
 import festim_microstructure as fm
 from gb_homogenisation import identify, make_microstructure
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
 __all__ = ["homogeneous_model", "permeation_bcs", "steady_consistency", "uptake"]
 
@@ -212,8 +215,17 @@ def main(argv=None):
     parser.add_argument("--cells-per-grain", type=int, default=8)
     parser.add_argument("--steps", type=int, default=60)
     parser.add_argument("--skip-transient", action="store_true")
-    parser.add_argument("--out", type=str, default="validation.json")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("validation.json"),
+        help="output filename, relative to examples/results/gb_validation/",
+    )
     args = parser.parse_args(argv)
+    args.out = (OUTPUT_DIR / args.out).resolve()
+    if not args.out.is_relative_to(OUTPUT_DIR):
+        parser.error("--out must stay within " + str(OUTPUT_DIR))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     record = {}
 
     def dump():

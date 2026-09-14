@@ -13,10 +13,15 @@ Run::
     python examples/voronoi_polycrystal_2d.py
 """
 
+from pathlib import Path
+
 import festim as F
 import numpy as np
 
 import festim_microstructure as fm
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Simulation parameters
 L = 1.0e-4  # specimen size, 100 microns
@@ -78,7 +83,7 @@ solve = fm.SolveOptions(
 
 # Build and solve
 model = fm.build(micro, physics, bcs, solve=solve).run()
-fm.exports.averages.write_vtx(model, "voronoi", time=t_end)
+fm.exports.averages.write_vtx(model, OUTPUT_DIR / "voronoi", time=t_end)
 network, cgb_fast = model.network, model.network_solution
 
 # Inspect the mesh and boundary network

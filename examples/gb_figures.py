@@ -5,9 +5,9 @@ Reads the JSON that ``examples/gb_homogenisation.py`` and
 for the field maps. Run it after those two::
 
     python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6 \\
-        --k-sweep 1e-6 1e-2 --out rve.json
-    python examples/gb_validation.py --out validation.json
-    python examples/gb_figures.py --rve rve.json --validation validation.json
+        --k-sweep 1e-6 1e-2
+    python examples/gb_validation.py
+    python examples/gb_figures.py
 
 Colour is assigned by the job it does, not by taste: one hue ramp light-to-dark
 for the flux maps (a magnitude) and a fixed categorical order for series
@@ -20,6 +20,7 @@ series is directly labelled rather than identified by colour alone.
 
 import argparse
 import json
+from pathlib import Path
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -30,6 +31,8 @@ from matplotlib.patches import Rectangle
 from matplotlib.projections.polar import PolarAxes
 
 import festim_microstructure as fm
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
 # --- design tokens -------------------------------------------------------
 SURFACE = "#fcfcfb"
@@ -555,14 +558,23 @@ def figure_validation(validation, path):
 def main(argv=None):
     mpl.use("Agg")
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    parser.add_argument("--rve", default="rve.json")
-    parser.add_argument("--validation", default="validation.json")
+    parser.add_argument(
+        "--rve",
+        type=Path,
+        default=OUTPUT_DIR.parent / "gb_homogenisation" / "identified.json",
+    )
+    parser.add_argument(
+        "--validation",
+        type=Path,
+        default=OUTPUT_DIR.parent / "gb_validation" / "validation.json",
+    )
     parser.add_argument("--field-size", type=float, default=3e-6)
     parser.add_argument("--grain-size", type=float, default=0.6e-6)
     parser.add_argument("--aspect", type=float, default=4.0)
     parser.add_argument("--cells-per-grain", type=int, default=8)
     parser.add_argument("--skip-fields", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with open(args.rve) as f:
         rve = json.load(f)
@@ -570,11 +582,13 @@ def main(argv=None):
 
     if rve["identifications"]:
         biggest = max(rve["identifications"], key=lambda i: i["size"])
-        written.append(figure_anisotropy(biggest, "fig_anisotropy.png"))
+        written.append(figure_anisotropy(biggest, OUTPUT_DIR / "fig_anisotropy.png"))
         if len(rve["identifications"]) > 1:
-            written.append(figure_rve(rve["identifications"], "fig_rve.png"))
+            written.append(
+                figure_rve(rve["identifications"], OUTPUT_DIR / "fig_rve.png")
+            )
     if rve.get("k_sweep"):
-        written.append(figure_sweep(rve["k_sweep"], "fig_sweep.png"))
+        written.append(figure_sweep(rve["k_sweep"], OUTPUT_DIR / "fig_sweep.png"))
 
     try:
         with open(args.validation) as f:
@@ -582,7 +596,7 @@ def main(argv=None):
     except FileNotFoundError:
         validation = None
     if validation and "uptake" in validation and "permeation" in validation:
-        written.append(figure_validation(validation, "fig_validation.png"))
+        written.append(figure_validation(validation, OUTPUT_DIR / "fig_validation.png"))
 
     if not args.skip_fields:
         from gb_homogenisation import make_microstructure
@@ -592,7 +606,10 @@ def main(argv=None):
         )
         written.append(
             figure_microstructure(
-                micro, fm.Physics(), "fig_microstructure.png", 1e6 * args.field_size
+                micro,
+                fm.Physics(),
+                OUTPUT_DIR / "fig_microstructure.png",
+                1e6 * args.field_size,
             )
         )
 

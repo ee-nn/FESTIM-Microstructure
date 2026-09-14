@@ -5,6 +5,8 @@ The resolved model gives a GB tangential conductance ``delta * D_gb`` and uses
 thin-boundary result with volumetric Hart and Hashin-Shtrikman references.
 """
 
+from pathlib import Path
+
 from mpi4py import MPI
 
 import matplotlib as mpl
@@ -13,6 +15,8 @@ import numpy as np
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 import festim_microstructure as fm
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
 # Physics (SI).
 T = 1073.0  # K
@@ -192,7 +196,7 @@ def draw_fig4ab(iso, columns, f_gb):
             f"{label}: {micro.n_grains} grains, f_GB = {f_gb:.2f} (codim)",
         )
     fig.tight_layout()
-    fig.savefig("li2022-fig4ab-codim.png", dpi=300)
+    fig.savefig(OUTPUT_DIR / "li2022-fig4ab-codim.png", dpi=300)
     plt.close(fig)
 
 
@@ -266,6 +270,7 @@ def draw(rows, fname, f_lo, f_hi, logx):
 
 # ----------------------------------------------------------------------------
 def main():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     mpl.use("Agg")
     comm = MPI.COMM_WORLD
     rows = []
@@ -294,7 +299,7 @@ def main():
     if comm.rank != 0:
         return
     draw_fig4ab(micros["iso"], micros["col_x"], F_GB_THEIRS[0])
-    draw(rows, "li2022-fig4-codim-thin.png", 0.002, 0.8, logx=True)
+    draw(rows, OUTPUT_DIR / "li2022-fig4-codim-thin.png", 0.002, 0.8, logx=True)
 
 
 if __name__ == "__main__":

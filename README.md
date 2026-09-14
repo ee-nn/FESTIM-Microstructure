@@ -289,12 +289,15 @@ python examples/neper_voronoi_network.py        # needs neper + gmsh executables
 python examples/ebsd_ctf_to_tesr.py             # stage 1 of the EBSD pipeline
 python examples/ebsd_gb_diffusion.py            # stages 2-3 + the transport model
 python examples/fisher_grain_boundary.py        # single boundary vs Le Claire
-python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6 --out rve.json
-python examples/gb_validation.py --out validation.json
-python examples/gb_figures.py --rve rve.json --validation validation.json
+python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6
+python examples/gb_validation.py
+python examples/gb_figures.py
 python examples/li2022_fig4.py                 # volumetric-band reproduction
 python examples/li2022_fig4_codim.py           # codim-1 reproduction
 ```
+
+Generated files go to `examples/results/<script_name>/`; see
+[example output locations](examples/README.md#outputs).
 
 Generate meshes through Python functions:
 

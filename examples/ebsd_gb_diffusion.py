@@ -18,7 +18,6 @@ Run::
     python examples/ebsd_gb_diffusion.py
 """
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import festim as F
@@ -26,138 +25,127 @@ import numpy as np
 
 import festim_microstructure as fm
 
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
+
 HERE = Path(__file__).resolve().parent
 
+# Simulation parameters
+ebsd = fm.EbsdOptions(
+    tesr=str(HERE / "results" / "ebsd_ctf_to_tesr" / "d7.tesr"),
+    unit=1e-6,
+    theta_min=10.0,
+    mesh=fm.TesrMeshOptions(rcl=0.25, mesh_qual_min=0.7),
+)
+workdir = OUTPUT_DIR
+force = True
 
-@dataclass
-class Setup:
-    ebsd: fm.EbsdOptions = field(
-        default_factory=lambda: fm.EbsdOptions(
-            tesr=str(HERE / "data" / "d7.tesr"),
-            unit=1e-6,
-            theta_min=10.0,
-            mesh=fm.TesrMeshOptions(rcl=0.25, mesh_qual_min=0.7),
-        )
+D_B = 1e-14  # lattice diffusivity     [m^2/s]
+D_GB = 1e-8  # GB diffusivity          [m^2/s]
+delta = 5e-9  # GB width               [m]
+k_exchange = 1e-4  # bulk <-> GB exchange [m/s]
+c0 = 1.0
+t_end = 36000.0
+dt = 600.0
+theta_dependent_D = False  # see gb_diffusivity_field, CHECK before enabling
+
+# Build the microstructure and simulation
+unit, uname = ebsd.unit, fm.meshing.ebsd.unit_name(ebsd.unit)
+
+base = fm.meshing.ebsd.run_ebsd_pipeline(ebsd, workdir=workdir, force=force)
+LX, LY = fm.meshing.ebsd.read_extent(base, unit)
+mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=2, unit=unit)
+micro = fm.EbsdMicrostructure.from_mesh(
+    base, mesh, cell_tags, facet_tags, (LX, LY), theta_min=ebsd.theta_min
+)
+micro.check_orientations()
+fm.meshing.ebsd.write_network_png(
+    base, mesh, micro, base.parent / "poly-raw.tesr", unit, uname
+)
+
+# The measured map as the model sees it: one tagged subdomain per grain, the
+# network as the kept edge ids. The measured orientations drive the lattice
+# tensor only when crystal_anisotropy is set away from 1, which it is not
+# here, so the grains are left untextured.
+poly = fm.TaggedPolycrystal(
+    mesh=mesh,
+    cell_tags=cell_tags,
+    facet_tags=facet_tags,
+    gb_tag=micro.network_ids,
+    name=f"EBSD map {Path(ebsd.tesr).name}",
+)
+physics = fm.Physics(
+    T=500.0,  # with E_D = 0 on both phases, nothing depends on it
+    D_0_bulk=D_B,
+    E_D_bulk=0.0,
+    D_0_gb=D_GB,
+    E_D_gb=0.0,
+    delta=delta,
+    k_exchange=k_exchange,
+    crystal_anisotropy=1.0,
+)
+# the charged surface is the top edge of the map, wherever that now is
+bcs = [("charged", lambda x: np.isclose(x[1], LY), c0)]
+solve = fm.SolveOptions(
+    transient=True, final_time=t_end, stepsize=dt, atol=1e-14, rtol=1e-12
+)
+
+model = fm.build(poly, physics, bcs, solve=solve)
+if theta_dependent_D:
+    # the submesh has to exist before a field can live on it, so initialise
+    # once, swap the material in, and initialise again
+    model.initialise()
+    model.network.material = F.Material(
+        D_0=fm.materials.gb_diffusivity_field(model.network, micro.theta, D_B, D_GB),
+        E_D=0.0,
     )
-    workdir: Path = HERE / "results"
-    force: bool = True
+    model.initialise(force=True)
+model.run()
+fm.exports.averages.write_vtx(model, str(base.parent / "ebsd"), time=t_end)
+network, cgb = model.network, model.network_solution
 
-    D_B: float = 1e-14  # lattice diffusivity     [m^2/s]
-    D_GB: float = 1e-8  # GB diffusivity          [m^2/s]
-    delta: float = 5e-9  # GB width               [m]
-    k_exchange: float = 1e-4  # bulk <-> GB exchange [m/s]
-    c0: float = 1.0
-    t_end: float = 36000.0
-    dt: float = 600.0
-    theta_dependent_D: bool = False  # see gb_diffusivity_field, CHECK before enabling
+# Inspect the mesh and boundary network
+print(micro.report())
+len_mesh, len_tess = (
+    fm.exports.measures.submesh_measure(network),
+    micro.network_measure,
+)
+n_tri = mesh.topology.index_map(2).size_global
+print(f"  mesh                            : {n_tri} triangles")
+print(f"  grains (tagged pieces)          : {poly.n_grains}")
+print(f"  network captured by the submesh : {100 * len_mesh / len_tess:.2f} %")
+print(
+    f"  connected components            : "
+    f"{fm.exports.measures.component_count(network)}"
+)
+print(
+    f"  interior facets                 : {model.model.manifold_is_interior(network)}"
+)
 
+# Analyse grain-boundary transport
+depth = micro.junction_only_below(LY)
+gb_y = cgb.function_space.tabulate_dof_coordinates()[:, 1]
+deep = gb_y < depth
+c_deep = cgb.x.array[deep].max() if deep.any() else 0.0
+print(
+    f"\n  inventory                      : {fm.exports.averages.inventory(model):.4e}"
+)
+beta = fm.materials.beta_parameter(delta, D_GB, D_B, t_end)
+print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
+print(
+    f"  interface / lattice resistance : "
+    f"{physics.interface_resistance_ratio(np.sqrt(LX * LY / poly.n_grains)):.1e}"
+    f"  (Fisher is the 0 limit)"
+)
 
-def main(s=Setup()):
-    D_B, D_GB = s.D_B, s.D_GB
-    unit, uname = s.ebsd.unit, fm.meshing.ebsd.unit_name(s.ebsd.unit)
-
-    base = fm.meshing.ebsd.run_ebsd_pipeline(s.ebsd, workdir=s.workdir, force=s.force)
-    LX, LY = fm.meshing.ebsd.read_extent(base, unit)
-    mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=2, unit=unit)
-    micro = fm.EbsdMicrostructure.from_mesh(
-        base, mesh, cell_tags, facet_tags, (LX, LY), theta_min=s.ebsd.theta_min
-    )
-    micro.check_orientations()
-    fm.meshing.ebsd.write_network_png(
-        base, mesh, micro, base.parent / "poly-raw.tesr", unit, uname
-    )
-
-    # The measured map as the model sees it: one tagged subdomain per grain, the
-    # network as the kept edge ids. The measured orientations drive the lattice
-    # tensor only when crystal_anisotropy is set away from 1, which it is not
-    # here, so the grains are left untextured.
-    poly = fm.TaggedPolycrystal(
-        mesh=mesh,
-        cell_tags=cell_tags,
-        facet_tags=facet_tags,
-        gb_tag=micro.network_ids,
-        name=f"EBSD map {Path(s.ebsd.tesr).name}",
-    )
-    physics = fm.Physics(
-        T=500.0,  # with E_D = 0 on both phases, nothing depends on it
-        D_0_bulk=D_B,
-        E_D_bulk=0.0,
-        D_0_gb=D_GB,
-        E_D_gb=0.0,
-        delta=s.delta,
-        k_exchange=s.k_exchange,
-        crystal_anisotropy=1.0,
-    )
-    # the charged surface is the top edge of the map, wherever that now is
-    bcs = [("charged", lambda x: np.isclose(x[1], LY), s.c0)]
-    solve = fm.SolveOptions(
-        transient=True, final_time=s.t_end, stepsize=s.dt, atol=1e-14, rtol=1e-12
-    )
-
-    model = fm.build(poly, physics, bcs, solve=solve)
-    if s.theta_dependent_D:
-        # the submesh has to exist before a field can live on it, so initialise
-        # once, swap the material in, and initialise again
-        model.initialise()
-        model.network.material = F.Material(
-            D_0=fm.materials.gb_diffusivity_field(
-                model.network, micro.theta, D_B, D_GB
-            ),
-            E_D=0.0,
-        )
-        model.initialise(force=True)
-    model.run()
-    fm.exports.averages.write_vtx(model, str(base.parent / "ebsd"), time=s.t_end)
-    network, cgb = model.network, model.network_solution
-
-    # what we built
-    print(micro.report())
-    len_mesh, len_tess = (
-        fm.exports.measures.submesh_measure(network),
-        micro.network_measure,
-    )
-    n_tri = mesh.topology.index_map(2).size_global
-    print(f"  mesh                            : {n_tri} triangles")
-    print(f"  grains (tagged pieces)          : {poly.n_grains}")
-    print(f"  network captured by the submesh : {100 * len_mesh / len_tess:.2f} %")
-    print(
-        f"  connected components            : {fm.exports.measures.component_count(network)}"
-    )
-    print(
-        f"  interior facets                 : "
-        f"{model.model.manifold_is_interior(network)}"
-    )
-
-    # effect of the network
-    depth = micro.junction_only_below(LY)
-    gb_y = cgb.function_space.tabulate_dof_coordinates()[:, 1]
-    deep = gb_y < depth
-    c_deep = cgb.x.array[deep].max() if deep.any() else 0.0
-    print(
-        f"\n  inventory                      : "
-        f"{fm.exports.averages.inventory(model):.4e}"
-    )
-    beta = fm.materials.beta_parameter(s.delta, D_GB, D_B, s.t_end)
-    print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
-    print(
-        f"  interface / lattice resistance : "
-        f"{physics.interface_resistance_ratio(np.sqrt(LX * LY / poly.n_grains)):.1e}"
-        f"  (Fisher is the 0 limit)"
-    )
-
-    c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=1, depth=depth)
-    print("\njunction transport: no boundary touching the charged edge reaches below")
-    print(f"y = {depth:.4g}, so everything the network holds there has")
-    print("crossed at least one triple junction.")
-    print(f"  max c on the network there     : {c_deep:.4e}")
-    print(f"  mean c in the grains there     : {c_grain_deep:.4e}")
-    # both are solver noise around zero whenever the boundary tail is shorter
-    # than the junction-only depth, and noise has a sign; the ratio is then 0/0
-    if c_grain_deep > 1e-12 * s.c0:
-        print(f"  ratio                          : x {c_deep / c_grain_deep:.0f}")
-    else:
-        print("  ratio                          : n/a - nothing has reached this depth")
-
-
-if __name__ == "__main__":
-    main()
+c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=1, depth=depth)
+print("\njunction transport: no boundary touching the charged edge reaches below")
+print(f"y = {depth:.4g}, so everything the network holds there has")
+print("crossed at least one triple junction.")
+print(f"  max c on the network there     : {c_deep:.4e}")
+print(f"  mean c in the grains there     : {c_grain_deep:.4e}")
+# both are solver noise around zero whenever the boundary tail is shorter
+# than the junction-only depth, and noise has a sign; the ratio is then 0/0
+if c_grain_deep > 1e-12 * c0:
+    print(f"  ratio                          : x {c_deep / c_grain_deep:.0f}")
+else:
+    print("  ratio                          : n/a - nothing has reached this depth")

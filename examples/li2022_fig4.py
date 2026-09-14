@@ -107,6 +107,7 @@ li2022-fig4.png     D_eff/D_m against f_GB for the four ratios, panels D,E,G,H,
 
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 from typing import Any, cast
 
 from mpi4py import MPI
@@ -118,6 +119,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import ufl
 from scipy.spatial import KDTree
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
 # Physics (SI).
 T = 1073.0  # K; only scales D_m (their Sect. 3.4)
@@ -481,7 +484,7 @@ def draw_fig4ab(iso_case, col_case, f_iso=None, f_col=None):
             f"{case.foam.g * 1e9:.0f} nm, w = {case.w * 1e9:.1f} nm{ftxt}",
         )
     fig.tight_layout()
-    fig.savefig("li2022-fig4ab.png", dpi=150)
+    fig.savefig(OUTPUT_DIR / "li2022-fig4ab.png", dpi=150)
 
 
 def draw_fig4(rows):
@@ -523,7 +526,7 @@ def draw_fig4(rows):
         fontsize=10,
     )
     fig.tight_layout()
-    fig.savefig("li2022-fig4.png", dpi=150)
+    fig.savefig(OUTPUT_DIR / "li2022-fig4.png", dpi=150)
 
 
 # ----------------------------------------------------------------------------
@@ -536,6 +539,7 @@ def cases_for(structure):
 
 
 def main():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     mpl.use("Agg")
     comm = MPI.COMM_WORLD
     rows = []
