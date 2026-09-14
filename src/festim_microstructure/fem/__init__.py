@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from .subdomains import Grain as Grain
     from .subdomains import GrainBoundaryNetwork as GrainBoundaryNetwork
     from .subdomains import GrainSurface as GrainSurface
-    from .subdomains import TaggedGrainBoundaryNetwork as TaggedGrainBoundaryNetwork
     from .subdomains import facet_midpoints as facet_midpoints
     from .subdomains import interior_facet_mask as interior_facet_mask
 
@@ -33,7 +32,6 @@ _NAMES = {
     "Grain": ".subdomains",
     "GrainBoundaryNetwork": ".subdomains",
     "GrainSurface": ".subdomains",
-    "TaggedGrainBoundaryNetwork": ".subdomains",
     "facet_midpoints": ".subdomains",
     "interior_facet_mask": ".subdomains",
 }

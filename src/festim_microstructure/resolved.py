@@ -29,7 +29,6 @@ from dataclasses import dataclass, field
 
 import dolfinx
 import festim as F
-import numpy as np
 
 from festim_microstructure.fem.solvers import (
     ATOL,
@@ -40,7 +39,6 @@ from festim_microstructure.fem.subdomains import (
     Grain,
     GrainBoundaryNetwork,
     GrainSurface,
-    TaggedGrainBoundaryNetwork,
 )
 from festim_microstructure.materials import (
     ConstantDiffusivity,
@@ -97,7 +95,7 @@ class MicroModel:
     micro: MeshedMicrostructure
     physics: Physics
     grains: list
-    network: GrainBoundaryNetwork | TaggedGrainBoundaryNetwork
+    network: GrainBoundaryNetwork
     species: list
     c_gb: F.Species
     tensors: dict
@@ -223,10 +221,10 @@ def build(
     grain id to ``k`` and defaults to ``physics.k_exchange``. Stepping and
     solver settings live in ``solve``; see :class:`SolveOptions`.
 
-    The network is read from ``micro.facet_tags`` when there are any, and
-    ``micro.gb_tag`` may then be one tag or a sequence of them: a Neper or EBSD
-    mesh tags every tessellation face separately, so its network is a list of
-    ids rather than a single marker.
+    The network is read from ``micro.facet_tags`` when there are any and
+    located by ``micro.locator`` otherwise; ``micro.gb_tag`` may be one tag or a
+    sequence of them. See
+    :class:`~festim_microstructure.fem.subdomains.GrainBoundaryNetwork`.
 
     ``micro`` must satisfy
     :class:`~festim_microstructure.microstructure.MeshedMicrostructure`. That is
@@ -244,19 +242,13 @@ def build(
     ]
     tdim = micro.mesh.topology.dim
     gb_material = ConstantDiffusivity(physics.D_gb)
-    if micro.facet_tags is not None:
-        # Tagged facets avoid geometric network detection.
-        network = TaggedGrainBoundaryNetwork(
-            NETWORK_ID,
-            gb_material,
-            micro.facet_tags,
-            np.atleast_1d(micro.gb_tag),
-            dim=tdim - 1,
-        )
-    else:
-        network = GrainBoundaryNetwork(
-            id=NETWORK_ID, material=gb_material, locator=micro.locator, dim=tdim - 1
-        )
+    # Tagged facets avoid geometric network detection.
+    located = (
+        {"facet_tags": micro.facet_tags, "entity_ids": micro.gb_tag}
+        if micro.facet_tags is not None
+        else {"locator": micro.locator}
+    )
+    network = GrainBoundaryNetwork(NETWORK_ID, gb_material, tdim - 1, **located)
     species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
     c_gb = F.Species("c_gb", subdomains=[network])
 

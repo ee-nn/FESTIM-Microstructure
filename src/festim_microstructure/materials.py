@@ -181,7 +181,8 @@ def gb_diffusivity_field(network, theta, d_low, d_high, theta_c=15.0):
         raise NotImplementedError(
             "cannot map submesh cells back to tessellation entities: the "
             "subdomain does not expose its parent entity map under any of the "
-            "expected names, or is not a TaggedGrainBoundaryNetwork. Read it off "
+            "expected names, or was located by a predicate rather than by "
+            "facet tags, which leaves it with no ids to map back. Read it off "
             "dolfinx.mesh.create_submesh directly."
         )
     # Parent-cell positions index the aligned located-facet tag array.

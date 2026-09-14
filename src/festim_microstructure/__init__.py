@@ -35,7 +35,6 @@ if TYPE_CHECKING:
     from .fem.subdomains import Grain as Grain
     from .fem.subdomains import GrainBoundaryNetwork as GrainBoundaryNetwork
     from .fem.subdomains import GrainSurface as GrainSurface
-    from .fem.subdomains import TaggedGrainBoundaryNetwork as TaggedGrainBoundaryNetwork
     from .materials import Physics as Physics
     from .meshing.ebsd import EbsdMicrostructure as EbsdMicrostructure
     from .meshing.ebsd import EbsdOptions as EbsdOptions
@@ -71,7 +70,6 @@ _NAMES = {
     "Grain": ".fem.subdomains",
     "GrainBoundaryNetwork": ".fem.subdomains",
     "GrainSurface": ".fem.subdomains",
-    "TaggedGrainBoundaryNetwork": ".fem.subdomains",
 }
 __getattr__, __dir__, __all__ = lazy_namespace(
     __name__,
