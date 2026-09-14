@@ -47,6 +47,7 @@ class Microstructure(Protocol):
 
     def report(self) -> str:
         """A human-readable summary, one line per quantity."""
+        ...
 
 
 @runtime_checkable
@@ -75,17 +76,21 @@ class MeshedMicrostructure(Microstructure, Protocol):
     @property
     def n_grains(self) -> int:
         """Number of tagged grains, i.e. ``len(grain_ids)``."""
+        ...
 
     @property
     def grain_ids(self) -> np.ndarray:
         """The cell-tag values, 1-based, in ascending order."""
+        ...
 
     @property
     def tolerance(self) -> float:
         """Distance below which a point counts as lying on the network."""
+        ...
 
     def locator(self, points: np.ndarray) -> np.ndarray:
         """``(3, n)`` points in, boolean "is on the network" out."""
+        ...
 
 
 @runtime_checkable
@@ -99,22 +104,27 @@ class BoundaryNetwork(Microstructure, Protocol):
     @property
     def theta(self) -> np.ndarray:
         """Disorientation of every boundary, degrees, in id order."""
+        ...
 
     @property
     def interior_mask(self) -> np.ndarray:
         """True for boundaries between two grains, i.e. not free surface."""
+        ...
 
     @property
     def network_mask(self) -> np.ndarray:
         """:attr:`interior_mask` restricted to ``theta > theta_min``."""
+        ...
 
     @property
     def network_ids(self) -> np.ndarray:
         """1-based ids of the boundaries in the network."""
+        ...
 
     @property
     def network_measure(self) -> float:
         """Total size of the network: length in 2D, area in 3D."""
+        ...
 
 
 def _declared_members(protocol: type) -> set[str]:

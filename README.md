@@ -243,6 +243,11 @@ eagerly with NumPy and SciPy; solver-dependent names such as `fm.build` and
 `fm.Physics` load FESTIM/DOLFINx on first access. This keeps standalone EBSD
 conversion and `fm-check` usable without the solver stack.
 
+The same exports are declared explicitly for type checkers, so completion,
+constructor signatures and go-to-definition work with `fm.Physics`,
+`fm.TaggedGrainBoundaryNetwork` and the subpackage helpers. The installed
+package includes a `py.typed` marker for editors using it outside this checkout.
+
 Everything else stays reachable through the subpackages, which resolve the
 same way:
 

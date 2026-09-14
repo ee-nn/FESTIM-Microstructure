@@ -264,6 +264,8 @@ def format_report(res: AreaChange):
         return lines
 
     a, e = res.area, res.ecd
+    if a is None or e is None:
+        raise ValueError("area and ECD statistics are required for the report")
     lines.append(
         f"grain area change (smoothing + meshing, {a.n} grains): "
         f"min {a.min:+.2f} %, mean {a.mean:+.2f} %, "
@@ -305,6 +307,9 @@ def write_csv(path, res: AreaChange, log=print):
 
 def write_png(path, res: AreaChange, unit="um", dpi=150, log=print):
     """The grains coloured by their area change, next to its distribution."""
+    a = res.area
+    if not res.comparable or a is None:
+        raise ValueError("comparable grain areas are required for the plot")
     plt = use_agg()
     plt.rcParams.update({"font.size": 15, "axes.titlesize": 15})
 
@@ -339,17 +344,16 @@ def write_png(path, res: AreaChange, unit="um", dpi=150, log=print):
     scale_bar_ax(ax, nx * vx, unit)
 
     ax = axes[1]
-    a = res.area
     ax.hist(delta[np.isfinite(delta)], bins=40, color="0.35")
     ax.axvline(0, color="k", lw=1)
     ax.axvline(
-        a["median"],
+        a.median,
         color="tab:blue",
         ls="--",
         lw=2,
         label=f"median {a.median:+.2f} %",
     )
-    ax.axvline(a["mean"], color="tab:red", lw=2, label=f"mean {a.mean:+.2f} %")
+    ax.axvline(a.mean, color="tab:red", lw=2, label=f"mean {a.mean:+.2f} %")
     ax.set_xlabel("area change (%)")
     ax.set_ylabel("grains")
     ax.set_title(f"min {a.min:+.2f} %, max {a.max:+.2f} % over {a.n} grains")

@@ -18,12 +18,12 @@ def cubic_symmetry_quaternions():
         for w, s in ((r, r), (0.0, 1.0), (r, -r)):
             v = [0.0, 0.0, 0.0]
             v[axis] = s
-            q.append((w, *v))
+            q.append((w, v[0], v[1], v[2]))
     for i, j in ((0, 1), (0, 2), (1, 2)):
         for sign in (1.0, -1.0):
             v = [0.0, 0.0, 0.0]
             v[i], v[j] = r, sign * r
-            q.append((0.0, *v))
+            q.append((0.0, v[0], v[1], v[2]))
     for sx in (0.5, -0.5):
         for sy in (0.5, -0.5):
             for sz in (0.5, -0.5):

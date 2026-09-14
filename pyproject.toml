@@ -53,6 +53,9 @@ fm-check = "festim_microstructure.check:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+festim_microstructure = ["py.typed"]
+
 [tool.setuptools_scm]
 write_to = "src/festim_microstructure/_version.py"
 
@@ -88,4 +91,9 @@ markers = [
 
 # Make the src-layout package discoverable to Pylance/Pyright in a checkout.
 [tool.pyright]
+include = ["src", "examples", "test"]
 extraPaths = ["src"]
+executionEnvironments = [
+    { root = "examples", extraPaths = ["src", "examples"] },
+    { root = ".", extraPaths = ["src"] },
+]

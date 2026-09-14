@@ -98,7 +98,7 @@ def prepare(micro, bcs):
     return mm, fm.exports.measures.submesh_measure(mm.network) / B**dim
 
 
-def run(mm, axis, S_v, ratio, f_gb):
+def run(mm, axis, S_v, ratio, f_gb) -> dict[str, float | str]:
     physics = physics_for(ratio, f_gb, S_v)
     mm.set_physics(physics).solve()
     q, _, _ = fm.exports.averages.averages(mm)  # their Eq. 21: volume-averaged flux

@@ -26,6 +26,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Rectangle
+from matplotlib.projections.polar import PolarAxes
 
 import festim_microstructure as fm
 
@@ -182,7 +184,7 @@ def figure_microstructure(micro, physics, path, size_um):
 
     ax = axes[0]
     ax.add_patch(
-        plt.Rectangle(
+        Rectangle(
             (0, 0), size_um, size_um, facecolor="#f0efec", edgecolor="none", zorder=1
         )
     )
@@ -296,6 +298,7 @@ def figure_anisotropy(ident, path):
             dy=6 if name == "identified" else -6,
         )
 
+    assert isinstance(ax, PolarAxes)
     ax.set_theta_zero_location("E")
     ax.set_rlabel_position(103)
     ax.set_rticks([1, 2, 3, 4])
@@ -551,7 +554,7 @@ def figure_validation(validation, path):
 
 def main(argv=None):
     mpl.use("Agg")
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--rve", default="rve.json")
     parser.add_argument("--validation", default="validation.json")
     parser.add_argument("--field-size", type=float, default=3e-6)

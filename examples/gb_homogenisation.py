@@ -31,6 +31,8 @@ def make_microstructure(size, grain_size, aspect=1.0, seed=0, cells_per_grain=10
 def hart_bound(model: fm.MicroModel):
     """Return the parallel Hart/Voigt bound for the resolved microstructure."""
     micro, physics = model.micro, model.physics
+    if not isinstance(micro, fm.VoronoiMicrostructure):
+        raise TypeError("this 2D Hart bound requires a VoronoiMicrostructure")
     tensor = fm.voronoi.network_tensor(micro.segments)
     return fm.exports.averages.mean_lattice_tensor(
         model
@@ -129,6 +131,7 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
         if verbose:
             print(f"    solved cell problem G = e_{'xy'[j]}", flush=True)
 
+    assert hart is not None
     return Identification(
         D_cell=(-Q_cell @ np.linalg.inv(H_cell)).tolist(),
         D_window=(-Q_win @ np.linalg.inv(H_win)).tolist(),
@@ -168,7 +171,7 @@ def _dump(path, results, sweep):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--grain-size", type=float, default=0.6e-6)
     parser.add_argument(
         "--sizes",

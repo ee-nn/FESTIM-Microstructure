@@ -34,6 +34,7 @@ identification itself.
 import argparse
 import json
 from dataclasses import asdict
+from typing import cast
 
 from mpi4py import MPI
 
@@ -97,13 +98,23 @@ def homogeneous_model(
     mesh = dolfinx.mesh.create_rectangle(
         MPI.COMM_WORLD, [np.array([0.0, 0.0]), np.array([size, size])], [n, n]
     )
+    diffusivity_space = dolfinx.fem.functionspace(mesh, ("DG", 0, (2, 2)))
+    diffusivity = cast(
+        dolfinx.fem.Function,
+        dolfinx.fem.Function(diffusivity_space, name="D_eff"),
+    )
+    cell_dofs = diffusivity_space.dofmap.list.reshape(-1)
+    flat_tensor = np.asarray(D_eff, dtype=float).reshape(-1)
+    for component, value in enumerate(flat_tensor):
+        diffusivity.x.array[4 * cell_dofs + component] = value
+    diffusivity.x.scatter_forward()
     volume = F.VolumeSubdomain(
         id=1,
-        material=F.Material(D_0=np.asarray(D_eff).tolist(), E_D=0.0),
+        material=F.Material(D=diffusivity),
         locator=lambda x: np.full_like(x[0], True, dtype=bool),
     )
     c = F.Species("c", subdomains=[volume])
-    subdomains = [volume]
+    subdomains: list[F.VolumeSubdomain | F.SurfaceSubdomain] = [volume]
     boundary_conditions = []
     for i, (name, locator, value) in enumerate(bcs):
         surface = F.SurfaceSubdomain(id=10 + i, locator=locator)
@@ -141,12 +152,14 @@ def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
         micro,
         physics,
         bcs=bcs,
-        transient=True,
-        final_time=final_time,
-        stepsize=F.Stepsize(initial_value=dt),
+        solve=fm.SolveOptions(
+            transient=True,
+            final_time=final_time,
+            stepsize=F.Stepsize(initial_value=dt),
+        ),
     )
     resolved.model.show_progress_bar = False  # the stepping is driven here
-    resolved.model.initialise()
+    resolved.initialise()
 
     homogeneous, c, _, mesh_h = homogeneous_model(
         size,
@@ -162,7 +175,9 @@ def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
     dx_h = ufl.Measure("dx", domain=mesh_h)
 
     def homogeneous_inventory():
-        form = dolfinx.fem.form(c.post_processing_solution * dx_h)
+        form = cast(
+            dolfinx.fem.Form, dolfinx.fem.form(c.post_processing_solution * dx_h)
+        )
         return mesh_h.comm.allreduce(dolfinx.fem.assemble_scalar(form), op=MPI.SUM)
 
     times, resolved_inventory, model_inventory = [0.0], [0.0], [0.0]
@@ -188,7 +203,7 @@ def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--size", type=float, default=3e-6)
     parser.add_argument("--grain-size", type=float, default=0.6e-6)
     parser.add_argument("--aspect", type=float, default=4.0)

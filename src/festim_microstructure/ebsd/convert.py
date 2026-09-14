@@ -143,9 +143,10 @@ class CtfConversion:
         if not np.isclose(ctf.header["XStep"], ctf.header["YStep"]):
             log("  note: XStep != YStep -- voxels will not be square")
 
-        self.crysym, phase = ctf.crysym(opt.phase)
-        if self.crysym is None:
+        crysym, phase = ctf.crysym(opt.phase)
+        if crysym is None or phase is None:
             raise ValueError("no phase line found; cannot determine crystal symmetry")
+        self.crysym = crysym
         if phase["laue"] not in CUBIC_LAUE:
             raise ValueError(
                 f"phase '{phase['name']}' has Laue group {phase['laue']} -> "
@@ -439,7 +440,9 @@ def convert(ctf_path=None, output=None, *, settings=None, log=print, **kwargs):
     """
     if kwargs and settings is not None:
         raise TypeError("pass either a Settings object or keyword arguments")
-    opt = settings if settings is not None else Settings(ctf=ctf_path, **kwargs)
+    if settings is None and ctf_path is None:
+        raise TypeError("pass ctf_path or a Settings object")
+    opt = settings if settings is not None else Settings(ctf=str(ctf_path), **kwargs)
     return CtfConversion(opt, log=log).run(output)
 
 

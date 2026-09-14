@@ -58,7 +58,7 @@ class EbsdOptions:
     """Metres per TESR unit; conversion to SI occurs when the mesh is read."""
     theta_min: float = 10.0
     """Minimum GB disorientation in degrees."""
-    mesh: TesrMeshOptions = None
+    mesh: TesrMeshOptions | None = None
     """Neper meshing options; defaults to :class:`TesrMeshOptions`."""
     stem: str = "poly"
     check_images: bool = True
@@ -69,7 +69,7 @@ class EbsdOptions:
 
 
 def run_ebsd_pipeline(
-    options, workdir="results", neper_bin=None, gmsh_bin=None, force=True
+    options, workdir: str | Path = "results", neper_bin=None, gmsh_bin=None, force=True
 ):
     """Mesh an EBSD raster and return the extension-free output path."""
     base = mesh_tesr(

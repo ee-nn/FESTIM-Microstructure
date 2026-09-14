@@ -5,6 +5,8 @@ names resolve on first access, keeping standalone EBSD tools and ``fm-check``
 usable without FEniCS.
 """
 
+from typing import TYPE_CHECKING
+
 from ._lazy import lazy_namespace
 from .meshing.neper import NeperMicrostructure as NeperMicrostructure
 from .meshing.neper import NeperOptions as NeperOptions
@@ -16,6 +18,31 @@ from .microstructure import Microstructure as Microstructure
 from .voronoi import MeshSizing as MeshSizing
 from .voronoi import VoronoiMicrostructure as VoronoiMicrostructure
 from .voronoi import VoronoiMicrostructure3D as VoronoiMicrostructure3D
+
+if TYPE_CHECKING:
+    from . import check as check
+    from . import ebsd as ebsd
+    from . import exports as exports
+    from . import fem as fem
+    from . import formats as formats
+    from . import materials as materials
+    from . import meshing as meshing
+    from . import microstructure as microstructure
+    from . import models as models
+    from . import plotting as plotting
+    from . import voronoi as voronoi
+    from .fem.subdomains import Grain as Grain
+    from .fem.subdomains import GrainBoundaryNetwork as GrainBoundaryNetwork
+    from .fem.subdomains import GrainSurface as GrainSurface
+    from .fem.subdomains import TaggedGrainBoundaryNetwork as TaggedGrainBoundaryNetwork
+    from .materials import Physics as Physics
+    from .meshing.ebsd import EbsdMicrostructure as EbsdMicrostructure
+    from .meshing.ebsd import EbsdOptions as EbsdOptions
+    from .models.fisher import ShortCircuitParams as ShortCircuitParams
+    from .models.fisher import ShortCircuitProblem as ShortCircuitProblem
+    from .models.resolved import MicroModel as MicroModel
+    from .models.resolved import SolveOptions as SolveOptions
+    from .models.resolved import build as build
 
 try:
     from ._version import __version__

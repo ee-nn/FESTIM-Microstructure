@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from mpi4py import MPI
 
@@ -37,7 +37,7 @@ def _window(mesh, window):
 
 def _assemble(expr):
     """Small helper for assembling weak formulation expressions."""
-    form = dolfinx.fem.form(expr)
+    form = cast(dolfinx.fem.Form, dolfinx.fem.form(expr))
     local = dolfinx.fem.assemble_scalar(form)
     return form.mesh.comm.allreduce(local, op=MPI.SUM)
 
@@ -60,19 +60,23 @@ def averages(mm: MicroModel, window=None):
         w = _window(mesh, window)
         # A Constant avoids a separate compiled form per grain tensor.
         D = dolfinx.fem.Constant(mesh, np.asarray(mm.tensors[grain.id], dtype=scalar))
-        flux = -D * ufl.grad(c)
+        # UFL installs expression operators dynamically; their return types
+        # cannot currently be inferred from its Python implementation.
+        gradient = cast(Any, ufl.grad(c))
+        flux = -D * gradient
         area += _assemble(w * dx)
         for i in range(dim):
             q[i] += _assemble(w * flux[i] * dx)
-            grad_c[i] += _assemble(w * ufl.grad(c)[i] * dx)
+            grad_c[i] += _assemble(w * gradient[i] * dx)
 
     cgb = mm.network_solution
     mesh_g = cgb.function_space.mesh
     dx_g = ufl.Measure("dx", domain=mesh_g)
     w_g = _window(mesh_g, window)
     delta_D_gb = dolfinx.fem.Constant(mesh_g, scalar(delta * D_gb))
+    gradient_gb = cast(Any, ufl.grad(cgb))
     for i in range(dim):
-        q[i] -= _assemble(w_g * delta_D_gb * ufl.grad(cgb)[i] * dx_g)
+        q[i] -= _assemble(w_g * delta_D_gb * gradient_gb[i] * dx_g)
 
     return q / area, grad_c / area, area
 
@@ -116,11 +120,11 @@ def mean_lattice_tensor(mm: MicroModel):
 def parent_field(mm: MicroModel, name="c"):
     """Gather all grain solutions into one discontinuous parent-mesh field."""
     V = dolfinx.fem.functionspace(mm.model.mesh.mesh, ("DG", 1))
-    field = dolfinx.fem.Function(V, name=name)
+    field = cast(dolfinx.fem.Function, dolfinx.fem.Function(V, name=name))
 
     def update():
         for spe, grain in zip(mm.species, mm.grains, strict=True):
-            parent_cells = mm.model.volume_meshtags.find(grain.id)
+            parent_cells = mm.micro.cell_tags.find(grain.id)
             sub_cells = grain.cell_map.sub_topology_to_topology(
                 parent_cells, inverse=True
             )
@@ -135,13 +139,13 @@ def parent_field(mm: MicroModel, name="c"):
 
 def equilibrium_error(mm: MicroModel):
     """Return the normalized grain/GB concentration mismatch."""
-    import scipy.spatial
+    from scipy.spatial import KDTree
 
     cgb = mm.network_solution
     x_gb = cgb.function_space.tabulate_dof_coordinates()
     if x_gb.shape[0] == 0:
         return 0.0
-    tree = scipy.spatial.cKDTree(x_gb)
+    tree = KDTree(x_gb, leafsize=16)
     tol = mm.micro.tolerance
     worst, scale = 0.0, 1e-300
     for c in mm.grain_solutions:

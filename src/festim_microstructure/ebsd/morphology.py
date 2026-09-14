@@ -7,6 +7,8 @@ interface reconstruction can walk it.
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 
 __all__ = ["STRUCT4", "fill_holes", "make_meshable"]
@@ -35,7 +37,10 @@ def fill_holes(cellids):
     if n == 0 or n == empty.size:
         return cellids, n
     # The empty-mask distance transform identifies nearest filled voxels.
-    _, idx = distance_transform_edt(empty, return_indices=True)
+    idx = cast(
+        np.ndarray,
+        distance_transform_edt(empty, return_distances=False, return_indices=True),
+    )
     return cellids[tuple(idx)], n
 
 
@@ -58,7 +63,9 @@ def _absorb_enclosed(cellids):
         # the complement of one grain, in the 4-connectivity of the voxel faces
         # the reconstruction works with; a component of it that does not reach
         # the map border is enclosed by that grain
-        comp, n = label(cellids != cell, structure=STRUCT4)
+        comp, n = cast(
+            tuple[np.ndarray, int], label(cellids != cell, structure=STRUCT4)
+        )
         if n <= 1:
             continue
         border = set(comp[0]) | set(comp[-1]) | set(comp[:, 0]) | set(comp[:, -1])

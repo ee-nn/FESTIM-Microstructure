@@ -107,6 +107,7 @@ li2022-fig4.png     D_eff/D_m against f_GB for the four ratios, panels D,E,G,H,
 
 from dataclasses import dataclass
 from functools import cached_property
+from typing import Any, cast
 
 from mpi4py import MPI
 
@@ -116,7 +117,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import ufl
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 
 # Physics (SI).
 T = 1073.0  # K; only scales D_m (their Sect. 3.4)
@@ -192,14 +193,14 @@ class Foam:
         return pts
 
     @cached_property
-    def _tree(self):
+    def _tree(self) -> KDTree:
         shifts = np.stack(
             np.meshgrid(*[[-1, 0, 1]] * self.dim, indexing="ij"), -1
         ).reshape(-1, self.dim)
         images = (self.seeds[None, :, :] + shifts[:, None, :] * self.B).reshape(
             -1, self.dim
         )
-        return cKDTree(images)
+        return KDTree(images, leafsize=16)
 
     def face_distance(self, points):
         """Distance from each point (dim x n) to the nearest Voronoi face: the
@@ -335,7 +336,8 @@ def _dg0_dofs(V0, cells):
 
 def _assemble(form, comm):
     return comm.allreduce(
-        dolfinx.fem.assemble_scalar(dolfinx.fem.form(form)), op=MPI.SUM
+        dolfinx.fem.assemble_scalar(cast(dolfinx.fem.Form, dolfinx.fem.form(form))),
+        op=MPI.SUM,
     )
 
 
@@ -375,13 +377,13 @@ def run(case, ratio, mesh, cells_grain, cells_gb, f_gb, comm):
 
     # Use the same classification for the DG0 flux field.
     V0 = dolfinx.fem.functionspace(mesh, ("DG", 0))
-    D = dolfinx.fem.Function(V0, name="D")
+    D = cast(dolfinx.fem.Function, dolfinx.fem.Function(V0, name="D"))
     D.x.array[:] = Dgb
     D.x.array[_dg0_dofs(V0, cells_grain)] = Dm
     D.x.scatter_forward()
 
     dC = C_IN - C_OUT
-    g = ufl.grad(c)[ax]
+    g = cast(Any, ufl.grad(c))[ax]
     j_out = _assemble(-D * g * _face_measure(mesh, ax, case.length, tol), comm)
     j_in = _assemble(-D * g * _face_measure(mesh, ax, 0.0, tol), comm)
     vol = _assemble(1.0 * ufl.dx(domain=mesh), comm)

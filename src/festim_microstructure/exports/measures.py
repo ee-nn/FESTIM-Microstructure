@@ -1,5 +1,7 @@
 """Integrals and topology checks for solved microstructure models."""
 
+from typing import cast
+
 from mpi4py import MPI
 
 import dolfinx
@@ -19,8 +21,10 @@ def inventory(c_b, c_gb, delta):
     network's length in 2D or area in 3D)."""
     dx_bulk = ufl.Measure("dx", domain=c_b.function_space.mesh)
     dx_gb = ufl.Measure("dx", domain=c_gb.function_space.mesh)
-    total = dolfinx.fem.assemble_scalar(dolfinx.fem.form(c_b * dx_bulk))
-    total += delta * dolfinx.fem.assemble_scalar(dolfinx.fem.form(c_gb * dx_gb))
+    bulk_form = cast(dolfinx.fem.Form, dolfinx.fem.form(c_b * dx_bulk))
+    gb_form = cast(dolfinx.fem.Form, dolfinx.fem.form(c_gb * dx_gb))
+    total = dolfinx.fem.assemble_scalar(bulk_form)
+    total += delta * dolfinx.fem.assemble_scalar(gb_form)
     return c_b.function_space.mesh.comm.allreduce(total, op=MPI.SUM)
 
 

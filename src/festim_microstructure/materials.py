@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import dolfinx
 import festim as F
@@ -116,7 +117,8 @@ def crystal_diffusivity_field(micro, physics):
     mesh = micro.mesh
     gdim = mesh.geometry.dim
     V = dolfinx.fem.functionspace(mesh, ("DG", 0, (gdim, gdim)))
-    D = dolfinx.fem.Function(V, name="D_lattice")
+    # UFL's inherited __new__ also advertises Cofunction for dual spaces.
+    D = cast(dolfinx.fem.Function, dolfinx.fem.Function(V, name="D_lattice"))
     return D, fill_crystal_diffusivity_field(D, micro, physics)
 
 
@@ -164,7 +166,7 @@ def gb_diffusivity_field(network, theta, d_low, d_high, theta_c=15.0):
     # Parent-cell positions index the aligned located-facet tag array.
     theta = np.asarray(theta)
     V = dolfinx.fem.functionspace(submesh, ("DG", 0))
-    d = dolfinx.fem.Function(V, name="D_gb")
+    d = cast(dolfinx.fem.Function, dolfinx.fem.Function(V, name="D_gb"))
     tdim = submesh.topology.dim
     n_local = submesh.topology.index_map(tdim).size_local
     ids = ids_of_facets[np.asarray(parent)[:n_local]]

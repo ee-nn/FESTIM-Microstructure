@@ -30,4 +30,4 @@ def tune_direct_solver(model, icntl_14=400):
         return
     prefix = snes.getOptionsPrefix() or ""
     # MUMPS reads only the solver-prefixed key.
-    PETSc.Options()[f"{prefix}mat_mumps_icntl_14"] = icntl_14
+    PETSc.Options().setValue(f"{prefix}mat_mumps_icntl_14", icntl_14)

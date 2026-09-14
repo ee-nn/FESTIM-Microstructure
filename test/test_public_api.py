@@ -34,6 +34,35 @@ SRC = pathlib.Path(festim_microstructure.__file__).parent
 
 
 @pytest.mark.parametrize("package", PACKAGES)
+def test_lazy_exports_have_matching_static_declarations(package):
+    """Editors must see the same concrete definitions as runtime callers."""
+    module = importlib.import_module(package)
+    tree = ast.parse(pathlib.Path(module.__file__).read_text())
+    declarations = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        ):
+            for statement in node.body:
+                assert isinstance(statement, ast.ImportFrom)
+                for alias in statement.names:
+                    assert alias.asname == alias.name, "Use explicit public re-exports"
+                    declarations[alias.name] = "." * statement.level + (
+                        statement.module or ""
+                    )
+
+    expected = dict(module._NAMES)
+    expected.update(dict.fromkeys(module._SUBMODULES, "."))
+    assert declarations == expected
+
+
+def test_installed_package_declares_inline_types():
+    assert (SRC / "py.typed").is_file()
+
+
+@pytest.mark.parametrize("package", PACKAGES)
 def test_every_advertised_name_resolves(stubbed_heavy_deps, package):
     module = importlib.import_module(package)
     unresolved = []

@@ -1,5 +1,5 @@
 {
- "ctf": "mwes_and_examples/EBSD_grain_construction/D7 PBF SS316L.ctf",
+ "ctf": "/home/fenna/FESTIM-Microstructure/examples/data/D7 PBF SS316L.ctf",
  "crop": "0,306,0,306",
  "phase": 1,
  "threshold": 10.0,
@@ -14,6 +14,8 @@
  "topology_fix": true,
  "voxel_ori": true,
  "diagnostics": true,
+ "neper": "neper",
+ "povray": "povray",
  "unit": "um",
  "voxsize": [
   1.6,

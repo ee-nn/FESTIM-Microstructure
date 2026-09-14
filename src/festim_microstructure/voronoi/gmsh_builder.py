@@ -8,6 +8,7 @@ FEniCS install.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -63,7 +64,7 @@ class MeshSizing:
             gmsh.option.setNumber(opt, 0)
 
 
-def _unpack(result, *names):
+def _unpack(result: Any, *names: str) -> tuple[Any, ...]:
     """dolfinx changed ``model_to_mesh`` from a tuple to a named result."""
     if hasattr(result, "mesh"):
         return tuple(getattr(result, n) for n in names)
@@ -191,7 +192,7 @@ def grain_tags_from_seeds(mesh, seeds, size):
     Returns ``(cell_tags, grain_ids)``; ids are 1-based and global across ranks.
     """
     import dolfinx
-    from scipy.spatial import cKDTree
+    from scipy.spatial import KDTree
 
     seeds = np.asarray(seeds)
     dim = seeds.shape[1]
@@ -201,7 +202,7 @@ def grain_tags_from_seeds(mesh, seeds, size):
     imap = mesh.topology.index_map(tdim)
     n = imap.size_local + imap.num_ghosts
     mid = dolfinx.mesh.compute_midpoints(mesh, tdim, np.arange(n, dtype=np.int32))
-    _, idx = cKDTree(images).query(mid[:, :dim])
+    _, idx = KDTree(images, leafsize=16).query(mid[:, :dim])
     values = (idx + 1).astype(np.int32)
     tags = dolfinx.mesh.meshtags(mesh, tdim, np.arange(n, dtype=np.int32), values)
     present = np.unique(np.concatenate(mesh.comm.allgather(np.unique(values))))

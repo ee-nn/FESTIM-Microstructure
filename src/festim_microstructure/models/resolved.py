@@ -7,6 +7,7 @@ constants or functions to avoid FFCx recompilation.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import dolfinx
@@ -45,7 +46,7 @@ class SolveOptions:
 
     transient: bool = False
     final_time: float | None = None
-    stepsize: float | None = None
+    stepsize: float | F.Stepsize | None = None
     atol: float = ATOL
     rtol: float = 1e-10
     petsc_options: dict | None = None
@@ -77,17 +78,17 @@ class MicroModel:
     """A built (not yet solved) resolved problem, and the handles to read it."""
 
     model: F.HydrogenTransportProblemDiscontinuous
-    micro: object
+    micro: MeshedMicrostructure
     physics: Physics
     grains: list
-    network: GrainBoundaryNetwork
+    network: GrainBoundaryNetwork | TaggedGrainBoundaryNetwork
     species: list
     c_gb: F.Species
     tensors: dict
     surfaces: dict = field(default_factory=dict)
-    lattice_field: object = None  # the DG0 tensor field holding D_m per grain
+    lattice_field: dolfinx.fem.Function | None = None
     k_constants: dict = field(default_factory=dict)  # grain id -> exchange rate
-    delta_constant: object = None
+    delta_constant: dolfinx.fem.Constant | None = None
     gb_material: ConstantDiffusivity | None = None
     _initialised: bool = False
     _initial_guess: list | None = None  # the unknowns as initialise() left them
@@ -106,7 +107,7 @@ class MicroModel:
     def _unknowns(self):
         """The functions the SNES solves for, in the solver's own order."""
         u = self.model.solver.u
-        return list(u) if isinstance(u, list | tuple) else [u]
+        return list(u) if isinstance(u, Sequence) else [u]
 
     def reset_initial_guess(self):
         """Put the unknowns back to the state :meth:`initialise` left them in."""
@@ -145,21 +146,25 @@ class MicroModel:
 
     def set_physics(self, physics: Physics, exchange_rate=None):
         """Update coefficients without rebuilding forms, spaces, or geometry."""
-        if not self.k_constants:
+        if (
+            not self.k_constants
+            or self.delta_constant is None
+            or self.gb_material is None
+            or self.lattice_field is None
+        ):
             raise RuntimeError(
                 "this MicroModel has no coefficient handles, so it cannot be "
                 "retuned; it was not produced by build()"
             )
-        if exchange_rate is None:
-
-            def exchange_rate(grain_id):
-                return physics.k_exchange
-
         self.physics = physics
         self.delta_constant.value = dolfinx.default_scalar_type(physics.delta)
         for grain in self.grains:
             self.k_constants[grain.id].value = dolfinx.default_scalar_type(
-                float(exchange_rate(grain.id))
+                float(
+                    physics.k_exchange
+                    if exchange_rate is None
+                    else exchange_rate(grain.id)
+                )
             )
         self.gb_material.D_value = physics.D_gb
         # Temperature also changes the lattice tensor.
@@ -204,11 +209,6 @@ def build(
     require(micro, MeshedMicrostructure, context="in build()")
     solve = solve or SolveOptions()
 
-    if exchange_rate is None:
-
-        def exchange_rate(grain_id):
-            return physics.k_exchange
-
     # Material fields and one lattice species per grain.
     D_field, tensors = crystal_diffusivity_field(micro, physics)
     grains = [
@@ -234,7 +234,14 @@ def build(
     delta_constant = dolfinx.fem.Constant(micro.mesh, scalar(physics.delta))
     k_constants = {
         grain.id: dolfinx.fem.Constant(
-            micro.mesh, scalar(float(exchange_rate(grain.id)))
+            micro.mesh,
+            scalar(
+                float(
+                    physics.k_exchange
+                    if exchange_rate is None
+                    else exchange_rate(grain.id)
+                )
+            ),
         )
         for grain in grains
     }
@@ -252,7 +259,7 @@ def build(
         )
         for spe, grain in zip(species, grains, strict=True)
     ]
-    boundary_conditions = [
+    boundary_conditions: list[F.ParticleFluxBC | F.FixedConcentrationBC] = [
         F.ParticleFluxBC(
             subdomain=network,
             species=spe,

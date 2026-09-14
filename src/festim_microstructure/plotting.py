@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 __all__ = [
@@ -148,7 +150,7 @@ def append_key(png, key_png, output=None, labels=("001", "011", "111"), log=prin
     key = trim(Image.open(key_png).convert("RGB"))
     h = round(0.62 * base.height)
     w = round(key.width * h / key.height)
-    key = key.resize((w, h), Image.LANCZOS)
+    key = key.resize((w, h), Image.Resampling.LANCZOS)
 
     size = max(round(0.10 * h), 11)
     m = max(round(0.22 * h), 3 * size // 2)  # margin the corner labels live in
@@ -177,7 +179,11 @@ def append_key(png, key_png, output=None, labels=("001", "011", "111"), log=prin
     return out
 
 
-RCPARAMS = {"font.size": 16, "axes.titlesize": 16, "figure.titlesize": 16}
+RCPARAMS: dict[Literal["font.size", "axes.titlesize", "figure.titlesize"], int] = {
+    "font.size": 16,
+    "axes.titlesize": 16,
+    "figure.titlesize": 16,
+}
 
 
 def use_agg():

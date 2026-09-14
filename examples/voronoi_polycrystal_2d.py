@@ -100,13 +100,13 @@ def main(s=Setup()):
         f"{len(segments)} boundary segments"
     )
     print(
-        f"  triple junctions inside the box : {len(fm.voronoi.triple_junctions(segments, L))}"
+        f"triple junctions inside box: {len(fm.voronoi.triple_junctions(segments, L))}"
     )
     print(
-        f"  connected components (ridges)   : {fm.voronoi.connected_components(segments, L)}"
+        f"connected components (ridges): {fm.voronoi.connected_components(segments, L)}"
     )
     print(
-        f"  connected components (submesh)  : {fm.exports.measures.component_count(network)}"
+        f"connected components (submesh): {fm.exports.measures.component_count(network)}"
     )
     print(f"  facets dropped on the outer box : {network.n_dropped}")
     n_cells = mesh.topology.index_map(2).size_global

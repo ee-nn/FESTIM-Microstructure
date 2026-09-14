@@ -11,6 +11,10 @@ wants to convert an EBSD map could not import the package at all without it.
 names are *declared* eagerly (they are in ``__all__``, they show up in
 ``dir()``, and a stale one is caught by the test suite) but the module holding
 each is imported on first access.
+
+Each lazy namespace also declares explicit re-exports under ``TYPE_CHECKING``
+in its ``__init__.py``. Keep these in sync with the runtime table so editors
+can resolve classes, signatures and submodules without executing this helper.
 """
 
 from __future__ import annotations
