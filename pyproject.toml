@@ -12,6 +12,7 @@ description = "Microstructure-resolved hydrogen transport modelling with FESTIM"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 dynamic = ["version"]
 authors = [{ name = "ee-nn" }]
 classifiers = [
