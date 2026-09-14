@@ -14,6 +14,7 @@ import festim as F
 import numpy as np
 import ufl
 
+from ..microstructure import MeshedMicrostructure, require
 from ..solvers import ATOL, DIRECT_SOLVER_OPTIONS, tune_direct_solver
 from ..subdomains import (
     Grain,
@@ -36,6 +37,7 @@ __all__ = [
     "GrainSurface",
     "MicroModel",
     "Physics",
+    "SolveOptions",
     "averages",
     "build",
     "check_network_covers_grain_boundaries",
@@ -48,6 +50,39 @@ __all__ = [
     "parent_field",
     "tune_direct_solver",
 ]
+
+
+@dataclass
+class SolveOptions:
+    """Everything :func:`build` hands to the solver rather than to the physics.
+
+    Split out because these six travelled together through a twelve-argument
+    signature while saying nothing about the microstructure or the material:
+    they describe how the resulting problem is stepped and solved.
+    """
+
+    transient: bool = False
+    final_time: float | None = None
+    stepsize: float | None = None
+    atol: float = ATOL
+    rtol: float = 1e-10
+    petsc_options: dict | None = None
+
+    def festim_settings(self):
+        return F.Settings(
+            atol=self.atol,
+            rtol=self.rtol,
+            transient=self.transient,
+            final_time=self.final_time,
+            stepsize=self.stepsize,
+        )
+
+    def petsc(self):
+        """The PETSc options, defaulting to the direct solver these need."""
+        if self.petsc_options is None:
+            return dict(DIRECT_SOLVER_OPTIONS)
+        return self.petsc_options
+
 
 NETWORK_ID = 1_000_000  # above every grain id
 SURFACE_ID_0 = 2_000_000  # the per-grain boundary patches are numbered from here
@@ -281,26 +316,28 @@ def inventory(mm: MicroModel, window=None):
 
 
 def build(
-    micro,
+    micro: MeshedMicrostructure,
     physics: Physics,
     bcs,
-    transient=False,
-    final_time=None,
-    stepsize=None,
+    *,
     exchange_rate=None,
     initial_conditions=(),
     exports=(),
-    atol=ATOL,
-    rtol=1e-10,
-    petsc_options=None,
+    solve: SolveOptions | None = None,
 ):
     """Assemble a resolved model for a microstructure and grain-surface BCs.
 
     ``bcs`` contains ``(name, locator, value)`` tuples. ``exchange_rate`` maps a
-    grain id to ``k`` and defaults to ``physics.k_exchange``.
+    grain id to ``k`` and defaults to ``physics.k_exchange``. Stepping and
+    solver settings live in ``solve``; see :class:`SolveOptions`.
+
+    ``micro`` must satisfy
+    :class:`~festim_microstructure.microstructure.MeshedMicrostructure`. That is
+    checked here, so an incompatible microstructure is named at the call site
+    rather than raising an ``AttributeError`` part-way through form assembly.
     """
-    if petsc_options is None:
-        petsc_options = dict(DIRECT_SOLVER_OPTIONS)
+    require(micro, MeshedMicrostructure, context="in build()")
+    solve = solve or SolveOptions()
 
     if exchange_rate is None:
 
@@ -315,7 +352,7 @@ def build(
     ]
     tdim = micro.mesh.topology.dim
     gb_material = ConstantDiffusivity(physics.D_gb)
-    if getattr(micro, "facet_tags", None) is not None:
+    if micro.facet_tags is not None:
         # Tagged facets avoid geometric network detection.
         network = TaggedGrainBoundaryNetwork(
             NETWORK_ID, gb_material, micro.facet_tags, [micro.gb_tag], dim=tdim - 1
@@ -393,17 +430,11 @@ def build(
         boundary_conditions=boundary_conditions,
         initial_conditions=list(initial_conditions),
         temperature=physics.T,
-        settings=F.Settings(
-            atol=atol,
-            rtol=rtol,
-            transient=transient,
-            final_time=final_time,
-            stepsize=stepsize,
-        ),
+        settings=solve.festim_settings(),
         exports=list(exports),
-        petsc_options=petsc_options,
+        petsc_options=solve.petsc(),
     )
-    model.show_progress_bar = transient
+    model.show_progress_bar = solve.transient
     return MicroModel(
         model,
         micro,

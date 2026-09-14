@@ -6,11 +6,27 @@ are available.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
 
 from .mesh_overlay import use_agg
 from .micrograph import scale_bar_ax
 from .orientation import cubic_disorientation_angle, qconj, qmul
+
+__all__ = [
+    "L2Stats",
+    "SegmentationError",
+    "format_report",
+    "l2_stats",
+    "per_grain_rms",
+    "read_tesr_full",
+    "segmentation_error",
+    "theta_field",
+    "write_csv",
+    "write_png",
+]
 
 
 # Measurement.
@@ -21,28 +37,73 @@ def theta_field(qgrid, qref):
     return cubic_disorientation_angle(qmul(qconj(a), b)).reshape(qgrid.shape[:2])
 
 
+@dataclass(frozen=True)
+class L2Stats:
+    """Order statistics of a disorientation population.
+
+    ``n == 0`` is a real outcome (a grain set with no voxel in it), so the
+    remaining fields are NaN rather than absent; ``bool(stats)`` is False then.
+    """
+
+    n: int
+    area: float = float("nan")
+    l2: float = float("nan")  #: deg * length
+    rms: float = float("nan")  #: deg, = l2 / sqrt(area)
+    mean: float = float("nan")
+    median: float = float("nan")
+    p99: float = float("nan")
+    max: float = float("nan")
+    threshold: float | None = None
+    frac_over: float | None = None
+
+    def __bool__(self) -> bool:
+        return self.n > 0
+
+
+@dataclass
+class SegmentationError:
+    """What representing each pixel by its grain's orientation costs.
+
+    ``theta`` is the per-pixel disorientation with NaN off the grains, and the
+    three populations are disjoint views of it: ``indexed`` (a voxel in a grain
+    of its own), ``backfilled`` (a voxel handed to its nearest grain), and
+    ``all`` (both together).
+    """
+
+    theta: Any  #: (ny, nx), NaN where no grain
+    good: Any  #: (ny, nx) bool, the indexed population
+    filled: Any  #: (ny, nx) bool, the back-filled population
+    ncells: int
+    vox: tuple
+    all: L2Stats
+    indexed: L2Stats
+    backfilled: L2Stats
+    grain_rms: Any = None  #: per-grain RMS theta, id order
+    grain_npx: Any = None  #: per-grain voxel count, id order
+    voxel: L2Stats | None = None  #: **oridata transcription check, if available
+
+
 def l2_stats(theta, mask, vox, threshold=None):
     """Return L2 and order statistics for selected disorientation values."""
     t = np.asarray(theta)[mask]
     a = vox[0] * vox[1]
     n = t.size
     if n == 0:
-        return {"n": 0}
+        return L2Stats(n=0)
     sq = float(np.sum(t**2))
-    out = {
-        "n": int(n),
-        "area": n * a,
-        "l2": float(np.sqrt(sq * a)),  # deg * length
-        "rms": float(np.sqrt(sq / n)),  # deg, = l2 / sqrt(area)
-        "mean": float(t.mean()),
-        "median": float(np.median(t)),
-        "p99": float(np.percentile(t, 99)),
-        "max": float(t.max()),
-    }
-    if threshold is not None:
-        out["threshold"] = float(threshold)
-        out["frac_over"] = float((t > threshold).mean())
-    return out
+    over = None if threshold is None else float((t > threshold).mean())
+    return L2Stats(
+        n=int(n),
+        area=n * a,
+        l2=float(np.sqrt(sq * a)),
+        rms=float(np.sqrt(sq / n)),
+        mean=float(t.mean()),
+        median=float(np.median(t)),
+        p99=float(np.percentile(t, 99)),
+        max=float(t.max()),
+        threshold=None if threshold is None else float(threshold),
+        frac_over=over,
+    )
 
 
 def per_grain_rms(theta, cellids, ncells):
@@ -87,56 +148,55 @@ def segmentation_error(
 
     good = assigned & ~filled_in & ok  # in a grain of its own: the honest set
     filled = assigned & filled_in
-    res = {
-        "theta": np.where(assigned, theta, np.nan),
-        "good": good,
-        "filled": filled,
-        "ncells": ncells,
-        "vox": tuple(vox),
-        "all": l2_stats(theta, assigned, vox, threshold),
-        "indexed": l2_stats(theta, good, vox, threshold),
-        "backfilled": l2_stats(theta, filled, vox, threshold),
-    }
     rms, cnt = per_grain_rms(
         np.where(good, theta, 0.0), np.where(good, cellids, 0), ncells
     )
-    res["grain_rms"], res["grain_npx"] = rms, cnt
-    if qvox is not None:
-        res["voxel"] = l2_stats(theta_field(qgrid, qvox), ok, vox)
-    return res
+    return SegmentationError(
+        theta=np.where(assigned, theta, np.nan),
+        good=good,
+        filled=filled,
+        ncells=ncells,
+        vox=tuple(vox),
+        all=l2_stats(theta, assigned, vox, threshold),
+        indexed=l2_stats(theta, good, vox, threshold),
+        backfilled=l2_stats(theta, filled, vox, threshold),
+        grain_rms=rms,
+        grain_npx=cnt,
+        voxel=None if qvox is None else l2_stats(theta_field(qgrid, qvox), ok, vox),
+    )
 
 
-def format_report(res, label="segmentation"):
+def format_report(res: SegmentationError, label="segmentation"):
     lines = []
-    a = res["indexed"]
-    if a["n"] == 0:
+    a = res.indexed
+    if not a:
         return [f"{label}: no indexed voxel is assigned to a grain"]
     lines.append(
-        f"{label} L2: RMS {a['rms']:.3f} deg over {a['n']} indexed voxels "
-        f"(||theta||_2 = {a['l2']:.4g} deg*len over {a['area']:.4g} len^2)"
+        f"{label} L2: RMS {a.rms:.3f} deg over {a.n} indexed voxels "
+        f"(||theta||_2 = {a.l2:.4g} deg*len over {a.area:.4g} len^2)"
     )
     lines.append(
-        f"{label}   : mean {a['mean']:.3f}, median {a['median']:.3f}, "
-        f"p99 {a['p99']:.3f}, max {a['max']:.3f} deg"
+        f"{label}   : mean {a.mean:.3f}, median {a.median:.3f}, "
+        f"p99 {a.p99:.3f}, max {a.max:.3f} deg"
     )
-    if "frac_over" in a:
+    if a.frac_over is not None:
         lines.append(
-            f"{label}   : {100 * a['frac_over']:.2f} % of voxels sit further "
-            f"than the {a['threshold']:g} deg segmentation threshold from "
+            f"{label}   : {100 * a.frac_over:.2f} % of voxels sit further "
+            f"than the {a.threshold:g} deg segmentation threshold from "
             "their own grain's orientation"
         )
-    b, c = res["backfilled"], res["all"]
-    if b["n"]:
+    b, c = res.backfilled, res.all
+    if b:
         lines.append(
-            f"{label}   : back-filled voxels ({b['n']}, excluded above): "
-            f"RMS {b['rms']:.3f} deg, max {b['max']:.3f} deg"
+            f"{label}   : back-filled voxels ({b.n}, excluded above): "
+            f"RMS {b.rms:.3f} deg, max {b.max:.3f} deg"
         )
         lines.append(
-            f"{label}   : over every voxel that has a grain ({c['n']}, the two "
-            f"populations together): RMS {c['rms']:.3f} deg, "
-            f"||theta||_2 = {c['l2']:.4g} deg*len"
+            f"{label}   : over every voxel that has a grain ({c.n}, the two "
+            f"populations together): RMS {c.rms:.3f} deg, "
+            f"||theta||_2 = {c.l2:.4g} deg*len"
         )
-    rms, cnt = res["grain_rms"], res["grain_npx"]
+    rms, cnt = res.grain_rms, res.grain_npx
     fin = np.flatnonzero(np.isfinite(rms))
     if fin.size:
         worst = fin[np.argsort(rms[fin])[::-1][:5]]
@@ -144,28 +204,33 @@ def format_report(res, label="segmentation"):
             f"{label}   : worst grains (id: RMS deg, px) "
             + ", ".join(f"{i + 1}: {rms[i]:.2f}, {cnt[i]}" for i in worst)
         )
-    if "voxel" in res:
-        v = res["voxel"]
-        verdict = "" if v["max"] < 1e-3 else "  <-- NOT a round trip"
+    if res.voxel is not None:
+        v = res.voxel
+        verdict = "" if v.max < 1e-3 else "  <-- NOT a round trip"
         lines.append(
-            f"transcription L2: RMS {v['rms']:.2e} deg, max {v['max']:.2e} deg "
+            f"transcription L2: RMS {v.rms:.2e} deg, max {v.max:.2e} deg "
             f"(**oridata vs the raw Euler angles){verdict}"
         )
     return lines
 
 
 # Figure.
-def write_png(path, res, cellids, unit="um", dpi=150, threshold=None, log=print):
-    """theta map, its distribution, and the per-grain RMS on the same map."""
+def write_png(path, res: SegmentationError, cellids, unit="um", dpi=150, log=print):
+    """theta map, its distribution, and the per-grain RMS on the same map.
+
+    The segmentation threshold is read off ``res``; it was already recorded
+    there when the statistics were taken.
+    """
+    threshold = res.indexed.threshold
     plt = use_agg()
     plt.rcParams.update({"font.size": 15, "axes.titlesize": 15})
 
-    theta = res["theta"]
+    theta = res.theta
     ny, nx = theta.shape
-    vx, vy = res["vox"]
+    vx, vy = res.vox
     kw = dict(interpolation="nearest", origin="lower", extent=(0, nx * vx, 0, ny * vy))
-    a = res["indexed"]
-    vmax = max(a["p99"], 1e-3)
+    a = res.indexed
+    vmax = max(a.p99, 1e-3)
     aspect = ny * vy / (nx * vx)
 
     fig, axes = plt.subplots(
@@ -175,15 +240,15 @@ def write_png(path, res, cellids, unit="um", dpi=150, threshold=None, log=print)
     ax = axes[0]
     im = ax.imshow(theta, cmap="inferno", vmin=0, vmax=vmax, **kw)
     fig.colorbar(im, ax=ax, fraction=0.046).set_label("theta (deg)")
-    ax.set_title(f"per-pixel segmentation error: RMS {a['rms']:.2f} deg")
+    ax.set_title(f"per-pixel segmentation error: RMS {a.rms:.2f} deg")
     ax.set_xlabel(f"clipped at p99 = {vmax:.2f} deg")
     ax.set_xticks([])
     ax.set_yticks([])
     scale_bar_ax(ax, nx * vx, unit)
 
     ax = axes[1]
-    good = theta[res["good"]]
-    filled = theta[res["filled"]]
+    good = theta[res.good]
+    filled = theta[res.filled]
     hi = max(np.percentile(good, 99.9) * 1.5, threshold or 0, 1e-3)
     bins = np.linspace(0, hi, 80)
     ax.hist(good, bins=bins, color="0.35", label=f"indexed ({good.size})")
@@ -196,9 +261,9 @@ def write_png(path, res, cellids, unit="um", dpi=150, threshold=None, log=print)
             label=f"back-filled ({filled.size}), clipped",
         )
     ax.set_yscale("log")
-    ax.axvline(a["rms"], color="tab:red", lw=2, label=f"RMS {a['rms']:.2f} deg")
+    ax.axvline(a.rms, color="tab:red", lw=2, label=f"RMS {a.rms:.2f} deg")
     ax.axvline(
-        a["median"], color="tab:blue", lw=2, ls="--", label=f"median {a['median']:.2f}"
+        a.median, color="tab:blue", lw=2, ls="--", label=f"median {a.median:.2f}"
     )
     if threshold and threshold <= hi:
         ax.axvline(
@@ -210,13 +275,13 @@ def write_png(path, res, cellids, unit="um", dpi=150, threshold=None, log=print)
     ax.legend(fontsize=12)
 
     ax = axes[2]
-    rms = res["grain_rms"]
+    rms = res.grain_rms
     painted = np.full(theta.shape, np.nan)
     m = cellids > 0
     painted[m] = rms[cellids[m] - 1]
     im = ax.imshow(painted, cmap="viridis", **kw)
     fig.colorbar(im, ax=ax, fraction=0.046).set_label("RMS theta (deg)")
-    ax.set_title(f"{res['ncells']} grains, worst {np.nanmax(rms):.2f} deg")
+    ax.set_title(f"{res.ncells} grains, worst {np.nanmax(rms):.2f} deg")
     ax.set_xticks([])
     ax.set_yticks([])
     scale_bar_ax(ax, nx * vx, unit)
@@ -228,8 +293,8 @@ def write_png(path, res, cellids, unit="um", dpi=150, threshold=None, log=print)
     return path
 
 
-def write_csv(path, res, log=print):
-    rms, cnt = res["grain_rms"], res["grain_npx"]
+def write_csv(path, res: SegmentationError, log=print):
+    rms, cnt = res.grain_rms, res.grain_npx
     with open(path, "w") as fh:
         fh.write("cell_id,n_voxels,rms_theta_deg\n")
         for k, (r, c) in enumerate(zip(rms, cnt), start=1):

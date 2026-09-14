@@ -21,6 +21,4 @@ res = convert(
     allow_error=True,
     crop="0,306,0,306",
 )
-print(
-    f"segmentation error (rms): {res['segmentation_error']['indexed']['rms']:.3f} deg"
-)
+print(f"segmentation error (rms): {res.rms_deg:.3f} deg")

@@ -12,6 +12,7 @@ def test_fast_boundaries_increase_inventory():
     import festim as F
 
     from festim_microstructure.meshing.voronoi import (
+        MeshSizing,
         build_mesh,
         near_segments,
         snap_segments,
@@ -28,7 +29,7 @@ def test_fast_boundaries_increase_inventory():
     segments = snap_segments(
         voronoi_segments(6, L, np.random.default_rng(0)), 0.1 * h_gb, L
     )
-    mesh, _, _ = build_mesh(segments, L, h_gb, 4 * h_gb)
+    mesh, _, _ = build_mesh(segments, L, MeshSizing(h_gb=h_gb, h_bulk=4 * h_gb))
     network = GrainBoundaryNetwork(
         id=2,
         material=F.Material(D_0=1.0, E_D=0.0),

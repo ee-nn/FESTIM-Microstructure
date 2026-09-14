@@ -2,10 +2,92 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
 
 from .mesh_overlay import read_msh4, read_tesr, use_agg
 from .micrograph import scale_bar_ax
+
+__all__ = [
+    "AreaChange",
+    "AreaReportOptions",
+    "ChangeStats",
+    "area_change",
+    "format_report",
+    "measure",
+    "raster_areas",
+    "summarise",
+    "tesr_origin",
+    "triangle_areas",
+    "write_csv",
+    "write_png",
+]
+
+
+@dataclass(frozen=True)
+class ChangeStats:
+    """Distribution of a per-grain percentage change."""
+
+    n: int
+    min: float = float("nan")
+    mean: float = float("nan")
+    median: float = float("nan")
+    max: float = float("nan")
+    abs_mean: float = float("nan")
+    rms: float = float("nan")
+    area_weighted_mean: float | None = None
+
+    def __bool__(self) -> bool:
+        return self.n > 0
+
+
+@dataclass
+class AreaChange:
+    """Raster grain areas against their meshed counterparts.
+
+    ``delta``/``area``/``ecd`` stay ``None`` when the face-to-cell mapping is
+    not the identity and ``allow_mismatch`` was not given: every per-grain
+    quantity downstream is indexed by face id, so the areas would be attached
+    to the wrong grains. :func:`measure` turns that into an exception.
+    """
+
+    ncell: int
+    nface: int
+    vox: tuple
+    cells: Any
+    npx: Any
+    identity: bool
+    allow_mismatch: bool
+    mapping: Any
+    face_area: Any
+    face_matched: Any
+    displaced: float
+    a_raster: Any
+    a_mesh: Any
+    mesh_total: float
+    raster_total: float
+    delta: Any = None  #: per-grain area change, %
+    delta_ecd: Any = None  #: the same as an equivalent-diameter change, %
+    area: ChangeStats | None = None
+    ecd: ChangeStats | None = None
+
+    @property
+    def comparable(self) -> bool:
+        """True when the per-grain comparison was actually made."""
+        return self.delta is not None
+
+
+@dataclass
+class AreaReportOptions:
+    """Where :func:`measure` writes, and how tolerant it is."""
+
+    csv: str | None = None
+    png: str | None = None
+    unit: str = "um"
+    dpi: int = 150
+    allow_mismatch: bool = False
 
 
 def tesr_origin(path):
@@ -71,29 +153,31 @@ def face_to_cell(cells, vox, origin, tags, area, centroid, ncell):
     return mapping, total, best, displaced
 
 
-def summarise(delta, weights=None):
+def summarise(delta, weights=None) -> ChangeStats:
     """min / mean / median / max, plus the sign-blind and weighted versions."""
     d = np.asarray(delta, dtype=float)
-    d = d[np.isfinite(d)]
+    finite = np.isfinite(d)
+    d = d[finite]
     if d.size == 0:
-        return {}
-    out = {
-        "n": int(d.size),
-        "min": float(d.min()),
-        "mean": float(d.mean()),
-        "median": float(np.median(d)),
-        "max": float(d.max()),
-        "abs_mean": float(np.abs(d).mean()),
-        "rms": float(np.sqrt(np.mean(d**2))),
-    }
+        return ChangeStats(n=0)
+    weighted = None
     if weights is not None:
-        w = np.asarray(weights, dtype=float)[np.isfinite(delta)]
-        out["area_weighted_mean"] = float(np.sum(d * w) / np.sum(w))
-    return out
+        w = np.asarray(weights, dtype=float)[finite]
+        weighted = float(np.sum(d * w) / np.sum(w))
+    return ChangeStats(
+        n=int(d.size),
+        min=float(d.min()),
+        mean=float(d.mean()),
+        median=float(np.median(d)),
+        max=float(d.max()),
+        abs_mean=float(np.abs(d).mean()),
+        rms=float(np.sqrt(np.mean(d**2))),
+        area_weighted_mean=weighted,
+    )
 
 
-def area_change(tesr_path, msh4_path, allow_mismatch=False):
-    """The whole diagnostic. Returns a dict of per-grain arrays and summaries."""
+def area_change(tesr_path, msh4_path, allow_mismatch=False) -> AreaChange:
+    """The whole diagnostic, as an :class:`AreaChange`."""
     cells, vox = read_tesr(tesr_path)
     origin = tesr_origin(tesr_path)
     xyz, _seg, tri = read_msh4(msh4_path)
@@ -117,23 +201,23 @@ def area_change(tesr_path, msh4_path, allow_mismatch=False):
         else None
     )
 
-    res = {
-        "ncell": ncell,
-        "nface": int(faces.size),
-        "vox": vox,
-        "cells": cells,
-        "npx": npx,
-        "identity": bool(identity),
-        "allow_mismatch": bool(allow_mismatch),
-        "mapping": mapping,
-        "face_area": f_total,
-        "face_matched": f_best,
-        "displaced": float(displaced),
-        "a_raster": a_ras,
-        "a_mesh": a_mesh,
-        "mesh_total": float(tarea.sum()),
-        "raster_total": float(a_ras.sum()),
-    }
+    res = AreaChange(
+        ncell=ncell,
+        nface=int(faces.size),
+        vox=vox,
+        cells=cells,
+        npx=npx,
+        identity=bool(identity),
+        allow_mismatch=bool(allow_mismatch),
+        mapping=mapping,
+        face_area=f_total,
+        face_matched=f_best,
+        displaced=float(displaced),
+        a_raster=a_ras,
+        a_mesh=a_mesh,
+        mesh_total=float(tarea.sum()),
+        raster_total=float(a_ras.sum()),
+    )
     if a_mesh is None or not (identity or allow_mismatch):
         return res
 
@@ -141,24 +225,24 @@ def area_change(tesr_path, msh4_path, allow_mismatch=False):
         delta = 100.0 * (a_mesh - a_ras) / np.where(a_ras > 0, a_ras, np.nan)
         # Equivalent circular diameter converts area change to a length scale.
         d_ecd = 100.0 * (np.sqrt(a_mesh / np.where(a_ras > 0, a_ras, np.nan)) - 1.0)
-    res["delta"] = delta
-    res["delta_ecd"] = d_ecd
-    res["area"] = summarise(delta, weights=a_ras)
-    res["ecd"] = summarise(d_ecd, weights=a_ras)
+    res.delta = delta
+    res.delta_ecd = d_ecd
+    res.area = summarise(delta, weights=a_ras)
+    res.ecd = summarise(d_ecd, weights=a_ras)
     return res
 
 
-def format_report(res):
+def format_report(res: AreaChange):
     lines = []
-    if res["nface"] != res["ncell"]:
+    if res.nface != res.ncell:
         lines.append(
-            f"WARNING: the raster has {res['ncell']} cells but the mesh has "
-            f"{res['nface']} faces. Grains were lost or split in the "
+            f"WARNING: the raster has {res.ncell} cells but the mesh has "
+            f"{res.nface} faces. Grains were lost or split in the "
             "reconstruction; the area comparison below is not one-to-one."
         )
-    if not res["identity"]:
-        tag = "WARNING" if res.get("allow_mismatch") else "ERROR"
-        m, tot, matched = res["mapping"], res["face_area"], res["face_matched"]
+    if not res.identity:
+        tag = "WARNING" if res.allow_mismatch else "ERROR"
+        m, tot, matched = res.mapping, res.face_area, res.face_matched
         bad = [
             (f, int(m[f]), matched[f] / tot[f] if tot[f] else np.nan)
             for f in range(1, len(m))
@@ -171,66 +255,66 @@ def format_report(res):
             + (" ..." if len(bad) > 10 else "")
         )
         lines.append(
-            f"  {len(bad)} of {res['nface']} faces. Every per-grain quantity "
+            f"  {len(bad)} of {res.nface} faces. Every per-grain quantity "
             "downstream, theta included, is indexed by face id, so this has to "
             "be resolved before the mesh is used. A face whose fraction is "
             "barely over half is an ambiguous small grain rather than a "
             "mis-tagged one; --allow-mismatch carries on with the identity "
             "mapping and reports the areas anyway."
         )
-        if not res.get("allow_mismatch"):
+        if not res.allow_mismatch:
             return lines
-    if "area" not in res:
+    if not res.comparable:
         return lines
 
-    a, e = res["area"], res["ecd"]
+    a, e = res.area, res.ecd
     lines.append(
-        f"grain area change (smoothing + meshing, {a['n']} grains): "
-        f"min {a['min']:+.2f} %, mean {a['mean']:+.2f} %, "
-        f"median {a['median']:+.2f} %, max {a['max']:+.2f} %"
+        f"grain area change (smoothing + meshing, {a.n} grains): "
+        f"min {a.min:+.2f} %, mean {a.mean:+.2f} %, "
+        f"median {a.median:+.2f} %, max {a.max:+.2f} %"
     )
     lines.append(
-        f"  |change|: mean {a['abs_mean']:.2f} %, rms {a['rms']:.2f} %; "
-        f"area-weighted mean {a['area_weighted_mean']:+.2f} %"
+        f"  |change|: mean {a.abs_mean:.2f} %, rms {a.rms:.2f} %; "
+        f"area-weighted mean {a.area_weighted_mean:+.2f} %"
     )
     lines.append(
-        f"  as a size (ECD ~ sqrt(area)): min {e['min']:+.2f} %, "
-        f"mean {e['mean']:+.2f} %, median {e['median']:+.2f} %, max {e['max']:+.2f} %"
+        f"  as a size (ECD ~ sqrt(area)): min {e.min:+.2f} %, "
+        f"mean {e.mean:+.2f} %, median {e.median:+.2f} %, max {e.max:+.2f} %"
     )
-    tot = 100.0 * (res["mesh_total"] - res["raster_total"]) / res["raster_total"]
+    tot = 100.0 * (res.mesh_total - res.raster_total) / res.raster_total
     lines.append(
-        f"  total meshed area {res['mesh_total']:.6g} vs rastered "
-        f"{res['raster_total']:.6g} ({tot:+.3f} %); "
-        f"displaced area {100 * res['displaced']:.2f} % "
+        f"  total meshed area {res.mesh_total:.6g} vs rastered "
+        f"{res.raster_total:.6g} ({tot:+.3f} %); "
+        f"displaced area {100 * res.displaced:.2f} % "
         "(meshed area lying over a different raster cell)"
     )
     return lines
 
 
-def write_csv(path, res, log=print):
+def write_csv(path, res: AreaChange, log=print):
     with open(path, "w") as fh:
         fh.write(
             "cell_id,n_voxels,area_raster,area_mesh,delta_area_pct,delta_ecd_pct\n"
         )
-        for k in range(len(res["a_raster"])):
+        for k in range(len(res.a_raster)):
             fh.write(
-                f"{k + 1},{int(res['npx'][k])},{res['a_raster'][k]:.8g},"
-                f"{res['a_mesh'][k]:.8g},{res['delta'][k]:.6g},"
-                f"{res['delta_ecd'][k]:.6g}\n"
+                f"{k + 1},{int(res.npx[k])},{res.a_raster[k]:.8g},"
+                f"{res.a_mesh[k]:.8g},{res.delta[k]:.6g},"
+                f"{res.delta_ecd[k]:.6g}\n"
             )
     if log:
         log(f"  wrote {path}")
     return path
 
 
-def write_png(path, res, unit="um", dpi=150, log=print):
+def write_png(path, res: AreaChange, unit="um", dpi=150, log=print):
     """The grains coloured by their area change, next to its distribution."""
     plt = use_agg()
     plt.rcParams.update({"font.size": 15, "axes.titlesize": 15})
 
-    cells, (vx, vy) = res["cells"], res["vox"]
+    cells, (vx, vy) = res.cells, res.vox
     ny, nx = cells.shape
-    delta = res["delta"]
+    delta = res.delta
     painted = np.full(cells.shape, np.nan)
     m = cells > 0
     painted[m] = delta[cells[m] - 1]
@@ -259,7 +343,7 @@ def write_png(path, res, unit="um", dpi=150, log=print):
     scale_bar_ax(ax, nx * vx, unit)
 
     ax = axes[1]
-    a = res["area"]
+    a = res.area
     ax.hist(delta[np.isfinite(delta)], bins=40, color="0.35")
     ax.axvline(0, color="k", lw=1)
     ax.axvline(
@@ -267,12 +351,12 @@ def write_png(path, res, unit="um", dpi=150, log=print):
         color="tab:blue",
         ls="--",
         lw=2,
-        label=f"median {a['median']:+.2f} %",
+        label=f"median {a.median:+.2f} %",
     )
-    ax.axvline(a["mean"], color="tab:red", lw=2, label=f"mean {a['mean']:+.2f} %")
+    ax.axvline(a["mean"], color="tab:red", lw=2, label=f"mean {a.mean:+.2f} %")
     ax.set_xlabel("area change (%)")
     ax.set_ylabel("grains")
-    ax.set_title(f"min {a['min']:+.2f} %, max {a['max']:+.2f} % over {a['n']} grains")
+    ax.set_title(f"min {a.min:+.2f} %, max {a.max:+.2f} % over {a.n} grains")
     ax.legend(fontsize=12)
 
     fig.savefig(path, dpi=dpi)
@@ -282,26 +366,25 @@ def write_png(path, res, unit="um", dpi=150, log=print):
     return path
 
 
-def measure(
-    tesr, msh4, csv=None, png=None, unit="um", dpi=150, allow_mismatch=False, log=print
-):
+def measure(tesr, msh4, options: AreaReportOptions | None = None, log=print):
     """Measure, report, and optionally write the table and the picture.
 
-    Returns the result dict. Raises ValueError when a mesh face does not sit on
-    the raster cell of the same id, unless `allow_mismatch`: every per-grain
-    quantity downstream is indexed by face id, so continuing past that would
-    attach the areas -- and the transport driver's theta -- to the wrong
-    grains.
+    Returns the :class:`AreaChange`. Raises ValueError when a mesh face does not
+    sit on the raster cell of the same id, unless ``options.allow_mismatch``:
+    every per-grain quantity downstream is indexed by face id, so continuing
+    past that would attach the areas -- and the transport driver's theta -- to
+    the wrong grains.
     """
-    res = area_change(tesr, msh4, allow_mismatch=allow_mismatch)
+    opt = options or AreaReportOptions()
+    res = area_change(tesr, msh4, allow_mismatch=opt.allow_mismatch)
     lines = format_report(res)
     if log:
         for line in lines:
             log("  " + line)
-    if "delta" not in res:
+    if not res.comparable:
         raise ValueError("\n".join(lines))
-    if csv:
-        write_csv(csv, res, log=log)
-    if png:
-        write_png(png, res, unit=unit, dpi=dpi, log=log)
+    if opt.csv:
+        write_csv(opt.csv, res, log=log)
+    if opt.png:
+        write_png(opt.png, res, unit=opt.unit, dpi=opt.dpi, log=log)
     return res

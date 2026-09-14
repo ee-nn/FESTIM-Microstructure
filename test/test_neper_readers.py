@@ -27,11 +27,9 @@ def test_statfile_rejects_drifted_keys(tmp_path):
 
 
 def test_network_mask_and_junction_depth(tmp_path):
-    micro = NeperMicrostructure(_write(tmp_path), theta_min=10.0)
-    assert list(micro.network_face_ids) == [
-        2
-    ]  # face 1 is low-angle, face 3 on the wall
-    assert np.isclose(micro.network_area, 0.3)
+    micro = NeperMicrostructure.from_base(_write(tmp_path), theta_min=10.0)
+    assert list(micro.network_ids) == [2]  # face 1 is low-angle, face 3 on the wall
+    assert np.isclose(micro.network_measure, 0.3)
     assert micro.triple_lines == (1, 0.4)
     assert micro.quadruple_points == 1
     # face 2 is the only network face; it does not reach z = 1, so no boundary

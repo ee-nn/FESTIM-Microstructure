@@ -75,7 +75,7 @@ def main(s=Setup()):
     base = run_ebsd_pipeline(s.ebsd, workdir=s.workdir, force=s.force)
     LX, LY = read_extent(base, unit)
     mesh, cell_tags, facet_tags = read_mesh(base, gdim=2, unit=unit)
-    micro = EbsdMicrostructure(
+    micro = EbsdMicrostructure.from_mesh(
         base, mesh, cell_tags, facet_tags, (LX, LY), theta_min=s.ebsd.theta_min
     )
     micro.check_orientations()
@@ -85,7 +85,7 @@ def main(s=Setup()):
         id=ShortCircuitProblem.NETWORK_ID,
         material=F.Material(D_0=D_GB, E_D=0.0),
         facet_tags=facet_tags,
-        entity_ids=micro.network_edge_ids,
+        entity_ids=micro.network_ids,
         dim=1,
     )
     params = ShortCircuitParams(
@@ -113,7 +113,7 @@ def main(s=Setup()):
 
     # what we built
     print(micro.report())
-    len_mesh, len_tess = submesh_measure(network), micro.network_length
+    len_mesh, len_tess = submesh_measure(network), micro.network_measure
     n_tri = mesh.topology.index_map(2).size_global
     print(f"  mesh                            : {n_tri} triangles")
     print(f"  network captured by the submesh : {100 * len_mesh / len_tess:.2f} %")

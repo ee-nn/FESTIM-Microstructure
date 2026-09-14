@@ -21,6 +21,7 @@ __all__ = [
     "VER_KEYS",
     "NeperMicrostructure",
     "NeperOptions",
+    "NeperRun",
     "StatFile",
     "TesrMeshOptions",
     "find_binary",
@@ -37,6 +38,36 @@ VER_KEYS = ("domtype", "edgenb")
 
 
 # Binaries.
+
+
+@dataclass
+class NeperRun:
+    """Where a Neper invocation writes, and which binaries it uses.
+
+    Separated from :class:`NeperOptions` and :class:`TesrMeshOptions` because
+    it answers a different question: those two say *what* to compute, this says
+    *where to put it*. Both entry points took the same five loose arguments for
+    it.
+    """
+
+    stem: str = "poly"
+    workdir: str = "results"
+    neper_bin: str | None = None
+    gmsh_bin: str | None = None
+    force: bool = False
+
+    @property
+    def base(self) -> Path:
+        """The extension-free output path, with its directory created."""
+        base = (Path(self.workdir) / self.stem).resolve()
+        base.parent.mkdir(parents=True, exist_ok=True)
+        return base
+
+    def binaries(self):
+        """Resolve ``(neper, gmsh)`` and the environment their children need."""
+        neper = find_binary("neper", self.neper_bin, "FM_NEPER_BIN")
+        gmsh = find_binary("gmsh", self.gmsh_bin, "FM_GMSH_BIN")
+        return neper, gmsh, subprocess_env(neper, gmsh)
 
 
 def run_interruptible(cmd, cwd=None, env=None):
@@ -127,16 +158,7 @@ class NeperOptions:
             )
 
 
-def run_neper(
-    n,
-    seed=1,
-    stem="poly",
-    workdir="results",
-    options=None,
-    neper_bin=None,
-    gmsh_bin=None,
-    force=False,
-):
+def run_neper(n, seed=1, options=None, run=None):
     """Generate and mesh a polycrystal. Returns the base path (no extension).
 
     ``-T`` and ``-M`` are two calls rather than one so that the ``.tess`` is a
@@ -148,16 +170,15 @@ def run_neper(
     """
     opt = options or NeperOptions()
     opt.validate()
-    base = (Path(workdir) / stem).resolve()
-    base.parent.mkdir(parents=True, exist_ok=True)
+    run = run or NeperRun()
+    stem, force = run.stem, run.force
+    base = run.base
     print(f"neper outputs -> {base.parent}")
     if base.with_suffix(".msh4").exists() and not force:
         print(f"  reusing {base.name}.msh4")
         return base
 
-    neper_bin = find_binary("neper", neper_bin, "FM_NEPER_BIN")
-    gmsh_bin = find_binary("gmsh", gmsh_bin, "FM_GMSH_BIN")
-    env = subprocess_env(neper_bin, gmsh_bin)
+    neper_bin, gmsh_bin, env = run.binaries()
 
     morpho = opt.morpho
     if opt.rsel is not None:
@@ -266,26 +287,43 @@ class StatFile:
         return np.flatnonzero(mask).astype(np.int32) + 1
 
 
+@dataclass
 class NeperMicrostructure:
     """The tessellation's own description of itself, read back from the stats.
 
     Every number here is Neper's, computed on the exact topology rather than
-    reconstructed from the geometry.
+    reconstructed from the geometry. Implements
+    :class:`~festim_microstructure.microstructure.BoundaryNetwork`.
 
-    Args:
-        base: output of :func:`run_neper` (path without extension).
-        theta_min: keep only boundaries above this disorientation (degrees).
-        options: the :class:`NeperOptions` the stats were written with (for the
-            key tuples).
+    Build it with :meth:`from_base`; the constructor only stores already-read
+    stat files, so the class can be instantiated in a test without three files
+    on disk.
     """
 
-    def __init__(self, base, theta_min=0.0, options=None):
+    base: Path
+    faces: StatFile
+    edges: StatFile
+    vertices: StatFile
+    theta_min: float = 0.0
+
+    @classmethod
+    def from_base(cls, base, theta_min=0.0, options=None):
+        """Read the three stat files ``run_neper`` wrote.
+
+        Args:
+            base: output of :func:`run_neper` (path without extension).
+            theta_min: keep only boundaries above this disorientation (degrees).
+            options: the :class:`NeperOptions` the stats were written with (for
+                the key tuples).
+        """
         opt = options or NeperOptions()
-        self.base = Path(base)
-        self.theta_min = theta_min
-        self.faces = StatFile(str(base) + ".stface", opt.face_keys)
-        self.edges = StatFile(str(base) + ".stedge", opt.edge_keys)
-        self.vertices = StatFile(str(base) + ".stver", opt.ver_keys)
+        return cls(
+            base=Path(base),
+            faces=StatFile(str(base) + ".stface", opt.face_keys),
+            edges=StatFile(str(base) + ".stedge", opt.edge_keys),
+            vertices=StatFile(str(base) + ".stver", opt.ver_keys),
+            theta_min=theta_min,
+        )
 
     # `domface` is the id of the domain face a tessellation face lies on, and
     # -1 when it lies on none. A face can only meet the boundary by lying on a
@@ -300,10 +338,13 @@ class NeperMicrostructure:
         return self.interior_mask & (self.faces["theta"] > self.theta_min)
 
     @property
-    def network_face_ids(self):
+    def network_ids(self):
+        """1-based ids of the faces in the network."""
         return StatFile.ids(self.network_mask)
 
-    network_entity_ids = network_face_ids
+    #: Dimension-specific spellings, kept so existing callers keep working.
+    network_face_ids = network_ids
+    network_entity_ids = network_ids
 
     @property
     def theta(self):
@@ -311,8 +352,12 @@ class NeperMicrostructure:
         return self.faces["theta"]
 
     @property
-    def network_area(self):
+    def network_measure(self):
+        """Total area of the boundaries in the network."""
         return float(self.faces["area"][self.network_mask].sum())
+
+    #: The 3D spelling of :attr:`network_measure`.
+    network_area = network_measure
 
     def junction_only_below(self, z_top, tol=1e-9):
         """Deepest point reached by a boundary that touches the charged face.
@@ -357,7 +402,7 @@ class NeperMicrostructure:
         lines += [
             f"  triple lines                    : {n_tl} (total length {len_tl:.3f})",
             f"  quadruple points                : {self.quadruple_points}",
-            f"  boundary area                   : {self.network_area:.4f}",
+            f"  boundary area                   : {self.network_measure:.4f}",
         ]
         return "\n".join(lines)
 
@@ -398,15 +443,7 @@ def _need(path, force):
     return False
 
 
-def mesh_tesr(
-    tesr,
-    stem="poly",
-    workdir="results",
-    options=None,
-    neper_bin=None,
-    gmsh_bin=None,
-    force=False,
-):
+def mesh_tesr(tesr, options=None, run=None):
     """A single EBSD map -> triangular mesh conforming to the raster's own
     grain boundaries. Returns the base path (no extension).
 
@@ -427,12 +464,13 @@ def mesh_tesr(
     caller converts the mesh to metres after reading it.
 
     This replaces the former ``ebsd_to_mesh.sh``; each stage is cached on its
-    output file unless ``force``.
+    output file unless ``run.force``.
     """
     opt = options or TesrMeshOptions()
-    base = (Path(workdir) / stem).resolve()
+    run = run or NeperRun()
+    stem, force = run.stem, run.force
+    base = run.base
     wd = base.parent
-    wd.mkdir(parents=True, exist_ok=True)
     tesr = Path(tesr).resolve()
     if not tesr.is_file():
         raise FileNotFoundError(
@@ -445,9 +483,7 @@ def mesh_tesr(
             "argument is a structured field, so a path with whitespace arrives "
             "as several unusable fragments."
         )
-    neper_bin = find_binary("neper", neper_bin, "FM_NEPER_BIN")
-    gmsh_bin = find_binary("gmsh", gmsh_bin, "FM_GMSH_BIN")
-    env = subprocess_env(neper_bin, gmsh_bin)
+    neper_bin, gmsh_bin, env = run.binaries()
     tmp = wd / "tmp"
     tmp.mkdir(exist_ok=True)
 

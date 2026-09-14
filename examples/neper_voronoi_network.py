@@ -22,6 +22,7 @@ import numpy as np
 from festim_microstructure.meshing.neper import (
     NeperMicrostructure,
     NeperOptions,
+    NeperRun,
     read_mesh,
     run_neper,
 )
@@ -66,16 +67,21 @@ def main(s=Setup()):
     L, D_B, D_GB = s.L, s.D_B, s.D_GB
 
     base = run_neper(
-        s.n_cells, s.seed, s.stem, s.workdir, options=s.neper, force=s.force
+        s.n_cells,
+        s.seed,
+        options=s.neper,
+        run=NeperRun(stem=s.stem, workdir=str(s.workdir), force=s.force),
     )
-    micro = NeperMicrostructure(base, theta_min=s.theta_min, options=s.neper)
+    micro = NeperMicrostructure.from_base(
+        base, theta_min=s.theta_min, options=s.neper
+    )
     mesh, cell_tags, facet_tags = read_mesh(base, gdim=3)
 
     network = TaggedGrainBoundaryNetwork(
         id=ShortCircuitProblem.NETWORK_ID,
         material=F.Material(D_0=D_GB, E_D=0.0),
         facet_tags=facet_tags,
-        entity_ids=micro.network_face_ids,
+        entity_ids=micro.network_ids,
         dim=2,
     )
     params = ShortCircuitParams(
@@ -105,7 +111,7 @@ def main(s=Setup()):
 
     # what we built
     print(micro.report(n_cells=s.n_cells))
-    area_mesh, area_tess = submesh_measure(network), micro.network_area
+    area_mesh, area_tess = submesh_measure(network), micro.network_measure
     n_comp = component_count(network)
     n_cells = mesh.topology.index_map(3).size_global
     print(f"  mesh                            : {n_cells} cells")

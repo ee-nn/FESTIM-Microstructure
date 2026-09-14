@@ -35,6 +35,7 @@ import numpy as np
 
 from festim_microstructure.meshing.voronoi import (
     GB_TAG_3D,
+    MeshSizing,
     build_mesh_3d,
     connected_components_3d,
     near_faces,
@@ -83,7 +84,9 @@ def main(s=Setup()):
     L, D_B, D_GB = s.L, s.D_B, s.D_GB
 
     faces = voronoi_faces(s.n_seeds, L, np.random.default_rng(s.seed))
-    mesh, facet_tags = build_mesh_3d(faces, L, s.h_gb, s.h_bulk)
+    mesh, facet_tags = build_mesh_3d(
+        faces, L, MeshSizing(h_gb=s.h_gb, h_bulk=s.h_bulk)
+    )
     material = F.Material(D_0=D_GB, E_D=0.0)
     if s.locate_geometrically:
         network = GrainBoundaryNetwork(

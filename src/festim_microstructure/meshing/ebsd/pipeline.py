@@ -12,8 +12,8 @@ from mpi4py import MPI
 import dolfinx
 import numpy as np
 
-from ..neper import TesrMeshOptions, mesh_tesr
-from .grain_area_change import measure
+from ..neper import NeperRun, TesrMeshOptions, mesh_tesr
+from .grain_area_change import AreaReportOptions, measure
 from .mesh_overlay import draw_raster, overlay, read_tesr, use_agg
 from .micrograph import scale_bar_ax
 from .orientation import cubic_disorientation_angle, qconj, qmul, rodrigues_to_quat
@@ -62,12 +62,14 @@ def run_ebsd_pipeline(
     """Mesh an EBSD raster and return the extension-free output path."""
     base = mesh_tesr(
         options.tesr,
-        stem=options.stem,
-        workdir=workdir,
         options=options.mesh,
-        neper_bin=neper_bin,
-        gmsh_bin=gmsh_bin,
-        force=force,
+        run=NeperRun(
+            stem=options.stem,
+            workdir=workdir,
+            neper_bin=neper_bin,
+            gmsh_bin=gmsh_bin,
+            force=force,
+        ),
     )
     mesh_diagnostics(base, unit_name(options.unit), check_images=options.check_images)
     return base
@@ -93,9 +95,11 @@ def mesh_diagnostics(base, unit_name="um", check_images=True):
     measure(
         tesr,
         msh4,
-        csv=f"{base}-areachange.csv",
-        png=str(work / "check-area.png") if check_images else None,
-        unit=unit_name,
+        AreaReportOptions(
+            csv=f"{base}-areachange.csv",
+            png=str(work / "check-area.png") if check_images else None,
+            unit=unit_name,
+        ),
     )
 
 
@@ -121,25 +125,133 @@ class EdgeTable:
         return self.values[key]
 
 
+def _edge_grain_pairs(comm, facet_edge, cell_grain, f2c, n_edge):
+    """Which grains sit either side of each ``edge#`` set.
+
+    Gathered across ranks: an edge can be cut by the partition, so no single
+    rank sees both of its grains. Returns ``(pair, sides, domtype)`` in edge-id
+    order, where ``domtype < 0`` marks an interior boundary.
+    """
+    local = {}
+    for f in np.flatnonzero(facet_edge):
+        local.setdefault(int(facet_edge[f]), set()).update(
+            int(cell_grain[c]) for c in f2c.links(f)
+        )
+    grains = [set() for _ in range(n_edge + 1)]
+    for part in comm.allgather({k: sorted(v) for k, v in local.items()}):
+        for k, v in part.items():
+            grains[k].update(v)
+    sides = np.array([len(g) for g in grains[1:]])
+    if sides.min() < 1 or sides.max() > 2 or 0 in set().union(*grains[1:]):
+        bad = _ids((sides < 1) | (sides > 2))
+        raise RuntimeError(
+            f"edges {bad[:10]} touch {sides[bad[:10] - 1]} grains; every "
+            "edge# set must lie between two face# sets or between one "
+            "face# set and the domain. The msh4 is not a neper -M raster "
+            "mesh, or the cell tags did not survive the read."
+        )
+    pair = np.array(
+        [sorted(g) + [0] * (2 - len(g)) for g in grains[1:]], dtype=np.int32
+    )
+    return pair, sides, np.where(sides == 2, -1.0, 1.0)
+
+
+def _edge_extents(comm, mesh, facet_edge, fdim, fmap, n_edge):
+    """Length and y-range of every edge set, summed/reduced over owned facets."""
+    owned = np.arange(fmap.size_local, dtype=np.int32)
+    owned = owned[facet_edge[owned] > 0]
+    nodes = dolfinx.mesh.entities_to_geometry(mesh, fdim, owned, False)
+    x = mesh.geometry.x[nodes]  # (nf, 2, 3)
+    e = facet_edge[owned]
+    length = np.bincount(
+        e, weights=np.linalg.norm(x[:, 1] - x[:, 0], axis=1), minlength=n_edge + 1
+    )
+    ymin = np.full(n_edge + 1, np.inf)
+    ymax = np.full(n_edge + 1, -np.inf)
+    np.minimum.at(ymin, e, x[:, :, 1].min(axis=1))
+    np.maximum.at(ymax, e, x[:, :, 1].max(axis=1))
+    return (
+        _allreduce(comm, length[1:], MPI.SUM),
+        _allreduce(comm, ymin[1:], MPI.MIN),
+        _allreduce(comm, ymax[1:], MPI.MAX),
+    )
+
+
+def _edge_theta(base, n_grain, n_edge, pair, sides):
+    """Disorientation per edge from the grain orientations Neper wrote.
+
+    Line k of ``-grainori.txt`` is face k, so the file and the ``face#`` sets
+    must describe the same raster; that is checked rather than assumed.
+    """
+    ori = np.loadtxt(str(base) + "-grainori.txt", ndmin=2)
+    if ori.shape[0] != n_grain:
+        raise RuntimeError(
+            f"{base}-grainori.txt has {ori.shape[0]} lines but the mesh "
+            f"has {n_grain} face# sets; they must be the same raster"
+        )
+    q = rodrigues_to_quat(ori)
+    theta = np.zeros(n_edge)
+    inner = sides == 2
+    a, b = pair[inner, 0] - 1, pair[inner, 1] - 1
+    theta[inner] = cubic_disorientation_angle(qmul(qconj(q[a]), q[b]))
+    return ori, theta
+
+
+def _count_triple_junctions(comm, mesh, facet_edge, v2f, vmap, extent):
+    """Owned vertices where 3+ distinct edge ids meet, off the box boundary."""
+    n_v = vmap.size_local
+    verts = np.arange(n_v, dtype=np.int32)
+    xv = dolfinx.mesh.compute_midpoints(mesh, 0, verts)
+    lx, ly = extent
+    tol = 1e-9 * max(lx, ly)
+    on_box = (
+        (np.abs(xv[:, 0]) < tol)
+        | (np.abs(xv[:, 0] - lx) < tol)
+        | (np.abs(xv[:, 1]) < tol)
+        | (np.abs(xv[:, 1] - ly) < tol)
+    )
+    edgenb = np.fromiter(
+        (len(set(facet_edge[v2f.links(v)].tolist()) - {0}) for v in verts),
+        dtype=int,
+        count=n_v,
+    )
+    return comm.allreduce(int(((edgenb >= 3) & ~on_box).sum()), op=MPI.SUM)
+
+
+@dataclass
 class EbsdMicrostructure:
     """Rebuild GB topology and disorientations from Neper's EBSD mesh.
 
     Mesh ``edge#`` sets provide boundaries and ``face#`` sets retain raster cell
     ids. Junction counts are exact in serial and lower bounds in parallel.
+    Implements :class:`~festim_microstructure.microstructure.BoundaryNetwork`.
+
+    Build it with :meth:`from_mesh`; the constructor only stores the arrays that
+    reconstruction produced, so the class can be built in a test without a mesh,
+    a communicator or an orientation file.
     """
 
-    def __init__(
-        self, base, mesh, cell_tags, facet_tags, extent, theta_min=10.0, crysym="cubic"
+    base: Path
+    extent: tuple
+    n_grains: int
+    ori: np.ndarray  #: (n_grain, 3) Rodrigues, one per raster cell
+    facet_edge: np.ndarray  #: edge id per local facet, 0 off the network
+    edges: "EdgeTable"
+    triple_junctions: int
+    surface_edges: int
+    theta_min: float = 10.0
+
+    @classmethod
+    def from_mesh(
+        cls, base, mesh, cell_tags, facet_tags, extent, theta_min=10.0, crysym="cubic"
     ):
+        """Reconstruct the topology from a mesh ``neper -M`` wrote."""
         if crysym != "cubic":
             raise NotImplementedError(
                 "theta is computed with the closed-form cubic disorientation "
                 f"from orientation.py; crysym = {crysym!r} needs a general "
                 "symmetry-operator search"
             )
-        self.base = Path(base)
-        self.extent = extent
-        self.theta_min = theta_min
         comm = mesh.comm
         top = mesh.topology
         tdim = top.dim
@@ -158,96 +270,36 @@ class EbsdMicrostructure:
         n_grain = comm.allreduce(int(cell_grain.max(initial=0)), op=MPI.MAX)
         if n_edge == 0 or n_grain == 0:
             raise RuntimeError("the mesh carries no edge# / face# element sets")
-        self.facet_edge = facet_edge
-        self.n_grains = n_grain
 
-        # grains on either side of each edge
-        local = {}
-        for f in np.flatnonzero(facet_edge):
-            local.setdefault(int(facet_edge[f]), set()).update(
-                int(cell_grain[c]) for c in f2c.links(f)
-            )
-        grains = [set() for _ in range(n_edge + 1)]
-        for part in comm.allgather({k: sorted(v) for k, v in local.items()}):
-            for k, v in part.items():
-                grains[k].update(v)
-        sides = np.array([len(g) for g in grains[1:]])
-        if sides.min() < 1 or sides.max() > 2 or 0 in set().union(*grains[1:]):
-            bad = _ids((sides < 1) | (sides > 2))
-            raise RuntimeError(
-                f"edges {bad[:10]} touch {sides[bad[:10] - 1]} grains; every "
-                "edge# set must lie between two face# sets or between one "
-                "face# set and the domain. The msh4 is not a neper -M raster "
-                "mesh, or the cell tags did not survive the read."
-            )
-        pair = np.array(
-            [sorted(g) + [0] * (2 - len(g)) for g in grains[1:]], dtype=np.int32
+        pair, sides, domtype = _edge_grain_pairs(
+            comm, facet_edge, cell_grain, f2c, n_edge
         )
-        domtype = np.where(sides == 2, -1.0, 1.0)
+        length, ymin, ymax = _edge_extents(comm, mesh, facet_edge, fdim, fmap, n_edge)
+        ori, theta = _edge_theta(base, n_grain, n_edge, pair, sides)
 
-        # length, ymin, ymax over owned facets, then reduced
-        owned = np.arange(fmap.size_local, dtype=np.int32)
-        owned = owned[facet_edge[owned] > 0]
-        nodes = dolfinx.mesh.entities_to_geometry(mesh, fdim, owned, False)
-        x = mesh.geometry.x[nodes]  # (nf, 2, 3)
-        e = facet_edge[owned]
-        length = np.bincount(
-            e, weights=np.linalg.norm(x[:, 1] - x[:, 0], axis=1), minlength=n_edge + 1
+        return cls(
+            base=Path(base),
+            extent=extent,
+            n_grains=n_grain,
+            ori=ori,
+            facet_edge=facet_edge,
+            edges=EdgeTable(
+                {
+                    "domtype": domtype,
+                    "theta": theta,
+                    "length": length,
+                    "ymin": ymin,
+                    "ymax": ymax,
+                    "grain_a": pair[:, 0].astype(float),
+                    "grain_b": pair[:, 1].astype(float),
+                }
+            ),
+            triple_junctions=_count_triple_junctions(
+                comm, mesh, facet_edge, v2f, vmap, extent
+            ),
+            surface_edges=int((sides == 1).sum()),
+            theta_min=theta_min,
         )
-        ymin = np.full(n_edge + 1, np.inf)
-        ymax = np.full(n_edge + 1, -np.inf)
-        np.minimum.at(ymin, e, x[:, :, 1].min(axis=1))
-        np.maximum.at(ymax, e, x[:, :, 1].max(axis=1))
-        length = _allreduce(comm, length[1:], MPI.SUM)
-        ymin = _allreduce(comm, ymin[1:], MPI.MIN)
-        ymax = _allreduce(comm, ymax[1:], MPI.MAX)
-
-        # theta from the grain orientations, line k of the file = face k
-        self.ori = np.loadtxt(str(base) + "-grainori.txt", ndmin=2)
-        if self.ori.shape[0] != n_grain:
-            raise RuntimeError(
-                f"{base}-grainori.txt has {self.ori.shape[0]} lines but the mesh "
-                f"has {n_grain} face# sets; they must be the same raster"
-            )
-        q = rodrigues_to_quat(self.ori)
-        theta = np.zeros(n_edge)
-        inner = sides == 2
-        a, b = pair[inner, 0] - 1, pair[inner, 1] - 1
-        theta[inner] = cubic_disorientation_angle(qmul(qconj(q[a]), q[b]))
-
-        self.edges = EdgeTable(
-            {
-                "domtype": domtype,
-                "theta": theta,
-                "length": length,
-                "ymin": ymin,
-                "ymax": ymax,
-                "grain_a": pair[:, 0].astype(float),
-                "grain_b": pair[:, 1].astype(float),
-            }
-        )
-
-        # junctions: owned vertices where 3+ distinct edge ids meet, off the box
-        n_v = vmap.size_local
-        verts = np.arange(n_v, dtype=np.int32)
-        xv = dolfinx.mesh.compute_midpoints(mesh, 0, verts)
-        lx, ly = extent
-        tol = 1e-9 * max(lx, ly)
-        on_box = (
-            (np.abs(xv[:, 0]) < tol)
-            | (np.abs(xv[:, 0] - lx) < tol)
-            | (np.abs(xv[:, 1]) < tol)
-            | (np.abs(xv[:, 1] - ly) < tol)
-        )
-        edgenb = np.fromiter(
-            (len(set(facet_edge[v2f.links(v)].tolist()) - {0}) for v in verts),
-            dtype=int,
-            count=n_v,
-        )
-        self.triple_junctions = comm.allreduce(
-            int(((edgenb >= 3) & ~on_box).sum()), op=MPI.SUM
-        )
-        self.surface_edges = int((sides == 1).sum())
 
     @property
     def interior_mask(self):
@@ -258,10 +310,13 @@ class EbsdMicrostructure:
         return self.interior_mask & (self.edges["theta"] > self.theta_min)
 
     @property
-    def network_edge_ids(self):
+    def network_ids(self):
+        """1-based ids of the edges in the network."""
         return _ids(self.network_mask)
 
-    network_entity_ids = network_edge_ids
+    #: Dimension-specific spellings, kept so existing callers keep working.
+    network_edge_ids = network_ids
+    network_entity_ids = network_ids
 
     @property
     def theta(self):
@@ -269,8 +324,12 @@ class EbsdMicrostructure:
         return self.edges["theta"]
 
     @property
-    def network_length(self):
+    def network_measure(self):
+        """Total length of the boundaries in the network."""
         return float(self.edges["length"][self.network_mask].sum())
+
+    #: The 2D spelling of :attr:`network_measure`.
+    network_length = network_measure
 
     def junction_only_below(self, y_top, tol=1e-12):
         """Deepest point reached by a boundary that touches the charged edge.
@@ -330,7 +389,7 @@ class EbsdMicrostructure:
             )
         lines += [
             f"  triple junctions                : {self.triple_junctions}",
-            f"  boundary length                 : {self.network_length:.4g}",
+            f"  boundary length                 : {self.network_measure:.4g}",
         ]
         return "\n".join(lines)
 
