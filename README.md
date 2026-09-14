@@ -21,7 +21,7 @@ import festim_microstructure as fm
 | --- | --- |
 | Microstructure generation | 2D and 3D Voronoi polycrystals via Gmsh; Neper-backed tessellations |
 | EBSD import | Conversion of EBSD orientation maps into conforming grain meshes |
-| Grain-boundary models | Fisher-type short-circuit diffusion; grain-boundary homogenisation |
+| Grain-boundary models | Short-circuit diffusion with one lattice field per grain; grain-boundary homogenisation |
 | Benchmarks | Diaz-Rodriguez baseline, dimensional and non-dimensionalised |
 
 ## Requirements
@@ -178,7 +178,7 @@ FESTIM-Microstructure/
 │   ├── _lazy.py                # import support for optional solver dependencies
 │   ├── _binaries.py            # Neper, Gmsh and POV-Ray executable discovery
 │   ├── check.py                # fm-check environment diagnostic
-│   ├── microstructure.py       # microstructure protocols
+│   ├── microstructure.py       # microstructure protocols, TaggedPolycrystal
 │   ├── materials.py            # Physics and diffusivity fields/materials
 │   ├── plotting.py             # raster colours, scale bars, image helpers
 │   ├── formats/                # file I/O
@@ -203,15 +203,13 @@ FESTIM-Microstructure/
 │   │   ├── neper.py            # subprocess driver, options, NeperMicrostructure
 │   │   ├── ebsd.py
 │   │   └── diagnostics.py
-│   ├── models/
-│   │   ├── fisher.py
-│   │   └── resolved.py         # build, MicroModel, SolveOptions
+│   ├── resolved.py             # build, MicroModel, SolveOptions
 │   ├── fem/
 │   │   ├── solvers.py
 │   │   └── subdomains.py
 │   └── exports/
-│       ├── measures.py         # single-field inventory and submesh measures
-│       └── averages.py         # resolved-model averages, inventory, fields
+│       ├── measures.py         # submesh measures and network topology checks
+│       └── averages.py         # averages, inventory, fields, VTX output
 ├── examples/                   # runnable workflows; not part of the library API
 │   ├── gb_homogenisation.py    # RVE identification study
 │   ├── gb_validation.py        # validation of the RVE result
@@ -237,6 +235,12 @@ import festim_microstructure as fm
 micro = fm.VoronoiMicrostructure.create(size=100e-6, n_seeds=64)
 model = fm.build(micro, fm.Physics(T=600.0), bcs).run()
 ```
+
+There is one transport model. Every grain carries a lattice field of its own and
+exchanges with a single codimension-one boundary network at the rate `k`; the
+classical Fisher picture, one continuous lattice field for the whole
+polycrystal, is the limit of it in which the boundary offers no resistance to
+permeation, reached when `Physics.interface_resistance_ratio` is small.
 
 `dir(fm)` lists the curated top-level API. Geometry and network names load
 eagerly with NumPy and SciPy; solver-dependent names such as `fm.build` and
@@ -265,8 +269,9 @@ and specialised helpers under their modules:
 ```python
 import festim_microstructure as fm
 
-fm.ShortCircuitParams
-fm.ShortCircuitProblem
+fm.Physics
+fm.SolveOptions
+fm.TaggedPolycrystal
 fm.GrainBoundaryNetwork
 fm.voronoi.build_mesh
 fm.voronoi.near_segments

@@ -1,5 +1,7 @@
 """End-to-end smoke test of the short-circuit model on a tiny 2D Voronoi cell."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from conftest import requires_fenics
@@ -9,41 +11,30 @@ pytestmark = requires_fenics
 
 @pytest.mark.fenics
 def test_fast_boundaries_increase_inventory():
-    import festim as F
+    from festim_microstructure.exports.averages import inventory
+    from festim_microstructure.materials import Physics
+    from festim_microstructure.resolved import SolveOptions, build
+    from festim_microstructure.voronoi import VoronoiMicrostructure
 
-    from festim_microstructure.exports.measures import inventory
-    from festim_microstructure.fem.subdomains import GrainBoundaryNetwork
-    from festim_microstructure.models.fisher import (
-        ShortCircuitParams,
-        ShortCircuitProblem,
+    micro = VoronoiMicrostructure.create(
+        size=1.0, n_seeds=6, seed=0, cells_per_grain=8, bulk_coarsening=4.0
     )
-    from festim_microstructure.voronoi import (
-        MeshSizing,
-        build_mesh,
-        near_segments,
-        snap_segments,
-        voronoi_segments,
+    # E_D = 0 everywhere, so D_bulk and D_gb are the prefactors as written.
+    physics = Physics(
+        D_0_bulk=1e-3,
+        E_D_bulk=0.0,
+        D_0_gb=30.0,
+        E_D_gb=0.0,
+        delta=1e-3,
+        k_exchange=1.0,
+        crystal_anisotropy=1.0,
     )
+    bcs = [("charged", lambda x: np.isclose(x[1], micro.size), 1.0)]
+    solve = SolveOptions(transient=True, final_time=0.2, stepsize=0.02)
 
-    L, h_gb = 1.0, 0.05
-    segments = snap_segments(
-        voronoi_segments(6, L, np.random.default_rng(0)), 0.1 * h_gb, L
-    )
-    mesh, _, _ = build_mesh(segments, L, MeshSizing(h_gb=h_gb, h_bulk=4 * h_gb))
-    network = GrainBoundaryNetwork(
-        id=2,
-        material=F.Material(D_0=1.0, E_D=0.0),
-        locator=lambda x: near_segments(x, segments, 0.05 * h_gb),
-        dim=1,
-    )
-    params = ShortCircuitParams(
-        D_b=1e-3, D_gb=30.0, delta=1e-3, k_exchange=1.0, t_end=0.2, dt=0.02
-    )
-    problem = ShortCircuitProblem(mesh, network, lambda x: np.isclose(x[1], L), params)
-    _, cb, cgb = problem.solve(params.D_gb)
-    fast = inventory(cb, cgb, params.delta)
-    _, cb, cgb = problem.solve(params.D_b)
-    ref = inventory(cb, cgb, params.delta)
+    fast = inventory(build(micro, physics, bcs, solve=solve).run())
+    slow = replace(physics, D_0_gb=physics.D_0_bulk, E_D_gb=0.0)
+    ref = inventory(build(micro, slow, bcs, solve=solve).run())
     assert fast > ref
 
 

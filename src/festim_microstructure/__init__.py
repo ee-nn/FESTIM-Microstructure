@@ -15,6 +15,7 @@ from .meshing.neper import TesrMeshOptions as TesrMeshOptions
 from .microstructure import BoundaryNetwork as BoundaryNetwork
 from .microstructure import MeshedMicrostructure as MeshedMicrostructure
 from .microstructure import Microstructure as Microstructure
+from .microstructure import TaggedPolycrystal as TaggedPolycrystal
 from .voronoi import MeshSizing as MeshSizing
 from .voronoi import VoronoiMicrostructure as VoronoiMicrostructure
 from .voronoi import VoronoiMicrostructure3D as VoronoiMicrostructure3D
@@ -28,8 +29,8 @@ if TYPE_CHECKING:
     from . import materials as materials
     from . import meshing as meshing
     from . import microstructure as microstructure
-    from . import models as models
     from . import plotting as plotting
+    from . import resolved as resolved
     from . import voronoi as voronoi
     from .fem.subdomains import Grain as Grain
     from .fem.subdomains import GrainBoundaryNetwork as GrainBoundaryNetwork
@@ -38,11 +39,9 @@ if TYPE_CHECKING:
     from .materials import Physics as Physics
     from .meshing.ebsd import EbsdMicrostructure as EbsdMicrostructure
     from .meshing.ebsd import EbsdOptions as EbsdOptions
-    from .models.fisher import ShortCircuitParams as ShortCircuitParams
-    from .models.fisher import ShortCircuitProblem as ShortCircuitProblem
-    from .models.resolved import MicroModel as MicroModel
-    from .models.resolved import SolveOptions as SolveOptions
-    from .models.resolved import build as build
+    from .resolved import MicroModel as MicroModel
+    from .resolved import SolveOptions as SolveOptions
+    from .resolved import build as build
 
 try:
     from ._version import __version__
@@ -58,19 +57,17 @@ _SUBMODULES = (
     "materials",
     "meshing",
     "microstructure",
-    "models",
     "plotting",
+    "resolved",
     "voronoi",
 )
 _NAMES = {
     "EbsdMicrostructure": ".meshing.ebsd",
     "EbsdOptions": ".meshing.ebsd",
-    "MicroModel": ".models.resolved",
+    "MicroModel": ".resolved",
     "Physics": ".materials",
-    "ShortCircuitParams": ".models.fisher",
-    "ShortCircuitProblem": ".models.fisher",
-    "SolveOptions": ".models.resolved",
-    "build": ".models.resolved",
+    "SolveOptions": ".resolved",
+    "build": ".resolved",
     "Grain": ".fem.subdomains",
     "GrainBoundaryNetwork": ".fem.subdomains",
     "GrainSurface": ".fem.subdomains",
@@ -85,6 +82,7 @@ __getattr__, __dir__, __all__ = lazy_namespace(
         "BoundaryNetwork",
         "MeshedMicrostructure",
         "Microstructure",
+        "TaggedPolycrystal",
         "NeperMicrostructure",
         "NeperOptions",
         "NeperRun",

@@ -8,7 +8,6 @@ import argparse
 import json
 from dataclasses import asdict, dataclass
 
-import dolfinx
 import numpy as np
 
 import festim_microstructure as fm
@@ -123,7 +122,9 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
         hart = hart_bound(model)
 
         if export_prefix is not None:
-            _export(model, f"{export_prefix}_{'xy'[j]}")
+            # the grains as one discontinuous parent field (so the jumps show),
+            # and the network as a line dataset
+            fm.exports.averages.write_vtx(model, f"{export_prefix}_{'xy'[j]}")
         if verbose:
             print(f"    solved cell problem G = e_{'xy'[j]}", flush=True)
 
@@ -143,19 +144,6 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
         k_exchange=physics.k_exchange,
         equilibrium_error=eq_error,
     )
-
-
-def _export(model, prefix):
-    """Write the corrector fields: the grains as one discontinuous parent field
-    (so the jumps show), and the network as a line dataset."""
-    field, update = fm.exports.averages.parent_field(model, name="c_lattice")
-    update()
-    comm = model.micro.mesh.comm
-    with dolfinx.io.VTXWriter(comm, f"{prefix}_grains.bp", [field], "BP5") as w:
-        w.write(0.0)
-    network = model.network_solution
-    with dolfinx.io.VTXWriter(comm, f"{prefix}_network.bp", [network], "BP5") as w:
-        w.write(0.0)
 
 
 def _dump(path, results, sweep):

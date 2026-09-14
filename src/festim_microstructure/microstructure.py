@@ -4,8 +4,9 @@ Three protocols, because there are really two different things in this package
 that both get called "a microstructure":
 
 * :class:`MeshedMicrostructure` -- a mesh with one tagged subdomain per grain,
-  which is what :func:`festim_microstructure.models.resolved.build` needs.
-  Implemented by the Voronoi builders.
+  which is what :func:`festim_microstructure.resolved.build` needs. Implemented
+  by the Voronoi builders, and by :class:`TaggedPolycrystal` for a mesh that
+  came from somewhere else.
 * :class:`BoundaryNetwork` -- a tessellation topology with a per-entity
   disorientation and masks selecting the boundaries to keep. Implemented by the
   Neper and EBSD readers.
@@ -22,6 +23,8 @@ find out through an ``AttributeError`` raised somewhere inside form assembly.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -30,6 +33,7 @@ __all__ = [
     "BoundaryNetwork",
     "MeshedMicrostructure",
     "Microstructure",
+    "TaggedPolycrystal",
     "missing_members",
     "require",
 ]
@@ -52,7 +56,7 @@ class Microstructure(Protocol):
 
 @runtime_checkable
 class MeshedMicrostructure(Microstructure, Protocol):
-    """A meshed polycrystal: the contract of :func:`...models.resolved.build`.
+    """A meshed polycrystal: the contract of :func:`...resolved.build`.
 
     ``facet_tags``/``gb_tag`` may be ``None``: a builder that cannot tag the
     grain-boundary facets leaves them unset and the network is located
@@ -68,8 +72,10 @@ class MeshedMicrostructure(Microstructure, Protocol):
     cell_tags: Any
     #: ``MeshTags`` on the facets, or ``None`` when the network is geometric.
     facet_tags: Any
-    #: The facet-tag value marking the grain boundaries, or ``None``.
-    gb_tag: int | None
+    #: The facet-tag value, or values, marking the grain boundaries; ``None``
+    #: when the network is geometric. A Neper or EBSD mesh tags every
+    #: tessellation face separately, so its network is a sequence of ids.
+    gb_tag: Any
     #: One orientation per grain, indexed by ``grain_id - 1`` (radians).
     orientations: np.ndarray
 
@@ -125,6 +131,84 @@ class BoundaryNetwork(Microstructure, Protocol):
     def network_measure(self) -> float:
         """Total size of the network: length in 2D, area in 3D."""
         ...
+
+
+@dataclass
+class TaggedPolycrystal:
+    """A :class:`MeshedMicrostructure` made from a mesh and its tags.
+
+    The adapter for a mesh this package did not generate: a Neper or EBSD mesh
+    read with :func:`festim_microstructure.formats.msh4.read_mesh`, or one built
+    by hand. The Voronoi builders return microstructures of their own and do not
+    need it.
+
+    Only ``mesh`` and ``cell_tags`` are required. ``grain_ids`` defaults to the
+    distinct cell-tag values across all ranks, and ``orientations`` to zero for
+    every grain, which is the right answer whenever
+    :attr:`~festim_microstructure.materials.Physics.crystal_anisotropy` is one:
+    the lattice tensor is then isotropic and the angles do not enter the model.
+    Pass the measured angles to give the grains a texture.
+
+    Supply either ``facet_tags`` with ``gb_tag`` (one value or a sequence) or a
+    ``network_locator``; :func:`~festim_microstructure.resolved.build` prefers
+    the tags.
+    """
+
+    mesh: Any
+    cell_tags: Any
+    facet_tags: Any = None
+    gb_tag: Any = None
+    grain_ids: Any = None
+    orientations: Any = None
+    tolerance: float = 0.0
+    """Distance below which a point counts as lying on the network. Only read
+    by the geometric route and by ``exports.averages.equilibrium_error``."""
+    network_locator: Callable[[np.ndarray], np.ndarray] | None = field(
+        default=None, repr=False
+    )
+    name: str = "tagged mesh"
+
+    def __post_init__(self):
+        if self.grain_ids is None:
+            self.grain_ids = _global_tag_values(self.mesh, self.cell_tags)
+        self.grain_ids = np.asarray(self.grain_ids, dtype=np.int32)
+        if self.orientations is None:
+            # Indexed by grain id - 1, so it is the largest id that sets the
+            # length, not the number of grains: ids need not be contiguous.
+            self.orientations = np.zeros(int(self.grain_ids.max()))
+
+    @property
+    def n_grains(self) -> int:
+        return len(self.grain_ids)
+
+    def locator(self, points: np.ndarray) -> np.ndarray:
+        if self.network_locator is None:
+            raise TypeError(
+                f"{type(self).__name__} {self.name!r} was built without a "
+                "network_locator, so the network can only come from facet tags. "
+                "Pass facet_tags and gb_tag, or a network_locator."
+            )
+        return self.network_locator(points)
+
+    def report(self) -> str:
+        where = "facet tags" if self.facet_tags is not None else "geometric"
+        return "\n".join(
+            [
+                f"microstructure: {self.name}",
+                f"  grains (tagged pieces)         : {self.n_grains}",
+                f"  network located by             : {where}",
+            ]
+        )
+
+
+def _global_tag_values(mesh, tags) -> np.ndarray:
+    """The distinct values of ``tags``, gathered over every rank, ascending.
+
+    Taken locally, the answer is whatever cells this rank happens to own, and a
+    model built from it would carry a different species list on every rank.
+    """
+    local = np.unique(np.asarray(tags.values))
+    return np.unique(np.concatenate(mesh.comm.allgather(local)))
 
 
 def _declared_members(protocol: type) -> set[str]:

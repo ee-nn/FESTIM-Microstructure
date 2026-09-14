@@ -3,6 +3,23 @@
 Each grain exchanges ``k (c_grain - c_gb)`` with the collapsed boundary slab;
 the network equation uses ``k / delta``. Sweepable coefficients remain DOLFINx
 constants or functions to avoid FFCx recompilation.
+
+This is the only transport model in the package. The Fisher model that used to
+sit beside it -- one lattice field for the whole polycrystal, a source of
+``2 k (c_b - c_gb) / delta`` on the network -- is the limit of this one in which
+the boundary offers no resistance to permeation, so that the per-grain fields
+agree across every boundary and glue into a single continuous field. That limit
+is reached when ``2 / k`` is small against ``grain_size / D_bulk``; see
+:meth:`~festim_microstructure.materials.Physics.interface_resistance_ratio`,
+which reports the quotient.
+
+Both sides of a boundary are accounted for here, and that is the other reason
+for keeping only this model. An interior facet carries one source per adjacent
+grain, ``k (c_i - c_gb) / delta`` each, against one flux ``k (c_gb - c_i)`` out
+of each grain: what the slab gains, the grains lose. With a single lattice
+field FESTIM applies the exchange once per facet (the two restrictions read the
+same value), so the ``2 k / delta`` source gained twice what the lattice lost,
+and an interior network created hydrogen at ``k (c_b - c_gb)`` per unit area.
 """
 
 from __future__ import annotations
@@ -12,6 +29,7 @@ from dataclasses import dataclass, field
 
 import dolfinx
 import festim as F
+import numpy as np
 
 from festim_microstructure.fem.solvers import (
     ATOL,
@@ -68,8 +86,6 @@ class SolveOptions:
 
 
 NETWORK_ID = 1_000_000  # above every grain id
-
-
 SURFACE_ID_0 = 2_000_000  # the per-grain boundary patches are numbered from here
 
 
@@ -93,9 +109,15 @@ class MicroModel:
     _initialised: bool = False
     _initial_guess: list | None = None  # the unknowns as initialise() left them
 
-    def initialise(self):
-        """Build the function spaces, forms and solver. Idempotent."""
-        if not self._initialised:
+    def initialise(self, force=False):
+        """Build the function spaces, forms and solver.
+
+        Idempotent unless ``force``, which rebuilds even if this model has
+        already been initialised: the hook for swapping in a coefficient that
+        can only be built once a submesh exists (see
+        :func:`~festim_microstructure.materials.gb_diffusivity_field`).
+        """
+        if force or not self._initialised:
             self.model.initialise()
             tune_direct_solver(self.model)
             # Preserve the cold-start state for reproducible sweep points.
@@ -201,6 +223,11 @@ def build(
     grain id to ``k`` and defaults to ``physics.k_exchange``. Stepping and
     solver settings live in ``solve``; see :class:`SolveOptions`.
 
+    The network is read from ``micro.facet_tags`` when there are any, and
+    ``micro.gb_tag`` may then be one tag or a sequence of them: a Neper or EBSD
+    mesh tags every tessellation face separately, so its network is a list of
+    ids rather than a single marker.
+
     ``micro`` must satisfy
     :class:`~festim_microstructure.microstructure.MeshedMicrostructure`. That is
     checked here, so an incompatible microstructure is named at the call site
@@ -220,7 +247,11 @@ def build(
     if micro.facet_tags is not None:
         # Tagged facets avoid geometric network detection.
         network = TaggedGrainBoundaryNetwork(
-            NETWORK_ID, gb_material, micro.facet_tags, [micro.gb_tag], dim=tdim - 1
+            NETWORK_ID,
+            gb_material,
+            micro.facet_tags,
+            np.atleast_1d(micro.gb_tag),
+            dim=tdim - 1,
         )
     else:
         network = GrainBoundaryNetwork(

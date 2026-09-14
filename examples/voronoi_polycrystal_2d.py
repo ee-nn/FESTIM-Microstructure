@@ -4,14 +4,16 @@ The point of the example is that the entire network is declared as **one** codim
 subdomain with **one** species. That is what makes triple junctions work: the submesh
 built from all the grain-boundary facets is topologically connected, so a single
 continuous field lives on it and hydrogen crosses from one boundary to another with no
-junction condition to write. See :mod:`festim_microstructure.models.fisher`.
+junction condition to write. The grains each carry a lattice field of their own and
+exchange with that network at the rate ``k``; see
+:mod:`festim_microstructure.resolved`.
 
 Run::
 
     python examples/voronoi_polycrystal_2d.py
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import festim as F
 import numpy as np
@@ -61,36 +63,42 @@ def main(s=Setup()):
 
     # microstructure
     segments = fm.voronoi.voronoi_segments(s.n_seeds, L, np.random.default_rng(s.seed))
-    mesh, _cell_tags, n_grains = fm.voronoi.build_mesh(
+    mesh, cell_tags, n_grains = fm.voronoi.build_mesh(
         segments, L, fm.MeshSizing(h_gb=s.h_gb, h_bulk=s.h_bulk)
     )
-    tol = 1e-7  # distance below which a point counts as lying on a ridge
-    network = fm.GrainBoundaryNetwork(
-        id=fm.ShortCircuitProblem.NETWORK_ID,
-        material=F.Material(D_0=D_GB, E_D=0.0),
-        locator=lambda x: fm.voronoi.near_segments(x, segments, tol),
-        dim=1,
+    # Built here rather than through VoronoiMicrostructure.create, which would
+    # mesh the cell to its own sizing: this keeps the mesh the example asked for.
+    # Untextured, and crystal_anisotropy is 1 below, so the angles never enter.
+    micro = fm.VoronoiMicrostructure(
+        size=L,
+        n_seeds=s.n_seeds,
+        seed=s.seed,
+        segments=segments,
+        mesh=mesh,
+        cell_tags=cell_tags,
+        grain_ids=np.arange(1, n_grains + 1),
+        orientations=np.zeros(n_grains),
+        h_gb=s.h_gb,
     )
-    params = fm.ShortCircuitParams(
-        D_b=D_B,
-        D_gb=D_GB,
+    physics = fm.Physics(
+        T=s.T,
+        D_0_bulk=D_B,  # E_D = 0: the setup has already done the Arrhenius part
+        E_D_bulk=0.0,
+        D_0_gb=D_GB,
+        E_D_gb=0.0,
         delta=s.delta,
         k_exchange=s.k_exchange,
-        c0=s.c0,
-        T=s.T,
-        t_end=s.t_end,
-        dt=s.dt,
-        atol=1e-8,
-        rtol=1e-6,
+        crystal_anisotropy=1.0,
     )
-    problem = fm.ShortCircuitProblem(
-        mesh, network, charged_surface=lambda x: np.isclose(x[1], L), params=params
+    bcs = [("charged", lambda x: np.isclose(x[1], L), s.c0)]
+    solve = fm.SolveOptions(
+        transient=True, final_time=s.t_end, stepsize=s.dt, atol=1e-8, rtol=1e-6
     )
 
     # build and solve
-    model, cb_fast, cgb_fast = problem.solve(
-        D_GB, exports=problem.vtx_exports("voronoi")
-    )
+    model = fm.build(micro, physics, bcs, solve=solve).run()
+    fm.exports.averages.write_vtx(model, "voronoi", time=s.t_end)
+    network, cgb_fast = model.network, model.network_solution
 
     # what we built
     ridge_length = sum(float(np.linalg.norm(q - p)) for p, q in segments)
@@ -115,10 +123,13 @@ def main(s=Setup()):
         f"  network captured by the submesh : {facet_length:.4e} of {ridge_length:.4e}"
         f" ({100 * facet_length / ridge_length:.2f} %)"
     )
-    print(f"  interior facets                 : {model.manifold_is_interior(network)}")
+    print(
+        f"  interior facets                 : "
+        f"{model.model.manifold_is_interior(network)}"
+    )
 
     # effect of the network
-    fast = fm.exports.measures.inventory(cb_fast, cgb_fast, s.delta)
+    fast = fm.exports.averages.inventory(model)
     depth = fm.exports.measures.junction_only_below(
         [np.array(seg) for seg in segments], axis=1, top=L
     )
@@ -126,8 +137,12 @@ def main(s=Setup()):
     deep = gb_y < depth
     c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
-    _, cb_ref, cgb_ref = problem.solve(D_B)
-    ref = fm.exports.measures.inventory(cb_ref, cgb_ref, s.delta)
+    # The reference is a second build rather than model.set_physics(...): a
+    # transient problem cannot be re-run from t = 0 in place.
+    reference = fm.build(
+        micro, replace(physics, D_0_gb=D_B, E_D_gb=0.0), bcs, solve=solve
+    ).run()
+    ref = fm.exports.averages.inventory(reference)
 
     print(
         f"\nafter t = {s.t_end} (lattice diffusion alone reaches "
@@ -139,14 +154,19 @@ def main(s=Setup()):
     f_gb = s.delta * ridge_length / L**2
     print(f"  boundary area fraction f       : {f_gb:.3e}")
     print(
-        f"  Hart bound f D_gb + (1-f) D_b  : {fm.models.fisher.hart_bound(f_gb, D_GB, D_B):.3e}"
+        f"  Hart bound f D_gb + (1-f) D_b  : "
+        f"{fm.materials.hart_bound(f_gb, D_GB, D_B):.3e}"
         f"  (vs D_b = {D_B:.3e})"
     )
-    beta = fm.models.fisher.beta_parameter(s.delta, D_GB, D_B, s.t_end)
+    beta = fm.materials.beta_parameter(s.delta, D_GB, D_B, s.t_end)
     print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
+    print(
+        f"  interface / lattice resistance : "
+        f"{physics.interface_resistance_ratio(L / np.sqrt(n_grains)):.1e}"
+        f"  (Fisher is the 0 limit)"
+    )
 
-    bulk_y = cb_fast.function_space.tabulate_dof_coordinates()[:, 1]
-    c_grain_deep = cb_fast.x.array[bulk_y < depth].mean()
+    c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=1, depth=depth)
     print(
         "\njunction transport: no boundary touching the charged surface reaches below"
     )

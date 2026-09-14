@@ -12,9 +12,11 @@ import numpy as np
 __all__ = [
     "ConstantDiffusivity",
     "Physics",
+    "beta_parameter",
     "crystal_diffusivity_field",
     "fill_crystal_diffusivity_field",
     "gb_diffusivity_field",
+    "hart_bound",
 ]
 
 
@@ -110,6 +112,25 @@ class Physics:
                 f"{self.interface_resistance_ratio(grain_size):.3e}"
             )
         return "\n".join(lines)
+
+
+def beta_parameter(delta, D_gb, D_b, t_end):
+    """Return Le Claire's type-B parameter; short circuits need ``beta >> 1``.
+
+    Below about one the boundary has no tail of its own to measure and the
+    kinetics are type A or C instead. Le Claire (1963), Br. J. Appl. Phys. 14,
+    351; Mishin et al. (1997), Def. Diff. Forum 143-147, 1359 survey the ranges.
+    """
+    return delta * (D_gb / D_b - 1) / (2 * np.sqrt(D_b * t_end))
+
+
+def hart_bound(f_gb, D_gb, D_b):
+    """Return the parallel (Hart) upper bound ``f D_gb + (1 - f) D_b``.
+
+    Exact only when the two phases conduct in parallel along the flux, and an
+    upper bound otherwise: Hart (1957), Acta Metall. 5, 597.
+    """
+    return f_gb * D_gb + (1 - f_gb) * D_b
 
 
 def crystal_diffusivity_field(micro, physics):

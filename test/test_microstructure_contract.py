@@ -12,6 +12,7 @@ from festim_microstructure.microstructure import (
     BoundaryNetwork,
     MeshedMicrostructure,
     Microstructure,
+    TaggedPolycrystal,
     missing_members,
     require,
 )
@@ -97,6 +98,40 @@ def test_boundary_network_implementations_are_found_dimension_agnostically(
     assert NeperMicrostructure.network_area is NeperMicrostructure.network_measure
     assert EbsdMicrostructure.network_length is EbsdMicrostructure.network_measure
     assert VoronoiMicrostructure.ridge_length is not None
+
+
+def test_tagged_polycrystal_satisfies_the_meshed_contract():
+    assert missing_members(TaggedPolycrystal, MeshedMicrostructure) == []
+
+
+def test_tagged_polycrystal_fills_in_the_ids_and_the_orientations():
+    """Given ids, it needs no mesh to answer: the defaults are derived, not read."""
+    poly = TaggedPolycrystal(
+        mesh=object(), cell_tags=object(), grain_ids=np.array([1, 2, 5])
+    )
+    assert poly.n_grains == 3
+    # indexed by id - 1, so the largest id sets the length, not the count
+    assert poly.orientations.shape == (5,)
+    assert not poly.orientations.any()
+    assert missing_members(poly, MeshedMicrostructure) == []
+
+
+def test_tagged_polycrystal_says_so_when_it_has_no_geometric_locator():
+    poly = TaggedPolycrystal(
+        mesh=object(), cell_tags=object(), grain_ids=np.array([1]), gb_tag=[3, 4]
+    )
+    with pytest.raises(TypeError, match="network_locator"):
+        poly.locator(np.zeros((3, 2)))
+
+
+def test_tagged_polycrystal_uses_the_locator_it_was_given():
+    poly = TaggedPolycrystal(
+        mesh=object(),
+        cell_tags=object(),
+        grain_ids=np.array([1]),
+        network_locator=lambda points: np.ones(points.shape[1], dtype=bool),
+    )
+    assert poly.locator(np.zeros((3, 4))).all()
 
 
 def test_protocols_are_not_a_class_hierarchy():

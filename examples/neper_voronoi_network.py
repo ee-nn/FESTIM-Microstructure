@@ -2,10 +2,15 @@
 polycrystal.
 
 Same formulation as the in-situ Voronoi version: the whole network is **one**
-codim-1 subdomain carrying **one** species. What changes is only where the
-microstructure comes from -- see :mod:`festim_microstructure.meshing.neper` for
-what Neper adds (``domface``, ``theta``, exact junction topology) and for how
-the binaries are found (``FM_NEPER_BIN`` / ``FM_GMSH_BIN``, or ``PATH``).
+codim-1 subdomain carrying **one** species, and every grain carries a lattice
+species of its own. What changes is only where the microstructure comes from --
+see :mod:`festim_microstructure.meshing.neper` for what Neper adds (``domface``,
+``theta``, exact junction topology) and for how the binaries are found
+(``FM_NEPER_BIN`` / ``FM_GMSH_BIN``, or ``PATH``).
+
+Neper tags every tessellation face separately, so the network is the *list* of
+face ids above the disorientation threshold rather than one marker; that list is
+what ``gb_tag`` carries here.
 
 Run::
 
@@ -13,7 +18,7 @@ Run::
     mpirun -n 4 python examples/neper_voronoi_network.py
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import festim as F
@@ -58,38 +63,46 @@ def main(s=Setup()):
     )
     mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=3)
 
-    network = fm.TaggedGrainBoundaryNetwork(
-        id=fm.ShortCircuitProblem.NETWORK_ID,
-        material=F.Material(D_0=D_GB, E_D=0.0),
+    # The tessellation knows the topology; this is the same polycrystal as the
+    # model sees it: one tagged subdomain per grain, the network as face ids.
+    # Untextured, and crystal_anisotropy is 1 below, so the angles never enter.
+    poly = fm.TaggedPolycrystal(
+        mesh=mesh,
+        cell_tags=cell_tags,
         facet_tags=facet_tags,
-        entity_ids=micro.network_ids,
-        dim=2,
+        gb_tag=micro.network_ids,
+        name=f"neper {s.n_cells} cells, seed {s.seed}",
     )
-    params = fm.ShortCircuitParams(
-        D_b=D_B,
-        D_gb=D_GB,
+    physics = fm.Physics(
+        T=500.0,  # with E_D = 0 on both phases, nothing depends on it
+        D_0_bulk=D_B,
+        E_D_bulk=0.0,
+        D_0_gb=D_GB,
+        E_D_gb=0.0,
         delta=s.delta,
         k_exchange=s.k_exchange,
-        c0=s.c0,
-        t_end=s.t_end,
-        dt=s.dt,
-        atol=1e-14,
-        rtol=1e-12,
+        crystal_anisotropy=1.0,
     )
-    problem = fm.ShortCircuitProblem(
-        mesh, network, charged_surface=lambda x: np.isclose(x[2], L), params=params
+    bcs = [("charged", lambda x: np.isclose(x[2], L), s.c0)]
+    solve = fm.SolveOptions(
+        transient=True, final_time=s.t_end, stepsize=s.dt, atol=1e-14, rtol=1e-12
     )
 
-    exports = problem.vtx_exports(str(base.parent / "neper"))
+    model = fm.build(poly, physics, bcs, solve=solve)
     if s.theta_dependent_D:
-        # the submesh has to exist before a field can live on it, so build and
-        # initialise once, then swap the material in and initialise again
-        problem.build(D_GB, exports).initialise()
-        network.material = F.Material(
-            D_0=fm.materials.gb_diffusivity_field(network, micro.theta, D_B, D_GB),
+        # the submesh has to exist before a field can live on it, so initialise
+        # once, swap the material in, and initialise again
+        model.initialise()
+        model.network.material = F.Material(
+            D_0=fm.materials.gb_diffusivity_field(
+                model.network, micro.theta, D_B, D_GB
+            ),
             E_D=0.0,
         )
-    model, cb_fast, cgb_fast = problem.solve(D_GB, exports)
+        model.initialise(force=True)
+    model.run()
+    fm.exports.averages.write_vtx(model, str(base.parent / "neper"), time=s.t_end)
+    network, cgb_fast = model.network, model.network_solution
 
     # what we built
     print(micro.report(n_cells=s.n_cells))
@@ -106,17 +119,24 @@ def main(s=Setup()):
     )
     if n_comp is not None:
         print(f"  connected components            : {n_comp}")
-    print(f"  interior facets                 : {model.manifold_is_interior(network)}")
+    print(
+        f"  interior facets                 : "
+        f"{model.model.manifold_is_interior(network)}"
+    )
 
     # effect of the network
-    fast = fm.exports.measures.inventory(cb_fast, cgb_fast, s.delta)
+    fast = fm.exports.averages.inventory(model)
     depth = micro.junction_only_below(L)
     gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
     deep = gb_z < depth
     c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
-    _, cb_ref, cgb_ref = problem.solve(D_B)
-    ref = fm.exports.measures.inventory(cb_ref, cgb_ref, s.delta)
+    # A second build, not model.set_physics(...): a transient problem cannot be
+    # re-run from t = 0 in place.
+    reference = fm.build(
+        poly, replace(physics, D_0_gb=D_B, E_D_gb=0.0), bcs, solve=solve
+    ).run()
+    ref = fm.exports.averages.inventory(reference)
 
     print(
         f"\nafter t = {s.t_end} (lattice diffusion alone reaches "
@@ -128,14 +148,19 @@ def main(s=Setup()):
     f_gb = s.delta * area_tess / L**3
     print(f"  boundary volume fraction f     : {f_gb:.3e}")
     print(
-        f"  Hart bound f D_gb + (1-f) D_b  : {fm.models.fisher.hart_bound(f_gb, D_GB, D_B):.3e}"
+        f"  Hart bound f D_gb + (1-f) D_b  : "
+        f"{fm.materials.hart_bound(f_gb, D_GB, D_B):.3e}"
         f"  (vs D_b = {D_B:.3e})"
     )
-    beta = fm.models.fisher.beta_parameter(s.delta, D_GB, D_B, s.t_end)
+    beta = fm.materials.beta_parameter(s.delta, D_GB, D_B, s.t_end)
     print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
+    print(
+        f"  interface / lattice resistance : "
+        f"{physics.interface_resistance_ratio(L * s.n_cells ** (-1 / 3)):.1e}"
+        f"  (Fisher is the 0 limit)"
+    )
 
-    bulk_z = cb_fast.function_space.tabulate_dof_coordinates()[:, 2]
-    c_grain_deep = cb_fast.x.array[bulk_z < depth].mean()
+    c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=2, depth=depth)
     print("\njunction transport: no boundary touching the charged face reaches below")
     print(f"z = {depth:.3f}, so everything the network holds there has")
     print("crossed at least one triple line.")

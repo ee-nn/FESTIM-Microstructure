@@ -18,8 +18,8 @@ What does change relative to the 2D script:
   :func:`near_faces`) but a point-to-polygon distance is much more delicate than a
   point-to-segment distance, and the fragment operation already knows exactly which
   facets are grain boundaries.
-* ``mouths`` is ``dim=1`` (curves where the network meets the charged face), which
-  :class:`ShortCircuitProblem` derives from the mesh dimension.
+* The mouths are the curves where the network meets the charged face, which
+  :func:`~festim_microstructure.resolved.build` derives from the mesh dimension.
 * The grain-boundary volume fraction is delta * area / L**3 instead of
   delta * length / L**2.
 
@@ -28,9 +28,8 @@ Run::
     python examples/voronoi_polycrystal_3d.py
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-import festim as F
 import numpy as np
 
 import festim_microstructure as fm
@@ -62,39 +61,45 @@ def main(s=Setup()):
     mesh, facet_tags = fm.voronoi.build_mesh_3d(
         faces, L, fm.MeshSizing(h_gb=s.h_gb, h_bulk=s.h_bulk)
     )
-    material = F.Material(D_0=D_GB, E_D=0.0)
-    if s.locate_geometrically:
-        network = fm.GrainBoundaryNetwork(
-            id=fm.ShortCircuitProblem.NETWORK_ID,
-            material=material,
-            locator=lambda x: fm.voronoi.near_faces(x, faces),
-            dim=2,
-        )
-    else:
-        network = fm.TaggedGrainBoundaryNetwork(
-            id=fm.ShortCircuitProblem.NETWORK_ID,
-            material=material,
-            facet_tags=facet_tags,
-            entity_ids=[fm.voronoi.GB_TAG_3D],
-            dim=2,
-        )
-    params = fm.ShortCircuitParams(
-        D_b=D_B,
-        D_gb=D_GB,
+    # voronoi_faces draws its seeds from the generator before anything else, so
+    # the same seed reproduces them; each cell then takes the id of its nearest
+    # seed image, which is what makes the grains separable subdomains.
+    seeds = np.random.default_rng(s.seed).uniform(0, L, (s.n_seeds, 3))
+    cell_tags, grain_ids = fm.voronoi.grain_tags_from_seeds(mesh, seeds, L)
+    tagged = not s.locate_geometrically
+    micro = fm.VoronoiMicrostructure3D(
+        size=L,
+        n_seeds=s.n_seeds,
+        seed=s.seed,
+        seeds=seeds,
+        faces=faces,
+        mesh=mesh,
+        cell_tags=cell_tags,
+        facet_tags=facet_tags if tagged else None,
+        gb_tag=fm.voronoi.GB_TAG_3D if tagged else None,
+        grain_ids=grain_ids,
+        # ids come from the seed images and need not be contiguous, so the
+        # orientations are indexed by the largest of them. Untextured here.
+        orientations=np.zeros(int(grain_ids.max())),
+        h_gb=s.h_gb,
+    )
+    physics = fm.Physics(
+        T=500.0,  # with E_D = 0 on both phases, nothing depends on it
+        D_0_bulk=D_B,
+        E_D_bulk=0.0,
+        D_0_gb=D_GB,
+        E_D_gb=0.0,
         delta=s.delta,
         k_exchange=s.k_exchange,
-        c0=s.c0,
-        t_end=s.t_end,
-        dt=s.dt,
-        atol=1e-14,
-        rtol=1e-12,
+        crystal_anisotropy=1.0,
     )
-    problem = fm.ShortCircuitProblem(
-        mesh, network, charged_surface=lambda x: np.isclose(x[2], L), params=params
+    bcs = [("charged", lambda x: np.isclose(x[2], L), s.c0)]
+    solve = fm.SolveOptions(
+        transient=True, final_time=s.t_end, stepsize=s.dt, atol=1e-14, rtol=1e-12
     )
-    model, cb_fast, cgb_fast = problem.solve(
-        D_GB, exports=problem.vtx_exports("voronoi3d")
-    )
+    model = fm.build(micro, physics, bcs, solve=solve).run()
+    fm.exports.averages.write_vtx(model, "voronoi3d", time=s.t_end)
+    network, cgb_fast = model.network, model.network_solution
 
     # what we built
     lines, triple_length, quadruple = fm.voronoi.triple_lines(faces)
@@ -113,21 +118,29 @@ def main(s=Setup()):
     )
     n_cells = mesh.topology.index_map(3).size_global
     print(f"  mesh                            : {n_cells} cells")
+    print(f"  grains (tagged pieces)          : {micro.n_grains}")
     print(
         f"  network captured by the submesh : {sub_area:.4f} of {face_area:.4f}"
         f" ({100 * sub_area / face_area:.2f} %)"
     )
-    print(f"  interior facets                 : {model.manifold_is_interior(network)}")
+    print(
+        f"  interior facets                 : "
+        f"{model.model.manifold_is_interior(network)}"
+    )
 
     # effect of the network
-    fast = fm.exports.measures.inventory(cb_fast, cgb_fast, s.delta)
+    fast = fm.exports.averages.inventory(model)
     depth = fm.exports.measures.junction_only_below(faces, axis=2, top=L)
     gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
     deep = gb_z < depth
     c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
-    _, cb_ref, cgb_ref = problem.solve(D_B)
-    ref = fm.exports.measures.inventory(cb_ref, cgb_ref, s.delta)
+    # A second build, not model.set_physics(...): a transient problem cannot be
+    # re-run from t = 0 in place.
+    reference = fm.build(
+        micro, replace(physics, D_0_gb=D_B, E_D_gb=0.0), bcs, solve=solve
+    ).run()
+    ref = fm.exports.averages.inventory(reference)
 
     print(
         f"\nafter t = {s.t_end} (lattice diffusion alone reaches "
@@ -139,14 +152,19 @@ def main(s=Setup()):
     f_gb = s.delta * face_area / L**3
     print(f"  boundary volume fraction f     : {f_gb:.3e}")
     print(
-        f"  Hart bound f D_gb + (1-f) D_b  : {fm.models.fisher.hart_bound(f_gb, D_GB, D_B):.3e}"
+        f"  Hart bound f D_gb + (1-f) D_b  : "
+        f"{fm.materials.hart_bound(f_gb, D_GB, D_B):.3e}"
         f"  (vs D_b = {D_B:.3e})"
     )
-    beta = fm.models.fisher.beta_parameter(s.delta, D_GB, D_B, s.t_end)
+    beta = fm.materials.beta_parameter(s.delta, D_GB, D_B, s.t_end)
     print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
+    print(
+        f"  interface / lattice resistance : "
+        f"{physics.interface_resistance_ratio(L * s.n_seeds ** (-1 / 3)):.1e}"
+        f"  (Fisher is the 0 limit)"
+    )
 
-    bulk_z = cb_fast.function_space.tabulate_dof_coordinates()[:, 2]
-    c_grain_deep = cb_fast.x.array[bulk_z < depth].mean()
+    c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=2, depth=depth)
     print("\njunction transport: no boundary touching the charged face reaches below")
     print(f"z = {depth:.3f}, so everything the network holds there has")
     print("crossed at least one triple line.")

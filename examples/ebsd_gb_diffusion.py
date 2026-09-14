@@ -5,6 +5,10 @@ The mesh is Neper's direct meshing of the raster, so the grain boundaries are
 the measured ones and each boundary's disorientation comes from the two grains'
 measured orientations. See :mod:`festim_microstructure.meshing.ebsd`.
 
+Every measured grain carries a lattice species of its own and exchanges with the
+one network species at the rate ``k``; the network is the list of edge ids above
+the disorientation threshold.
+
 Prerequisite: the ``.tesr`` written by ``examples/ebsd_ctf_to_tesr.py`` (or by
 ``convert(...)``). Neper and Gmsh are found through ``FM_NEPER_BIN`` /
 ``FM_GMSH_BIN`` or ``PATH``.
@@ -63,36 +67,48 @@ def main(s=Setup()):
         base, mesh, micro, base.parent / "poly-raw.tesr", unit, uname
     )
 
-    network = fm.TaggedGrainBoundaryNetwork(
-        id=fm.ShortCircuitProblem.NETWORK_ID,
-        material=F.Material(D_0=D_GB, E_D=0.0),
+    # The measured map as the model sees it: one tagged subdomain per grain, the
+    # network as the kept edge ids. The measured orientations drive the lattice
+    # tensor only when crystal_anisotropy is set away from 1, which it is not
+    # here, so the grains are left untextured.
+    poly = fm.TaggedPolycrystal(
+        mesh=mesh,
+        cell_tags=cell_tags,
         facet_tags=facet_tags,
-        entity_ids=micro.network_ids,
-        dim=1,
+        gb_tag=micro.network_ids,
+        name=f"EBSD map {Path(s.ebsd.tesr).name}",
     )
-    params = fm.ShortCircuitParams(
-        D_b=D_B,
-        D_gb=D_GB,
+    physics = fm.Physics(
+        T=500.0,  # with E_D = 0 on both phases, nothing depends on it
+        D_0_bulk=D_B,
+        E_D_bulk=0.0,
+        D_0_gb=D_GB,
+        E_D_gb=0.0,
         delta=s.delta,
         k_exchange=s.k_exchange,
-        c0=s.c0,
-        t_end=s.t_end,
-        dt=s.dt,
-        atol=1e-14,
-        rtol=1e-12,
+        crystal_anisotropy=1.0,
     )
     # the charged surface is the top edge of the map, wherever that now is
-    problem = fm.ShortCircuitProblem(
-        mesh, network, charged_surface=lambda x: np.isclose(x[1], LY), params=params
+    bcs = [("charged", lambda x: np.isclose(x[1], LY), s.c0)]
+    solve = fm.SolveOptions(
+        transient=True, final_time=s.t_end, stepsize=s.dt, atol=1e-14, rtol=1e-12
     )
-    exports = problem.vtx_exports(str(base.parent / "ebsd"))
+
+    model = fm.build(poly, physics, bcs, solve=solve)
     if s.theta_dependent_D:
-        problem.build(D_GB, exports).initialise()
-        network.material = F.Material(
-            D_0=fm.materials.gb_diffusivity_field(network, micro.theta, D_B, D_GB),
+        # the submesh has to exist before a field can live on it, so initialise
+        # once, swap the material in, and initialise again
+        model.initialise()
+        model.network.material = F.Material(
+            D_0=fm.materials.gb_diffusivity_field(
+                model.network, micro.theta, D_B, D_GB
+            ),
             E_D=0.0,
         )
-    model, cb, cgb = problem.solve(D_GB, exports)
+        model.initialise(force=True)
+    model.run()
+    fm.exports.averages.write_vtx(model, str(base.parent / "ebsd"), time=s.t_end)
+    network, cgb = model.network, model.network_solution
 
     # what we built
     print(micro.report())
@@ -102,11 +118,15 @@ def main(s=Setup()):
     )
     n_tri = mesh.topology.index_map(2).size_global
     print(f"  mesh                            : {n_tri} triangles")
+    print(f"  grains (tagged pieces)          : {poly.n_grains}")
     print(f"  network captured by the submesh : {100 * len_mesh / len_tess:.2f} %")
     print(
         f"  connected components            : {fm.exports.measures.component_count(network)}"
     )
-    print(f"  interior facets                 : {model.manifold_is_interior(network)}")
+    print(
+        f"  interior facets                 : "
+        f"{model.model.manifold_is_interior(network)}"
+    )
 
     # effect of the network
     depth = micro.junction_only_below(LY)
@@ -114,20 +134,25 @@ def main(s=Setup()):
     deep = gb_y < depth
     c_deep = cgb.x.array[deep].max() if deep.any() else 0.0
     print(
-        f"\n  inventory                      : {fm.exports.measures.inventory(cb, cgb, s.delta):.4e}"
+        f"\n  inventory                      : "
+        f"{fm.exports.averages.inventory(model):.4e}"
     )
-    beta = fm.models.fisher.beta_parameter(s.delta, D_GB, D_B, s.t_end)
+    beta = fm.materials.beta_parameter(s.delta, D_GB, D_B, s.t_end)
     print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
+    print(
+        f"  interface / lattice resistance : "
+        f"{physics.interface_resistance_ratio(np.sqrt(LX * LY / poly.n_grains)):.1e}"
+        f"  (Fisher is the 0 limit)"
+    )
 
-    bulk_y = cb.function_space.tabulate_dof_coordinates()[:, 1]
-    c_grain_deep = cb.x.array[bulk_y < depth].mean()
+    c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=1, depth=depth)
     print("\njunction transport: no boundary touching the charged edge reaches below")
     print(f"y = {depth:.4g}, so everything the network holds there has")
     print("crossed at least one triple junction.")
     print(f"  max c on the network there     : {c_deep:.4e}")
     print(f"  mean c in the grains there     : {c_grain_deep:.4e}")
-    # both are solver noise around zero whenever the Fisher tail is shorter than
-    # the junction-only depth, and noise has a sign; the ratio is then 0/0
+    # both are solver noise around zero whenever the boundary tail is shorter
+    # than the junction-only depth, and noise has a sign; the ratio is then 0/0
     if c_grain_deep > 1e-12 * s.c0:
         print(f"  ratio                          : x {c_deep / c_grain_deep:.0f}")
     else:

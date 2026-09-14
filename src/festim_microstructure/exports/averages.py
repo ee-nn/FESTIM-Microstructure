@@ -7,19 +7,22 @@ from typing import TYPE_CHECKING, Any, cast
 from mpi4py import MPI
 
 import dolfinx
+import dolfinx.io
 import numpy as np
 import ufl
 
 if TYPE_CHECKING:
-    from festim_microstructure.models.resolved import MicroModel
+    from festim_microstructure.resolved import MicroModel
 
 __all__ = [
     "averages",
     "equilibrium_error",
     "grain_areas",
     "inventory",
+    "lattice_mean_below",
     "mean_lattice_tensor",
     "parent_field",
+    "write_vtx",
 ]
 
 
@@ -97,6 +100,22 @@ def inventory(mm: MicroModel, window=None):
     return total
 
 
+def lattice_mean_below(mm: MicroModel, axis, depth):
+    """Mean lattice concentration below ``depth`` along ``axis``.
+
+    Taken over the dofs of every grain, which is how a single-field model would
+    have read its one bulk array. A dof on a boundary belongs to each grain that
+    touches it and is therefore counted once per grain. Rank-local, like the
+    arrays it reads: a diagnostic, not an integral (use :func:`inventory`).
+    """
+    below = [
+        c.x.array[c.function_space.tabulate_dof_coordinates()[:, axis] < depth]
+        for c in mm.grain_solutions
+    ]
+    values = np.concatenate(below) if below else np.zeros(0)
+    return float(values.mean()) if values.size else 0.0
+
+
 def grain_areas(micro):
     """Return grain areas from a single DG0 assembly."""
     mesh = micro.mesh
@@ -135,6 +154,26 @@ def parent_field(mm: MicroModel, name="c"):
             )
 
     return field, update
+
+
+def write_vtx(mm: MicroModel, prefix, time=0.0):
+    """Write ``<prefix>_grains.bp`` and ``<prefix>_network.bp``.
+
+    The grains go out as one discontinuous parent-mesh field, so a polycrystal
+    is a single dataset whatever its grain count and the jumps across the
+    boundaries stay visible. This is a snapshot of the state the model is in, so
+    a transient run writes its last step; for a time series, hand FESTIM one
+    :class:`festim.VTXSpeciesExport` per grain through ``build(exports=...)``.
+    """
+    field, update = parent_field(mm, name="c_lattice")
+    update()
+    comm = mm.micro.mesh.comm
+    with dolfinx.io.VTXWriter(comm, f"{prefix}_grains.bp", [field], "BP5") as writer:
+        writer.write(time)
+    with dolfinx.io.VTXWriter(
+        comm, f"{prefix}_network.bp", [mm.network_solution], "BP5"
+    ) as writer:
+        writer.write(time)
 
 
 def equilibrium_error(mm: MicroModel):
