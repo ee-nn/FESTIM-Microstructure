@@ -87,8 +87,18 @@ and `--k-sweep` walks across the transition.
 
 ## Running it
 
+For geometry only, without a solve:
+
+```python
+from festim_microstructure.meshing.voronoi import VoronoiMicrostructure
+
+micro = VoronoiMicrostructure.create(
+    size=20e-6, n_seeds=48, aspect=4, cells_per_grain=10
+)
+print(micro.report())
+```
+
 ```bash
-fm-voronoi --domain-size 20e-6 --n-grains 48 --aspect 4   # geometry only, no solve
 python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6 --out rve.json   # + RVE convergence
 python examples/gb_homogenisation.py --k-sweep 1e-6 1e-4 1e-2 3 --out rve.json  # the transition
 python examples/gb_validation.py --out validation.json      # predict, do not just fit

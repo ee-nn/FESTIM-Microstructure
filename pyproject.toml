@@ -49,8 +49,6 @@ Issues = "https://github.com/ee-nn/FESTIM-Microstructure/issues"
 
 [project.scripts]
 fm-check = "festim_microstructure.check:main"
-fm-voronoi = "festim_microstructure.meshing.voronoi:main"
-fm-ebsd = "festim_microstructure.meshing.ebsd.pipeline:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

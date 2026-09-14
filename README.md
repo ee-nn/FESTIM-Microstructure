@@ -76,7 +76,7 @@ variables yourself -- or pass paths explicitly (`run_neper(..., neper_bin=...)`)
 Resolution order is always explicit argument, then the variable, then `PATH`.
 
 The Neper environment is optional. Without it, the Gmsh-based Voronoi route
-(`fm-voronoi`, `examples/voronoi_polycrystal_*.py`), the EBSD `.ctf` converter,
+(`VoronoiMicrostructure.create`, `examples/voronoi_polycrystal_*.py`), the EBSD `.ctf` converter,
 and the homogenisation study all work; only Neper-backed tessellations and EBSD
 *meshing* need it. The POV-Ray render checks are optional within that: on
 linux-64, `conda install -n neper-env conda-forge::povray` and re-run step 3.
@@ -175,12 +175,12 @@ FESTIM-Microstructure/
 │   ├── _binaries.py            # find_binary(): FM_NEPER_BIN / FM_GMSH_BIN / FM_POVRAY_BIN
 │   ├── check.py                # `fm-check`: report versions and where the programs resolve
 │   ├── meshing/
-│   │   ├── voronoi.py          # 2D/3D Voronoi polycrystals via Gmsh; `fm-voronoi`
+│   │   ├── voronoi.py          # 2D/3D Voronoi polycrystals via Gmsh
 │   │   ├── neper.py            # neper -T / -M wrapper, stat readers, raster meshing
 │   │   └── ebsd/
 │   │       ├── ctf.py          # .ctf -> .tesr converter (pure Python)
 │   │       ├── orientation.py  # quaternions, cubic symmetry, disorientation
-│   │       ├── pipeline.py     # .tesr -> mesh -> EbsdMicrostructure; `fm-ebsd`
+│   │       ├── pipeline.py     # .tesr -> mesh -> EbsdMicrostructure
 │   │       └── ...             # segmentation_error, grain_area_change, figures
 │   ├── models/
 │   │   ├── fisher.py           # ShortCircuitProblem: one lattice + one network
@@ -234,12 +234,37 @@ python examples/li2022_fig4.py                 # volumetric-band reproduction
 python examples/li2022_fig4_codim.py           # codim-1 reproduction
 ```
 
-Console entry points from `pyproject.toml`:
+Generate meshes through Python functions:
 
-```bash
-fm-voronoi --n-grains 64 --domain-size 100e-6 --aspect 4 --out poly2d.msh
-fm-ebsd examples/data/"D7 PBF SS316L.ctf" --out results --crop 0,306,0,306
+```python
+from pathlib import Path
+
+from festim_microstructure.meshing.voronoi import VoronoiMicrostructure
+from festim_microstructure.meshing.ebsd.ctf import convert
+from festim_microstructure.meshing.ebsd.pipeline import EbsdOptions, run_ebsd_pipeline
+
+micro = VoronoiMicrostructure.create(
+    size=100e-6, n_seeds=64, aspect=4, cells_per_grain=10, msh_path="poly2d.msh"
+)
+print(micro.report())
+
+workdir = Path("results")
+workdir.mkdir(parents=True, exist_ok=True)
+tesr = workdir / "poly.tesr"
+result = convert(
+    "examples/data/D7 PBF SS316L.ctf", str(tesr),
+    min_pixels=15, max_mad=1.5, allow_error=True,
+    crop="0,306,0,306", diagnostics=True,
+)
+base = run_ebsd_pipeline(EbsdOptions(tesr=str(tesr)), workdir=workdir)
 ```
+
+Configure EBSD meshing with `EbsdOptions(mesh=TesrMeshOptions(...))`
+(`TesrMeshOptions` is in `meshing.neper`). Pass binary paths with
+`convert(..., neper=...)` and
+`run_ebsd_pipeline(..., neper_bin=..., gmsh_bin=...)`.
+The returned Voronoi mesh is in metres; the optional Gmsh file uses units of
+`size`. The `fm-check` environment diagnostic remains a console command.
 
 Neper, Gmsh and POV-Ray are found through `FM_NEPER_BIN`, `FM_GMSH_BIN`,
 `FM_POVRAY_BIN` (set by `tools/link-neper-env.sh`), falling back to `PATH`;

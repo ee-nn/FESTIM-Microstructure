@@ -6,7 +6,7 @@ the measured ones and each boundary's disorientation comes from the two grains'
 measured orientations. See :mod:`festim_microstructure.meshing.ebsd.pipeline`.
 
 Prerequisite: the ``.tesr`` written by ``examples/ebsd_ctf_to_tesr.py`` (or by
-``fm-ebsd``). Neper and Gmsh are found through ``FM_NEPER_BIN`` /
+``convert(...)``). Neper and Gmsh are found through ``FM_NEPER_BIN`` /
 ``FM_GMSH_BIN`` or ``PATH``.
 
 Run::

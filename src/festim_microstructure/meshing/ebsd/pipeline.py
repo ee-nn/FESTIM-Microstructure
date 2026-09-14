@@ -4,7 +4,6 @@ The pipeline converts ``.tesr`` to ``.msh4``, then derives edge connectivity,
 disorientation, lengths, and junctions from Neper's element sets.
 """
 
-import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,7 +22,6 @@ __all__ = [
     "EbsdMicrostructure",
     "EbsdOptions",
     "EdgeTable",
-    "main",
     "mesh_diagnostics",
     "read_extent",
     "run_ebsd_pipeline",
@@ -389,53 +387,3 @@ def write_network_png(base, mesh, micro, tesr_path, unit=1e-6, unit_name="um"):
     fig.savefig(out, dpi=150)
     plt.close(fig)
     print(f"  wrote {out}")
-
-
-def main(argv=None):
-    """``fm-ebsd``: .ctf -> .tesr -> conforming mesh, with the check images."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("ctf", help="Oxford/Channel .ctf map")
-    parser.add_argument("--out", default="results", help="working directory")
-    parser.add_argument("--stem", default="poly")
-    parser.add_argument("--min-pixels", type=int, default=15)
-    parser.add_argument("--max-mad", type=float, default=1.5)
-    parser.add_argument("--crop", default=None, help="xmin,xmax,ymin,ymax (pixels)")
-    parser.add_argument("--rcl", type=float, default=0.25)
-    parser.add_argument("--theta-min", type=float, default=10.0)
-    parser.add_argument("--neper", default=None, help="neper binary (or FM_NEPER_BIN)")
-    parser.add_argument("--gmsh", default=None, help="gmsh executable (or FM_GMSH_BIN)")
-    parser.add_argument("--no-diagnostics", action="store_true")
-    args = parser.parse_args(argv)
-
-    from .ctf import convert
-
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    tesr = out / f"{args.stem}.tesr"
-    res = convert(
-        args.ctf,
-        str(tesr),
-        min_pixels=args.min_pixels,
-        diagnostics=not args.no_diagnostics,
-        max_mad=args.max_mad,
-        allow_error=True,
-        crop=args.crop,
-        neper=args.neper,
-    )
-    rms = res["segmentation_error"]["indexed"]["rms"]
-    print(f"segmentation error (rms): {rms:.3f} deg")
-    opts = EbsdOptions(
-        tesr=str(tesr),
-        theta_min=args.theta_min,
-        mesh=TesrMeshOptions(rcl=args.rcl),
-        stem=args.stem,
-        check_images=not args.no_diagnostics,
-    )
-    base = run_ebsd_pipeline(
-        opts, workdir=out, neper_bin=args.neper, gmsh_bin=args.gmsh
-    )
-    print(f"mesh: {base}.msh4")
-
-
-if __name__ == "__main__":
-    main()

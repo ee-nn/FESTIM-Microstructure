@@ -3,7 +3,6 @@
 GBs are codimension-one facets; their physical width remains a model coefficient.
 """
 
-import argparse
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
@@ -563,6 +562,7 @@ class VoronoiMicrostructure:
         cells_per_grain=14,
         bulk_coarsening=8.0,
         comm=None,
+        msh_path=None,
     ):
         """Generate the tessellation and mesh it.
 
@@ -574,6 +574,9 @@ class VoronoiMicrostructure:
             cells_per_grain: mesh cells across the *short* axis of a grain, which
                 sets ``h_gb``.
             bulk_coarsening: ``h_bulk / h_gb``.
+            comm: MPI communicator; defaults to MPI.COMM_WORLD.
+            msh_path: optional Gmsh output path, in units of ``size``
+                (the returned mesh is in metres).
         """
         rng = np.random.default_rng(seed)
         segments = voronoi_segments(n_seeds, size, rng, aspect)
@@ -582,7 +585,7 @@ class VoronoiMicrostructure:
         h_gb = short_axis / cells_per_grain
         segments = snap_segments(segments, 0.1 * h_gb, size)
         mesh, cell_tags, n_grains = build_mesh(
-            segments, size, h_gb, bulk_coarsening * h_gb, comm=comm
+            segments, size, h_gb, bulk_coarsening * h_gb, comm=comm, msh_path=msh_path
         )
         # an untextured polycrystal: orientations uniform on [0, pi). Replace this
         # with the measured Euler angles to drive the model from EBSD or Neper.
@@ -791,47 +794,3 @@ class VoronoiMicrostructure3D:
 
     def locator(self, points):
         return near_faces(points, self.faces, self.tolerance)
-
-
-def main(argv=None):
-    """``fm-voronoi``: generate a 2D Voronoi polycrystal and report on it."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--n-grains", type=int, default=48, help="Voronoi seeds")
-    parser.add_argument("--domain-size", type=float, default=20e-6, help="box side (m)")
-    parser.add_argument("--aspect", type=float, default=1.0, help="grain elongation")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--cells-per-grain", type=int, default=10)
-    parser.add_argument(
-        "--out",
-        type=str,
-        default=None,
-        help="write the gmsh model here (.msh, in units of --domain-size)",
-    )
-    args = parser.parse_args(argv)
-    rng = np.random.default_rng(args.seed)
-    segments = voronoi_segments(args.n_grains, args.domain_size, rng, args.aspect)
-    short_axis = np.sqrt(args.domain_size**2 / args.n_grains / args.aspect)
-    h_gb = short_axis / args.cells_per_grain
-    segments = snap_segments(segments, 0.1 * h_gb, args.domain_size)
-    mesh, cell_tags, n_grains = build_mesh(
-        segments, args.domain_size, h_gb, 8.0 * h_gb, msh_path=args.out
-    )
-    micro = VoronoiMicrostructure(
-        args.domain_size,
-        args.n_grains,
-        args.aspect,
-        args.seed,
-        segments,
-        mesh,
-        cell_tags,
-        n_grains,
-        rng.uniform(0.0, np.pi, n_grains),
-        h_gb,
-    )
-    print(micro.report())
-    if args.out:
-        print(f"  wrote {args.out}")
-
-
-if __name__ == "__main__":
-    main()
