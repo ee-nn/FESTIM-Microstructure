@@ -41,13 +41,11 @@ import dolfinx
 import festim as F
 import numpy as np
 import ufl
+
+import festim_microstructure as fm
 from gb_homogenisation import identify, make_microstructure
 
-from festim_microstructure.models import resolved as mm
-
 __all__ = ["homogeneous_model", "permeation_bcs", "steady_consistency", "uptake"]
-
-ATOL = mm.ATOL
 
 
 def permeation_bcs(size, direction, c_in=1.0, c_out=0.0):
@@ -63,10 +61,10 @@ def steady_consistency(micro, physics, candidates, verbose=True):
     """Score candidate tensors against a permeation boundary condition."""
     rows = {}
     for direction in ("x", "y"):
-        model = mm.build(
+        model = fm.build(
             micro, physics, bcs=permeation_bcs(micro.size, direction)
         ).run()
-        q, grad_c, _ = mm.averages(model)
+        q, grad_c, _ = fm.exports.averages.averages(model)
         # Relative transverse errors are meaningless near zero flux.
         i = "xy".index(direction)
         if verbose:
@@ -93,7 +91,7 @@ def homogeneous_model(
     transient=False,
     final_time=None,
     stepsize=None,
-    atol=ATOL,
+    atol=fm.fem.solvers.ATOL,
 ):
     """Build a homogeneous rectangle carrying the anisotropic tensor."""
     mesh = dolfinx.mesh.create_rectangle(
@@ -139,7 +137,7 @@ def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
     dt = final_time / n_steps
     bcs = [("top", lambda x: np.isclose(x[1], size), 1.0)]
 
-    resolved = mm.build(
+    resolved = fm.build(
         micro,
         physics,
         bcs=bcs,
@@ -172,7 +170,7 @@ def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
         resolved.model.iterate()
         homogeneous.iterate()
         times.append(float(resolved.model.t))
-        resolved_inventory.append(mm.inventory(resolved))
+        resolved_inventory.append(fm.exports.averages.inventory(resolved))
         model_inventory.append(homogeneous_inventory())
         if verbose and len(times) % 10 == 0:
             print(
@@ -210,7 +208,7 @@ def main(argv=None):
     micro = make_microstructure(
         args.size, args.grain_size, args.aspect, args.seed, args.cells_per_grain
     )
-    physics = mm.Physics(T=args.temperature)
+    physics = fm.Physics(T=args.temperature)
     print(micro.report())
     print()
 

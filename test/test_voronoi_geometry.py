@@ -1,9 +1,9 @@
-"""The tessellation geometry in meshing.voronoi: needs neither gmsh nor dolfinx."""
+"""The tessellation geometry in voronoi: needs neither gmsh nor dolfinx."""
 
 import numpy as np
 import pytest
 
-from festim_microstructure.meshing import voronoi as V
+from festim_microstructure import voronoi as V
 
 
 @pytest.fixture

@@ -1,9 +1,8 @@
-"""Reusable numerical measures for solved microstructure problems."""
+"""Measures and post-processing for solved microstructure problems."""
 
 from .._lazy import lazy_namespace
 
-_SUBMODULES = ("measures",)
-
+_SUBMODULES = ("measures", "averages")
 _NAMES = {
     "component_count": ".measures",
     "inventory": ".measures",

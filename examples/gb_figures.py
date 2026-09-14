@@ -27,6 +27,8 @@ import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap
 
+import festim_microstructure as fm
+
 # --- design tokens -------------------------------------------------------
 SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
@@ -172,7 +174,6 @@ def figure_microstructure(micro, physics, path, size_um):
     without needing to disturb the lattice field much, and a map of it is a blank
     sheet of paper.
     """
-    from festim_microstructure.models import resolved as mm
 
     fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.3))
     scale = 1e6  # metres -> microns
@@ -197,7 +198,7 @@ def figure_microstructure(micro, physics, path, size_um):
         (np.array([1.0, 0.0]), "along x"),
         (np.array([0.0, 1.0]), "across x"),
     ):
-        model = mm.build(
+        model = fm.build(
             micro,
             physics,
             bcs=[
@@ -583,14 +584,12 @@ def main(argv=None):
     if not args.skip_fields:
         from gb_homogenisation import make_microstructure
 
-        from festim_microstructure.models import resolved as mm
-
         micro = make_microstructure(
             args.field_size, args.grain_size, args.aspect, 0, args.cells_per_grain
         )
         written.append(
             figure_microstructure(
-                micro, mm.Physics(), "fig_microstructure.png", 1e6 * args.field_size
+                micro, fm.Physics(), "fig_microstructure.png", 1e6 * args.field_size
             )
         )
 

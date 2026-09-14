@@ -1,6 +1,22 @@
-"""Image utilities shared by EBSD diagnostics."""
+"""Shared raster colours, scale bars, and image presentation helpers."""
+
+from __future__ import annotations
 
 import numpy as np
+
+__all__ = [
+    "NEPER_PALETTE",
+    "RCPARAMS",
+    "annotate_png",
+    "append_key",
+    "draw_raster",
+    "format_length",
+    "nice_length",
+    "scale_bar_ax",
+    "scale_bar_image",
+    "trim",
+    "use_agg",
+]
 
 
 def nice_length(width, fraction=0.25):
@@ -17,7 +33,6 @@ def format_length(value, unit):
     return f"{value:g} {'um' if unit in ('micron', 'microns') else unit}"
 
 
-# PIL helpers.
 def trim(img, tol=6, margin=0):
     """Crop away a border of (near-)uniform colour equal to the corner colour."""
 
@@ -61,7 +76,6 @@ def scale_bar_image(img, width_units, unit="um", length=None, inset=0.03):
     return Image.alpha_composite(img, overlay).convert("RGB")
 
 
-# Matplotlib helpers.
 def scale_bar_ax(ax, width_units, unit="um", length=None, color="white"):
     """Scale bar in the lower right of a matplotlib axes in data units."""
     from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
@@ -87,7 +101,6 @@ def scale_bar_ax(ax, width_units, unit="um", length=None, color="white"):
     return bar
 
 
-# Neper stereographic-key label positions, normalized to image size.
 IPF_KEY_LABELS = (("[001]", 0.22, 0.96), ("[011]", 0.68, 0.96), ("[111]", 0.63, 0.08))
 
 
@@ -162,3 +175,80 @@ def append_key(png, key_png, output=None, labels=("001", "011", "111"), log=prin
         w, h = out_img.size
         log(f"  wrote {out} with the IPF key ({w} x {h} px)")
     return out
+
+
+RCPARAMS = {"font.size": 16, "axes.titlesize": 16, "figure.titlesize": 16}
+
+
+def use_agg():
+    """Agg backend + the pipeline's font sizes, for functions that write a PNG.
+
+    Kept out of module scope so importing this file leaves a caller's
+    matplotlib alone.
+    """
+    import matplotlib as mpl
+
+    mpl.use("Agg")
+    import matplotlib.pyplot as plt
+
+    plt.rcParams.update(RCPARAMS)
+    return plt
+
+
+# Neper's cell-id palette, filtered for usable brightness; RGB, four per row.
+# fmt: off
+NEPER_PALETTE = np.array(
+    [
+    255,  0,  0,   0,255,  0,   0,  0,255, 255,255,  0,
+    255,  0,255,   0,255,255, 127,255,  0,   0,255,127,
+    128,128,  0, 128,  0,128,   0,128,128, 128,128,128,
+    0,191,255, 124,252,  0,  64, 64, 64, 255, 69,  0,
+    192,192,192, 255,140,  0,   0,  0,205,  75,  0,130,
+    240,128,128, 255,127, 80, 250,128,114, 127,255,212,
+    255,215,  0, 255,165,  0, 139,  0,139,   0,139,139,
+    205,133, 63,  70,130,180,   0,250,154,  72, 61,139,
+    184,134, 11, 255,160,122, 135,206,250, 255, 99, 71,
+    112,128,144, 255,105,180, 189,183,107,   0,206,209,
+    60,179,113, 199, 21,133, 238,130,238, 173,255, 47,
+    143,188,143, 188,143,143, 255, 20,147, 139, 69, 19,
+    148,  0,211,  30,144,255, 119,136,153, 222,184,135,
+    123,104,238,  64,224,208, 135,206,235,  72,209,204,
+    210,180,140,  50,205, 50, 233,150,122, 176,196,222,
+    65,105,225, 152,251,152, 220, 20, 60, 186, 85,211,
+    240,230,140, 144,238,144,  47, 79, 79, 153, 50,204,
+    46,139, 87, 154,205, 50, 138, 43,226, 219,112,147,
+    107,142, 35, 147,112,219, 244,164, 96,  85,107, 47,
+    102,205,170, 106, 90,205,  34,139, 34,  25, 25,112,
+    32,178,170, 218,112,214, 100,149,237, 160, 82, 45,
+    178, 34, 34, 205, 92, 92, 105,105,105, 210,105, 30,
+    165, 42, 42, 218,165, 32, 221,160,221,  95,158,160,
+    ],
+    dtype=np.uint8,
+).reshape(-1, 3)
+# fmt: on
+
+
+def draw_raster(ax, cells, vox, alpha=1.0):
+    """Raster coloured by cell id with Neper's own palette; returns the RGBA.
+
+    Cell id k gets ``NEPER_PALETTE[(k - 1) % 92]``, so this is the same picture
+    as check-grains.png, repeated colours included, and the two can be compared
+    grain by grain. Empty voxels (id 0) stay transparent. `alpha` below 1 fades
+    the background, worth doing on check-network.png where the theta lines have
+    to stay readable over saturated primaries.
+    """
+    ny, nx = cells.shape
+    ncell = int(cells.max())
+    lut = np.zeros((ncell + 1, 4), dtype=np.uint8)  # row 0 = empty = transparent
+    lut[1:, :3] = NEPER_PALETTE[np.arange(ncell) % len(NEPER_PALETTE)]
+    lut[1:, 3] = round(255 * alpha)
+    rgba = lut[cells]
+    ax.imshow(
+        rgba,
+        interpolation="nearest",
+        origin="lower",
+        extent=(0, nx * vox[0], 0, ny * vox[1]),
+    )
+    ax.set_xlim(0, nx * vox[0])
+    ax.set_ylim(0, ny * vox[1])
+    return rgba

@@ -15,38 +15,46 @@ from typing import Any
 
 import numpy as np
 
-from ..orientation import (
+from festim_microstructure.ebsd.diagnostics import (
+    QualityPanels,
+    SegmentationError,
+    format_report,
+    render_checks,
+    segmentation_error,
+    verify_readback,
+    write_quality_png,
+)
+from festim_microstructure.ebsd.diagnostics import write_png as write_segerr_png
+from festim_microstructure.ebsd.morphology import fill_holes, make_meshable
+from festim_microstructure.ebsd.orientation import (
     cubic_symmetry_quaternions,
+    euler_bunge_to_quat,
     quat_to_rodrigues,
     rodrigues_to_quat,
     self_test,
     to_fundamental_zone,
 )
-from ..segmentation_error import (
-    SegmentationError,
-    format_report,
-    read_tesr_full,
-    segmentation_error,
+from festim_microstructure.ebsd.segmentation import (
+    grain_mean_orientations,
+    relabel_and_prune,
+    segment_grains,
 )
-from ..segmentation_error import write_png as write_segerr_png
-from .diagnostics import (
-    QualityPanels,
-    render_checks,
-    verify_readback,
-    write_quality_png,
+from festim_microstructure.ebsd.settings import (
+    CUBIC_LAUE,
+    Settings,
+    settings_from_provenance,
 )
-from .morphology import fill_holes, make_meshable
-from .provenance import settings_from_provenance, write_provenance
-from .reader import CtfMap, build_grid, crop_grid
-from .segmentation import grain_mean_orientations, relabel_and_prune, segment_grains
-from .settings import CUBIC_LAUE, Settings
-from .tesr import TesrData, write_tesr
+from festim_microstructure.formats.ctf import CtfMap
+from festim_microstructure.formats.provenance import write_provenance
+from festim_microstructure.formats.tesr import TesrData, read_tesr_full, write_tesr
 
 __all__ = [
     "ConversionResult",
     "CtfConversion",
     "MeasureOptions",
+    "build_grid",
     "convert",
+    "crop_grid",
     "measure_tesr_against_ctf",
 ]
 
@@ -442,7 +450,7 @@ def measure_tesr_against_ctf(ctf_path, tesr_path, options=None, log=print):
     afterwards, straight off the two files, so it also verifies that what was
     written is what was meant. See :class:`MeasureOptions`.
 
-    Returns the :class:`~...segmentation_error.SegmentationError`.
+    Returns the :class:`~festim_microstructure.ebsd.diagnostics.SegmentationError`.
     """
     log = log or (lambda *a, **k: None)
     mopt = options or MeasureOptions()
@@ -508,7 +516,84 @@ def measure_tesr_against_ctf(ctf_path, tesr_path, options=None, log=print):
     if mopt.png:
         write_segerr_png(mopt.png, res, cells, unit=opt.unit, log=log)
     if mopt.csv:
-        from ..segmentation_error import write_csv
+        from festim_microstructure.ebsd.diagnostics import write_csv
 
         write_csv(mopt.csv, res, log=log)
     return res
+
+
+def build_grid(ctf, phase, max_mad, require_zero_error, min_bands):
+    """Place the pixel table on the (ny, nx) grid and build the quality mask.
+
+    Points are indexed from their X/Y coordinates rather than from row order,
+    so a file that is not written in strict raster order still lands correctly
+    and a truncated file leaves holes rather than shearing the map.
+    """
+    ny, nx = ctf.shape
+    ix = np.rint(ctf["X"] / ctf.header["XStep"]).astype(int)
+    iy = np.rint(ctf["Y"] / ctf.header["YStep"]).astype(int)
+    inside = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    if not inside.all():
+        print(f"  warning: {int((~inside).sum())} points fall outside XCells x YCells")
+
+    good = inside & (ctf["Phase"] == phase)
+    if require_zero_error and ctf.has("Error"):
+        good &= ctf["Error"] == 0
+    if ctf.has("MAD"):
+        good &= ctf["MAD"] <= max_mad
+    if min_bands and ctf.has("Bands"):
+        good &= ctf["Bands"] >= min_bands
+
+    euler = np.stack((ctf["Euler1"], ctf["Euler2"], ctf["Euler3"]), axis=-1)
+    quat = euler_bunge_to_quat(euler[:, 0], euler[:, 1], euler[:, 2])
+
+    qgrid = np.zeros((ny, nx, 4))
+    qgrid[..., 0] = 1.0
+    ok = np.zeros((ny, nx), dtype=bool)
+    qgrid[iy[inside], ix[inside]] = quat[inside]
+    ok[iy[good], ix[good]] = True
+
+    # Preserve per-pixel quality fields for diagnostics.
+    diag = {}
+    for col, fill in (("Error", -1), ("MAD", np.nan), ("Bands", -1), ("Phase", -1)):
+        if ctf.has(col):
+            g = np.full((ny, nx), fill, dtype=float)
+            g[iy[inside], ix[inside]] = ctf[col][inside]
+            diag[col] = g
+    return qgrid, ok, diag
+
+
+def crop_grid(qgrid, ok, spec, xstep, ystep):
+    """Cut a rectangular window out of the map, before segmentation.
+
+    Cropping here rather than in Neper matters for two reasons:
+     1. The segmentation, the prune and the cell ids all describe
+        the same region, and a clipped grain is either big enough
+        to keep or dropped like any other.
+
+     2. Per-voxel orientations. Possible bug is that Neper 5.0.0 cannot read
+        back a raster when the file carries a `**oridata` section and has
+        been through (auto)crop. Cropping upstream keeps the file small enough
+        to keep orientations, so -V colouring & -S intragranular measures still work.
+
+    Bounds are in the .ctf's own 'as- acquired' length units,
+    i.e. before any flip_y.
+    """
+    try:
+        x0, x1, y0, y1 = (float(v) for v in spec.split(","))
+    except ValueError:
+        raise SystemExit(
+            f"crop={spec!r}: expected four comma-separated numbers, "
+            "xmin,xmax,ymin,ymax, in the same units as XStep"
+        )
+    ny, nx = ok.shape
+    ix0, ix1 = max(round(x0 / xstep), 0), min(round(x1 / xstep), nx)
+    iy0, iy1 = max(round(y0 / ystep), 0), min(round(y1 / ystep), ny)
+    if ix1 - ix0 < 2 or iy1 - iy0 < 2:
+        raise SystemExit(
+            f"crop={spec} keeps {max(ix1 - ix0, 0)} x {max(iy1 - iy0, 0)} "
+            f"pixels. The map is {nx} x {ny} pixels of {xstep} x {ystep}, "
+            f"i.e. {nx * xstep:g} x {ny * ystep:g} in those units."
+        )
+    window = (slice(iy0, iy1), slice(ix0, ix1))
+    return qgrid[window], ok[window], window

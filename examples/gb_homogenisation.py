@@ -11,8 +11,7 @@ from dataclasses import asdict, dataclass
 import dolfinx
 import numpy as np
 
-from festim_microstructure.meshing.voronoi import VoronoiMicrostructure, network_tensor
-from festim_microstructure.models import resolved as mm
+import festim_microstructure as fm
 
 __all__ = ["Identification", "hart_bound", "identify", "make_microstructure"]
 
@@ -20,7 +19,7 @@ __all__ = ["Identification", "hart_bound", "identify", "make_microstructure"]
 def make_microstructure(size, grain_size, aspect=1.0, seed=0, cells_per_grain=10):
     """A microstructure whose Voronoi seeds are spaced by ``grain_size``."""
     n_seeds = max(2, round((size / grain_size) ** 2))
-    return VoronoiMicrostructure.create(
+    return fm.VoronoiMicrostructure.create(
         size=size,
         n_seeds=n_seeds,
         aspect=aspect,
@@ -29,13 +28,13 @@ def make_microstructure(size, grain_size, aspect=1.0, seed=0, cells_per_grain=10
     )
 
 
-def hart_bound(model: mm.MicroModel):
+def hart_bound(model: fm.MicroModel):
     """Return the parallel Hart/Voigt bound for the resolved microstructure."""
     micro, physics = model.micro, model.physics
-    tensor = network_tensor(micro.segments)
-    return mm.mean_lattice_tensor(model) + physics.delta * physics.D_gb / micro.area * (
-        tensor
-    )
+    tensor = fm.voronoi.network_tensor(micro.segments)
+    return fm.exports.averages.mean_lattice_tensor(
+        model
+    ) + physics.delta * physics.D_gb / micro.area * (tensor)
 
 
 @dataclass
@@ -99,13 +98,13 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
     """Solve the two cell problems and assemble the effective tensor."""
     half = 0.5 * (1.0 - window_fraction) * micro.size
     window = ((half, half), (micro.size - half, micro.size - half))
-    _, missed = mm.check_network_covers_grain_boundaries(micro)
+    _, missed = fm.fem.subdomains.check_network_covers_grain_boundaries(micro)
 
     Q_cell, H_cell, Q_win, H_win = (np.zeros((2, 2)) for _ in range(4))
     eq_error = 0.0
     hart = None
     for j, G in enumerate((np.array([1.0, 0.0]), np.array([0.0, 1.0]))):
-        model = mm.build(
+        model = fm.build(
             micro,
             physics,
             bcs=[
@@ -118,11 +117,11 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
         )
         model.run()
 
-        q, g, _ = mm.averages(model)
+        q, g, _ = fm.exports.averages.averages(model)
         Q_cell[:, j], H_cell[:, j] = q, g
-        q_w, g_w, _ = mm.averages(model, window=window)
+        q_w, g_w, _ = fm.exports.averages.averages(model, window=window)
         Q_win[:, j], H_win[:, j] = q_w, g_w
-        eq_error = max(eq_error, mm.equilibrium_error(model))
+        eq_error = max(eq_error, fm.exports.averages.equilibrium_error(model))
         hart = hart_bound(model)
 
         if export_prefix is not None:
@@ -151,7 +150,7 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
 def _export(model, prefix):
     """Write the corrector fields: the grains as one discontinuous parent field
     (so the jumps show), and the network as a line dataset."""
-    field, update = mm.parent_field(model, name="c_lattice")
+    field, update = fm.exports.averages.parent_field(model, name="c_lattice")
     update()
     comm = model.micro.mesh.comm
     with dolfinx.io.VTXWriter(comm, f"{prefix}_grains.bp", [field], "BP5") as w:
@@ -203,7 +202,7 @@ def main(argv=None):
                 size, args.grain_size, args.aspect, seed, args.cells_per_grain
             )
             grain_size = np.sqrt(micro.area / micro.n_grains)
-            physics = mm.Physics(
+            physics = fm.Physics(
                 T=args.temperature, crystal_anisotropy=args.crystal_anisotropy
             )
             print(physics.report(grain_size=grain_size))
@@ -230,7 +229,7 @@ def main(argv=None):
         grain_size = np.sqrt(micro.area / micro.n_grains)
         print(f"exchange-rate sweep on the {1e6 * args.sizes[0]:.1f} um cell")
         for k in args.k_sweep:
-            physics = mm.Physics(
+            physics = fm.Physics(
                 T=args.temperature,
                 crystal_anisotropy=args.crystal_anisotropy,
                 k_exchange=k,

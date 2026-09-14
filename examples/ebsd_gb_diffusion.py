@@ -3,7 +3,7 @@ EBSD, in 2D.
 
 The mesh is Neper's direct meshing of the raster, so the grain boundaries are
 the measured ones and each boundary's disorientation comes from the two grains'
-measured orientations. See :mod:`festim_microstructure.meshing.ebsd.pipeline`.
+measured orientations. See :mod:`festim_microstructure.meshing.ebsd`.
 
 Prerequisite: the ``.tesr`` written by ``examples/ebsd_ctf_to_tesr.py`` (or by
 ``convert(...)``). Neper and Gmsh are found through ``FM_NEPER_BIN`` /
@@ -20,39 +20,19 @@ from pathlib import Path
 import festim as F
 import numpy as np
 
-from festim_microstructure.fem.subdomains import TaggedGrainBoundaryNetwork
-from festim_microstructure.meshing.ebsd.pipeline import (
-    EbsdMicrostructure,
-    EbsdOptions,
-    read_extent,
-    run_ebsd_pipeline,
-    unit_name,
-    write_network_png,
-)
-from festim_microstructure.meshing.neper import TesrMeshOptions, read_mesh
-from festim_microstructure.models.fisher import (
-    ShortCircuitParams,
-    ShortCircuitProblem,
-    beta_parameter,
-)
-from festim_microstructure.models.properties import gb_diffusivity_field
-from festim_microstructure.postprocessing.measures import (
-    component_count,
-    inventory,
-    submesh_measure,
-)
+import festim_microstructure as fm
 
 HERE = Path(__file__).resolve().parent
 
 
 @dataclass
 class Setup:
-    ebsd: EbsdOptions = field(
-        default_factory=lambda: EbsdOptions(
+    ebsd: fm.EbsdOptions = field(
+        default_factory=lambda: fm.EbsdOptions(
             tesr=str(HERE / "data" / "d7.tesr"),
             unit=1e-6,
             theta_min=10.0,
-            mesh=TesrMeshOptions(rcl=0.25, mesh_qual_min=0.7),
+            mesh=fm.TesrMeshOptions(rcl=0.25, mesh_qual_min=0.7),
         )
     )
     workdir: Path = HERE / "results"
@@ -70,25 +50,27 @@ class Setup:
 
 def main(s=Setup()):
     D_B, D_GB = s.D_B, s.D_GB
-    unit, uname = s.ebsd.unit, unit_name(s.ebsd.unit)
+    unit, uname = s.ebsd.unit, fm.meshing.ebsd.unit_name(s.ebsd.unit)
 
-    base = run_ebsd_pipeline(s.ebsd, workdir=s.workdir, force=s.force)
-    LX, LY = read_extent(base, unit)
-    mesh, cell_tags, facet_tags = read_mesh(base, gdim=2, unit=unit)
-    micro = EbsdMicrostructure.from_mesh(
+    base = fm.meshing.ebsd.run_ebsd_pipeline(s.ebsd, workdir=s.workdir, force=s.force)
+    LX, LY = fm.meshing.ebsd.read_extent(base, unit)
+    mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=2, unit=unit)
+    micro = fm.EbsdMicrostructure.from_mesh(
         base, mesh, cell_tags, facet_tags, (LX, LY), theta_min=s.ebsd.theta_min
     )
     micro.check_orientations()
-    write_network_png(base, mesh, micro, base.parent / "poly-raw.tesr", unit, uname)
+    fm.meshing.ebsd.write_network_png(
+        base, mesh, micro, base.parent / "poly-raw.tesr", unit, uname
+    )
 
-    network = TaggedGrainBoundaryNetwork(
-        id=ShortCircuitProblem.NETWORK_ID,
+    network = fm.TaggedGrainBoundaryNetwork(
+        id=fm.ShortCircuitProblem.NETWORK_ID,
         material=F.Material(D_0=D_GB, E_D=0.0),
         facet_tags=facet_tags,
         entity_ids=micro.network_ids,
         dim=1,
     )
-    params = ShortCircuitParams(
+    params = fm.ShortCircuitParams(
         D_b=D_B,
         D_gb=D_GB,
         delta=s.delta,
@@ -100,24 +82,30 @@ def main(s=Setup()):
         rtol=1e-12,
     )
     # the charged surface is the top edge of the map, wherever that now is
-    problem = ShortCircuitProblem(
+    problem = fm.ShortCircuitProblem(
         mesh, network, charged_surface=lambda x: np.isclose(x[1], LY), params=params
     )
     exports = problem.vtx_exports(str(base.parent / "ebsd"))
     if s.theta_dependent_D:
         problem.build(D_GB, exports).initialise()
         network.material = F.Material(
-            D_0=gb_diffusivity_field(network, micro.theta, D_B, D_GB), E_D=0.0
+            D_0=fm.materials.gb_diffusivity_field(network, micro.theta, D_B, D_GB),
+            E_D=0.0,
         )
     model, cb, cgb = problem.solve(D_GB, exports)
 
     # what we built
     print(micro.report())
-    len_mesh, len_tess = submesh_measure(network), micro.network_measure
+    len_mesh, len_tess = (
+        fm.exports.measures.submesh_measure(network),
+        micro.network_measure,
+    )
     n_tri = mesh.topology.index_map(2).size_global
     print(f"  mesh                            : {n_tri} triangles")
     print(f"  network captured by the submesh : {100 * len_mesh / len_tess:.2f} %")
-    print(f"  connected components            : {component_count(network)}")
+    print(
+        f"  connected components            : {fm.exports.measures.component_count(network)}"
+    )
     print(f"  interior facets                 : {model.manifold_is_interior(network)}")
 
     # effect of the network
@@ -125,8 +113,10 @@ def main(s=Setup()):
     gb_y = cgb.function_space.tabulate_dof_coordinates()[:, 1]
     deep = gb_y < depth
     c_deep = cgb.x.array[deep].max() if deep.any() else 0.0
-    print(f"\n  inventory                      : {inventory(cb, cgb, s.delta):.4e}")
-    beta = beta_parameter(s.delta, D_GB, D_B, s.t_end)
+    print(
+        f"\n  inventory                      : {fm.exports.measures.inventory(cb, cgb, s.delta):.4e}"
+    )
+    beta = fm.models.fisher.beta_parameter(s.delta, D_GB, D_B, s.t_end)
     print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
 
     bulk_y = cb.function_space.tabulate_dof_coordinates()[:, 1]

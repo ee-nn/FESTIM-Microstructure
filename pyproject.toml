@@ -35,7 +35,7 @@ dependencies = [
     "scipy",
     "matplotlib",
     "meshio",
-    "pillow",  # meshing.ebsd.micrograph: scale bars and border trimming on PNGs
+    "pillow",  # plotting: scale bars and border trimming on PNGs
 ]
 
 [project.optional-dependencies]
@@ -85,3 +85,7 @@ testpaths = ["test"]
 markers = [
     "fenics: needs dolfinx, festim and gmsh (skipped when they are not installed)",
 ]
+
+# Make the src-layout package discoverable to Pylance/Pyright in a checkout.
+[tool.pyright]
+extraPaths = ["src"]

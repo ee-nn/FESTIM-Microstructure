@@ -21,13 +21,14 @@ PACKAGES = [
     "festim_microstructure",
     "festim_microstructure.fem",
     "festim_microstructure.meshing",
-    "festim_microstructure.meshing.ebsd",
+    "festim_microstructure.ebsd",
     "festim_microstructure.models",
-    "festim_microstructure.postprocessing",
+    "festim_microstructure.exports",
+    "festim_microstructure.formats",
 ]
 
 #: Modules that must not be imported by ``import festim_microstructure``.
-HEAVY_AT_IMPORT = ("dolfinx", "festim", "ufl", "gmsh", "petsc4py", "numpy")
+HEAVY_AT_IMPORT = ("dolfinx", "festim", "ufl", "gmsh", "petsc4py", "mpi4py")
 
 SRC = pathlib.Path(festim_microstructure.__file__).parent
 
@@ -58,14 +59,14 @@ def test_unknown_attributes_raise_attribute_error(package):
 
 
 def test_submodules_resolve_as_attributes_of_the_package():
-    """``import festim_microstructure`` then ``fm.meshing.voronoi``.
+    """``import festim_microstructure`` then ``fm.voronoi``.
 
     A plain ``__all__`` of submodule-name strings made star-imports work but
     left attribute access failing, because nothing had imported the submodule.
     """
     import festim_microstructure as fm
 
-    assert fm.meshing.voronoi.VoronoiMicrostructure is fm.VoronoiMicrostructure
+    assert fm.voronoi.VoronoiMicrostructure is fm.VoronoiMicrostructure
     assert fm.microstructure.MeshedMicrostructure is fm.MeshedMicrostructure
 
 
@@ -109,16 +110,13 @@ def _module_level_imports(path):
 
 @pytest.mark.parametrize(
     "path",
-    sorted(p for p in SRC.glob("*.py") if p.name != "_version.py"),
+    sorted(
+        p for p in SRC.glob("*.py") if p.name not in {"_version.py", "materials.py"}
+    ),
     ids=lambda p: p.name,
 )
 def test_top_level_modules_carry_no_fenics_dependency(path):
-    """The layering ``fem/`` exists to enforce.
-
-    Stated as a negative so that adding a pure module needs no edit here:
-    anything at the top level of the package must be importable without
-    DOLFINx or FESTIM. Glue that cannot be belongs in ``fem/``.
-    """
+    """Only materials.py at the package root needs the solver stack."""
     forbidden = {"dolfinx", "festim", "ufl", "basix", "petsc4py", "mpi4py"}
     assert _module_level_imports(path) & forbidden == set()
 
@@ -132,3 +130,51 @@ def test_fem_is_where_the_fenics_glue_lives():
         if _module_level_imports(p) & {"dolfinx", "festim", "petsc4py"}
     }
     assert heavy == {"solvers.py", "subdomains.py"}
+
+
+def test_standalone_tools_with_solver_imports_blocked():
+    """Missing solver packages must not prevent conversion or fm-check startup."""
+    probe = """
+import importlib.abc
+import sys
+
+class NoSolvers(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'dolfinx', 'festim', 'ufl', 'gmsh',
+                                     'mpi4py', 'petsc4py'}:
+            raise ModuleNotFoundError(fullname)
+
+sys.meta_path.insert(0, NoSolvers())
+import festim_microstructure as fm
+from festim_microstructure.check import _version, main
+from festim_microstructure.ebsd.convert import CtfConversion
+from festim_microstructure.formats import ctf, msh4, provenance, tesr
+from festim_microstructure.meshing.diagnostics import overlay
+assert callable(main)
+assert callable(CtfConversion)
+assert callable(overlay)
+assert _version('dolfinx')[0] is None
+assert fm.VoronoiMicrostructure is fm.voronoi.VoronoiMicrostructure
+try:
+    fm.build
+except ImportError:
+    pass
+else:
+    raise AssertionError('solver exports must still require the solver stack')
+"""
+    subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True)
+
+
+def test_formats_do_not_depend_on_science_modules():
+    """File I/O must not import segmentation, meshing, or model construction."""
+    for path in (SRC / "formats").glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert not node.module.startswith(
+                    (
+                        "festim_microstructure.ebsd",
+                        "festim_microstructure.meshing",
+                        "festim_microstructure.models",
+                        "festim_microstructure.materials",
+                    )
+                ), path

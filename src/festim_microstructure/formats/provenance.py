@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
-from ..segmentation_error import SegmentationError
-from .settings import Settings
-
-__all__ = ["settings_from_provenance", "write_provenance"]
+__all__ = ["read_provenance", "write_provenance"]
 
 
-def write_provenance(path, opt: Settings, seg: SegmentationError, vox, log=print):
+def write_provenance(path, opt, seg, vox, log=print):
     """Everything needed to line the .tesr back up with the .ctf, plus the
     segmentation error, as json.
 
@@ -44,8 +40,6 @@ def write_provenance(path, opt: Settings, seg: SegmentationError, vox, log=print
     return path
 
 
-def settings_from_provenance(path):
-    """Rebuild the `Settings` of a conversion from its provenance json."""
-    rec = json.loads(Path(path).read_text())
-    known = {f.name for f in dataclass_fields(Settings)}
-    return Settings(**{k: v for k, v in rec.items() if k in known})
+def read_provenance(path):
+    """Read the conversion metadata stored alongside a TESR file."""
+    return json.loads(Path(path).read_text())

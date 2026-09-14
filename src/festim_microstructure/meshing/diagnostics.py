@@ -1,4 +1,4 @@
-"""Compare raster grain areas with their Neper-meshed counterparts."""
+"""Compare meshed grain areas and boundaries with the source raster."""
 
 from __future__ import annotations
 
@@ -7,19 +7,25 @@ from typing import Any
 
 import numpy as np
 
-from .mesh_overlay import read_msh4, read_tesr, use_agg
-from .micrograph import scale_bar_ax
+from festim_microstructure.formats.msh4 import read_msh4
+from festim_microstructure.formats.tesr import read_tesr, tesr_origin
+from festim_microstructure.plotting import (
+    draw_raster,
+    scale_bar_ax,
+    use_agg,
+)
 
 __all__ = [
     "AreaChange",
     "AreaReportOptions",
     "ChangeStats",
     "area_change",
+    "edge_sides",
     "format_report",
     "measure",
+    "overlay",
     "raster_areas",
     "summarise",
-    "tesr_origin",
     "triangle_areas",
     "write_csv",
     "write_png",
@@ -88,16 +94,6 @@ class AreaReportOptions:
     unit: str = "um"
     dpi: int = 150
     allow_mismatch: bool = False
-
-
-def tesr_origin(path):
-    """(ox, oy) of the raster, 0 unless the file carries an **origin section."""
-    with open(path) as fh:
-        tok = fh.read().split()
-    if "**origin" not in tok:
-        return (0.0, 0.0)
-    i = tok.index("**origin")
-    return (float(tok[i + 1]), float(tok[i + 2]))
 
 
 def raster_areas(cells, vox, ncell=None):
@@ -388,3 +384,60 @@ def measure(tesr, msh4, options: AreaReportOptions | None = None, log=print):
     if opt.png:
         write_png(opt.png, res, unit=opt.unit, dpi=opt.dpi, log=log)
     return res
+
+
+def edge_sides(seg, tri):
+    """edge id -> set of face ids its segments belong to (1: surface, 2: interior)."""
+    tri_of = {}
+    for face, v in tri:
+        for a, b in ((v[0], v[1]), (v[1], v[2]), (v[2], v[0])):
+            tri_of.setdefault(frozenset((a, b)), set()).add(face)
+    sides = {}
+    for edge, v in seg:
+        sides.setdefault(edge, set()).update(tri_of.get(frozenset(v), ()))
+    return sides
+
+
+def overlay(tesr, msh4, output="check-mesh.png", dpi=150, unit="um", log=print):
+    """Write the overlay PNG. Returns the output path.
+
+    `tesr` and `msh4` are paths; everything else is cosmetic. The counts are
+    printed through `log`, which can be set to None to silence them.
+    """
+    plt = use_agg()
+
+    cells, vox = read_tesr(tesr)
+    xyz, seg, tri = read_msh4(msh4)
+    sides = edge_sides(seg, tri)
+    faces = {t for t, _ in tri}
+    if log and len(faces) != int(cells.max()):
+        log(f"note: raster has {int(cells.max())} cells, mesh has {len(faces)} faces")
+
+    ny, nx = cells.shape
+    fig, ax = plt.subplots(figsize=(7, 7 * ny * vox[1] / (nx * vox[0])))
+    draw_raster(ax, cells, vox)
+    n_int = n_surf = 0
+    for edge, v in seg:
+        interior = len(sides[edge]) == 2
+        n_int += interior
+        n_surf += not interior
+        a, b = xyz[v[0]], xyz[v[1]]
+        ax.plot(
+            [a[0], b[0]],
+            [a[1], b[1]],
+            color="black" if interior else "0.55",
+            lw=1.0 if interior else 0.7,
+        )
+    ax.set_title(
+        f"{len(sides)} edges ({sum(len(s) == 2 for s in sides.values())} interior), "
+        f"{n_int + n_surf} segments over {int(cells.max())} raster cells"
+    )
+    ax.set_xlabel(f"x ({unit})")
+    ax.set_ylabel(f"y ({unit})")
+    scale_bar_ax(ax, nx * vox[0], unit)
+    fig.tight_layout()
+    fig.savefig(output, dpi=dpi)
+    plt.close(fig)
+    if log:
+        log(f"  wrote {output}")
+    return output

@@ -6,7 +6,7 @@ import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
-from ..orientation import (
+from festim_microstructure.ebsd.orientation import (
     crystal_equivalents,
     cubic_disorientation_angle,
     qconj,

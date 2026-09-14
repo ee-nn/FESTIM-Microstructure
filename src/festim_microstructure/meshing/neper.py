@@ -1,7 +1,7 @@
 """Run Neper tessellation/meshing workflows and read their topology data.
 
-Supports generated polycrystals, 2D EBSD rasters, stat-file metadata, and
-DOLFINx mesh import while keeping Neper subprocesses separate from Python.
+Supports generated polycrystals and 2D EBSD rasters. NeperMicrostructure
+interprets the topology statistics read by formats.msh4.
 """
 
 import shutil
@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from .._binaries import find_binary, subprocess_env
+from ..formats.msh4 import StatFile
 
 # Keep DOLFINx imports local so Neper/stat tools remain lightweight.
 
@@ -22,11 +23,9 @@ __all__ = [
     "NeperMicrostructure",
     "NeperOptions",
     "NeperRun",
-    "StatFile",
     "TesrMeshOptions",
     "find_binary",
     "mesh_tesr",
-    "read_mesh",
     "run_interruptible",
     "run_neper",
 ]
@@ -261,32 +260,6 @@ def run_neper(n, seed=1, options=None, run=None):
     return base
 
 
-class StatFile:
-    """One Neper .st* file: scalar keys in columns, entities in id order.
-
-    Ids are 1-based throughout Neper, so ``self.values[k]`` is entity ``k + 1``
-    and :meth:`ids` converts a boolean mask back into ids.
-    """
-
-    def __init__(self, path, keys):
-        raw = np.loadtxt(path, ndmin=2)
-        if raw.shape[1] != len(keys):
-            raise ValueError(
-                f"{path} has {raw.shape[1]} columns but {len(keys)} keys were "
-                f"expected ({', '.join(keys)}); the -stat option and the key "
-                "tuple have drifted apart"
-            )
-        self.values = {k: raw[:, i] for i, k in enumerate(keys)}
-        self.n = raw.shape[0]
-
-    def __getitem__(self, key):
-        return self.values[key]
-
-    @staticmethod
-    def ids(mask):
-        return np.flatnonzero(mask).astype(np.int32) + 1
-
-
 @dataclass
 class NeperMicrostructure:
     """The tessellation's own description of itself, read back from the stats.
@@ -475,7 +448,7 @@ def mesh_tesr(tesr, options=None, run=None):
     if not tesr.is_file():
         raise FileNotFoundError(
             f"no EBSD map .tesr file at {tesr}. The map must be written as a "
-            "raster tessellation first (festim_microstructure.meshing.ebsd.ctf)."
+            "raster tessellation first (festim_microstructure.ebsd.convert)."
         )
     if any(c.isspace() for c in str(tesr)):
         raise ValueError(
@@ -623,40 +596,3 @@ def mesh_tesr(tesr, options=None, run=None):
         print(f"  note: {tmp} is not empty (stale gmsh scratch)")
     print(f"ok: {msh.name}  ({n_cells} grains, domain {lx:g} x {ly:g})")
     return base
-
-
-# Reader.
-
-
-def read_mesh(base, gdim, unit=1.0, comm=None, rank=0):
-    """Read a Neper ``.msh4`` into dolfinx.
-
-    ``cell_tags`` carry the polyhedron / raster-cell (grain) id and
-    ``facet_tags`` the tessellation face (3D) or edge (2D) id, because Neper
-    writes every tessellation entity as an element set and the facet physical
-    ids run independently of the cell ones.
-
-    ``unit`` is metres per mesh length unit; the geometry is scaled by it
-    before any locator, submesh or dof coordinate is derived from it (an EBSD
-    raster is meshed in microns so that Gmsh's absolute tolerances are
-    exercised at O(1-100) rather than O(1e-6)).
-    """
-    from mpi4py import MPI
-
-    from dolfinx.io import gmsh as gmshio
-
-    comm = MPI.COMM_WORLD if comm is None else comm
-    result = gmshio.read_from_msh(str(base) + ".msh4", comm, rank, gdim=gdim)
-    if hasattr(result, "mesh"):
-        mesh, cell_tags, facet_tags = result.mesh, result.cell_tags, result.facet_tags
-    else:
-        mesh, cell_tags, facet_tags = result[0], result[1], result[2]
-    if facet_tags is None or facet_tags.values.size == 0:
-        raise RuntimeError(
-            "no facet tags were read: the facet element sets did not survive "
-            "the msh4 round trip (for a raster mesh, check that -dim all reached "
-            "neper -M)"
-        )
-    if unit != 1.0:
-        mesh.geometry.x[:] *= unit
-    return mesh, cell_tags, facet_tags

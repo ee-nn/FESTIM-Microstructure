@@ -5,9 +5,10 @@ reproductions. They are intentionally not included in the installed
 `festim_microstructure` API: their defaults, outputs, figures, and input data
 belong to a particular study rather than being stable library contracts.
 
-Use the reusable pieces from `festim_microstructure.meshing`,
-`festim_microstructure.models`, `festim_microstructure.subdomains`, and
-`festim_microstructure.postprocessing.measures` when building a new workflow.
+Import the package as `import festim_microstructure as fm`. Use curated names
+such as `fm.Physics`, `fm.build`, and `fm.VoronoiMicrostructure`, and access
+specialised helpers through namespaces such as `fm.voronoi`, `fm.meshing`,
+`fm.formats`, and `fm.exports`.
 
 - `voronoi_polycrystal_2d.py`, `voronoi_polycrystal_3d.py`, and
   `neper_voronoi_network.py` demonstrate short-circuit diffusion.

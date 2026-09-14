@@ -19,6 +19,7 @@ _NAMES = {
     "GrainBoundaryNetwork": ".subdomains",
     "GrainSurface": ".subdomains",
     "TaggedGrainBoundaryNetwork": ".subdomains",
+    "check_network_covers_grain_boundaries": ".subdomains",
     "facet_midpoints": ".subdomains",
     "interior_facet_mask": ".subdomains",
 }

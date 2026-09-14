@@ -4,6 +4,8 @@ The pipeline converts ``.tesr`` to ``.msh4``, then derives edge connectivity,
 disorientation, lengths, and junctions from Neper's element sets.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,11 +14,20 @@ from mpi4py import MPI
 import dolfinx
 import numpy as np
 
-from ..neper import NeperRun, TesrMeshOptions, mesh_tesr
-from .grain_area_change import AreaReportOptions, measure
-from .mesh_overlay import draw_raster, overlay, read_tesr, use_agg
-from .micrograph import scale_bar_ax
-from .orientation import cubic_disorientation_angle, qconj, qmul, rodrigues_to_quat
+from festim_microstructure.ebsd.orientation import (
+    cubic_disorientation_angle,
+    qconj,
+    qmul,
+    rodrigues_to_quat,
+)
+from festim_microstructure.formats.tesr import read_tesr
+from festim_microstructure.meshing.diagnostics import (
+    AreaReportOptions,
+    measure,
+    overlay,
+)
+from festim_microstructure.meshing.neper import NeperRun, TesrMeshOptions, mesh_tesr
+from festim_microstructure.plotting import draw_raster, scale_bar_ax, use_agg
 
 __all__ = [
     "EbsdMicrostructure",
@@ -28,6 +39,7 @@ __all__ = [
     "unit_name",
     "write_network_png",
 ]
+
 
 UNIT_NAMES = {1e-9: "nm", 1e-6: "um", 1e-3: "mm", 1.0: "m"}
 
@@ -236,7 +248,7 @@ class EbsdMicrostructure:
     n_grains: int
     ori: np.ndarray  #: (n_grain, 3) Rodrigues, one per raster cell
     facet_edge: np.ndarray  #: edge id per local facet, 0 off the network
-    edges: "EdgeTable"
+    edges: EdgeTable
     triple_junctions: int
     surface_edges: int
     theta_min: float = 10.0
@@ -397,7 +409,7 @@ class EbsdMicrostructure:
 def write_network_png(base, mesh, micro, tesr_path, unit=1e-6, unit_name="um"):
     """check-network.png: the raster with the boundaries as FESTIM will use them.
 
-    Same background as check-mesh.png (mesh_overlay.py), but the edges are the
+    Same background as check-mesh.png (meshing.diagnostics), but the edges are the
     driver's: those above ``micro.theta_min`` coloured by theta, interior edges below it
     dashed white, specimen-surface edges grey. Compare with check-mesh.png to
     see what the disorientation filter removed, and with check-grains.png to

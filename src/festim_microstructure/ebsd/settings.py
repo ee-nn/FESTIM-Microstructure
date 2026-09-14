@@ -3,25 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields
 
 import numpy as np
 
-__all__ = ["CUBIC_LAUE", "LAUE_TO_CRYSYM", "Settings"]
+from festim_microstructure.formats.provenance import read_provenance
 
-# Channel Laue-group indices mapped to Neper crystal-symmetry keys.
-LAUE_TO_CRYSYM = {
-    1: "-1",
-    2: "2/m",
-    3: "mmm",
-    4: "4/m",
-    5: "4/mmm",
-    6: "-3",
-    7: "-3m",
-    8: "6/m",
-    9: "6/mmm",
-    10: "m-3",
-    11: "cubic",  # m-3m; Neper's `cubic` and `m-3m` both carry 24 operators
-}
+__all__ = ["CUBIC_LAUE", "Settings", "settings_from_provenance"]
+
+
+def settings_from_provenance(path):
+    """Rebuild the `Settings` of a conversion from its provenance json."""
+    rec = read_provenance(path)
+    known = {f.name for f in dataclass_fields(Settings)}
+    return Settings(**{k: v for k, v in rec.items() if k in known})
+
+
 CUBIC_LAUE = (10, 11)
 
 

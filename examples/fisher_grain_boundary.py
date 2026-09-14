@@ -11,7 +11,7 @@ import dolfinx
 import festim as F
 import numpy as np
 
-from festim_microstructure.models.fisher import ShortCircuitParams, ShortCircuitProblem
+import festim_microstructure as fm
 
 
 @dataclass
@@ -58,12 +58,12 @@ def main(s=Setup()):
     )
     # A line subdomain carries the GB transport equation.
     gb = F.VolumeSubdomain(
-        id=ShortCircuitProblem.NETWORK_ID,
+        id=fm.ShortCircuitProblem.NETWORK_ID,
         material=F.Material(D_0=D_GB, E_D=0.0),
         dim=1,
         locator=lambda x: np.isclose(x[0], 0.0, atol=1e-11),
     )
-    params = ShortCircuitParams(
+    params = fm.ShortCircuitParams(
         D_b=D_B,
         D_gb=D_GB,
         delta=s.delta,
@@ -75,7 +75,7 @@ def main(s=Setup()):
         atol=1e-8,
         rtol=1e-6,
     )
-    problem = ShortCircuitProblem(
+    problem = fm.ShortCircuitProblem(
         mesh,
         gb,
         charged_surface=lambda x: np.isclose(x[1], 0.0, atol=1e-11),

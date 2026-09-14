@@ -89,6 +89,12 @@ including test and lint extras:
 pip install -e ".[test,lint]"
 ```
 
+For VS Code, select the `festim-microstructure` Conda environment with
+**Python: Select Interpreter**. The project configures `src/` as an analysis
+search path for Pylance/Pyright; running the examples still requires the
+editable install in the selected environment. If imports stay underlined after
+changing environments, run **Developer: Reload Window**.
+
 ### Verifying the install
 
 ```bash
@@ -168,26 +174,44 @@ FESTIM-Microstructure/
 ├── docs/
 │   └── gb_homogenisation.md    # the homogenisation study, with figures
 ├── src/festim_microstructure/
-│   ├── __init__.py
-│   ├── subdomains.py           # GrainBoundaryNetwork (locator), TaggedGrainBoundaryNetwork
-│   │                           #   (facet tags), Grain, GrainSurface
-│   ├── solvers.py              # ATOL and the MUMPS workaround, see docs/
-│   ├── _binaries.py            # find_binary(): FM_NEPER_BIN / FM_GMSH_BIN / FM_POVRAY_BIN
-│   ├── check.py                # `fm-check`: report versions and where the programs resolve
-│   ├── meshing/
-│   │   ├── voronoi.py          # 2D/3D Voronoi polycrystals via Gmsh
-│   │   ├── neper.py            # neper -T / -M wrapper, stat readers, raster meshing
-│   │   └── ebsd/
-│   │       ├── ctf.py          # .ctf -> .tesr converter (pure Python)
-│   │       ├── orientation.py  # quaternions, cubic symmetry, disorientation
-│   │       ├── pipeline.py     # .tesr -> mesh -> EbsdMicrostructure
-│   │       └── ...             # segmentation_error, grain_area_change, figures
+│   ├── __init__.py              # flat API; solver-dependent exports are lazy
+│   ├── _lazy.py                # import support for optional solver dependencies
+│   ├── _binaries.py            # Neper, Gmsh and POV-Ray executable discovery
+│   ├── check.py                # fm-check environment diagnostic
+│   ├── microstructure.py       # microstructure protocols
+│   ├── materials.py            # Physics and diffusivity fields/materials
+│   ├── plotting.py             # raster colours, scale bars, image helpers
+│   ├── formats/                # file I/O
+│   │   ├── ctf.py
+│   │   ├── tesr.py
+│   │   ├── msh4.py             # mesh readers and Neper StatFile
+│   │   └── provenance.py
+│   ├── ebsd/                   # measured map -> raster tessellation
+│   │   ├── orientation.py
+│   │   ├── segmentation.py
+│   │   ├── morphology.py
+│   │   ├── settings.py
+│   │   ├── convert.py
+│   │   └── diagnostics.py
+│   ├── voronoi/                # generated 2D/3D tessellations and Gmsh meshes
+│   │   ├── _geometry.py
+│   │   ├── geometry2d.py
+│   │   ├── geometry3d.py
+│   │   ├── gmsh_builder.py
+│   │   └── polycrystal.py
+│   ├── meshing/                # tessellation -> mesh -> BoundaryNetwork
+│   │   ├── neper.py            # subprocess driver, options, NeperMicrostructure
+│   │   ├── ebsd.py
+│   │   └── diagnostics.py
 │   ├── models/
-│   │   ├── fisher.py           # ShortCircuitProblem: one lattice + one network
-│   │   ├── properties.py       # Physics, per-grain / per-boundary coefficient fields
-│   │   ├── resolved.py         # one subdomain per grain, coupled through the network
-│   └── postprocessing/
-│       ├── measures.py         # inventory, submesh length/area, component count
+│   │   ├── fisher.py
+│   │   └── resolved.py         # build, MicroModel, SolveOptions
+│   ├── fem/
+│   │   ├── solvers.py
+│   │   └── subdomains.py
+│   └── exports/
+│       ├── measures.py         # single-field inventory and submesh measures
+│       └── averages.py         # resolved-model averages, inventory, fields
 ├── examples/                   # runnable workflows; not part of the library API
 │   ├── gb_homogenisation.py    # RVE identification study
 │   ├── gb_validation.py        # validation of the RVE result
@@ -214,32 +238,34 @@ micro = fm.VoronoiMicrostructure.create(size=100e-6, n_seeds=64)
 model = fm.build(micro, fm.Physics(T=600.0), bcs).run()
 ```
 
-`dir(fm)` lists the top-level API. Attribute access is lazy, so
-`import festim_microstructure` costs nothing and dolfinx is imported only when
-a name that needs it is first touched -- `fm.VoronoiMicrostructure` pulls in
-NumPy and SciPy, `fm.build` pulls in FESTIM.
+`dir(fm)` lists the curated top-level API. Geometry and network names load
+eagerly with NumPy and SciPy; solver-dependent names such as `fm.build` and
+`fm.Physics` load FESTIM/DOLFINx on first access. This keeps standalone EBSD
+conversion and `fm-check` usable without the solver stack.
 
 Everything else stays reachable through the subpackages, which resolve the
 same way:
 
 ```python
-fm.meshing.voronoi.network_tensor
-fm.meshing.ebsd.ctf.CtfConversion
-fm.models.resolved.averages
+fm.voronoi.network_tensor
+fm.ebsd.CtfConversion
+fm.exports.averages.averages
 fm.fem.subdomains.GrainBoundaryNetwork
-fm.postprocessing.measures.submesh_measure
+fm.exports.measures.submesh_measure
 ```
 
-Explicit imports work as before and are what the examples use:
+The examples use a single package import, with curated names at the top level
+and specialised helpers under their modules:
 
 ```python
-from festim_microstructure.meshing.voronoi import (
-    build_mesh,
-    near_segments,
-    voronoi_segments,
-)
-from festim_microstructure.models.fisher import ShortCircuitParams, ShortCircuitProblem
-from festim_microstructure.fem.subdomains import GrainBoundaryNetwork
+import festim_microstructure as fm
+
+fm.ShortCircuitParams
+fm.ShortCircuitProblem
+fm.GrainBoundaryNetwork
+fm.voronoi.build_mesh
+fm.voronoi.near_segments
+fm.voronoi.voronoi_segments
 ```
 
 Examples are executable workflows, intentionally kept outside the installed
@@ -266,8 +292,6 @@ Generate meshes through Python functions:
 from pathlib import Path
 
 import festim_microstructure as fm
-from festim_microstructure.meshing.ebsd.ctf import convert
-from festim_microstructure.meshing.ebsd.pipeline import run_ebsd_pipeline
 
 micro = fm.VoronoiMicrostructure.create(
     size=100e-6, n_seeds=64, aspect=4, cells_per_grain=10, msh_path="poly2d.msh"
@@ -277,12 +301,12 @@ print(micro.report())
 workdir = Path("results")
 workdir.mkdir(parents=True, exist_ok=True)
 tesr = workdir / "poly.tesr"
-result = convert(
+result = fm.ebsd.convert.convert(
     "examples/data/D7 PBF SS316L.ctf", str(tesr),
     min_pixels=15, max_mad=1.5, allow_error=True,
     crop="0,306,0,306", diagnostics=True,
 )
-base = run_ebsd_pipeline(fm.EbsdOptions(tesr=str(tesr)), workdir=workdir)
+base = fm.meshing.ebsd.run_ebsd_pipeline(fm.EbsdOptions(tesr=str(tesr)), workdir=workdir)
 ```
 
 Configure EBSD meshing with `fm.EbsdOptions(mesh=fm.TesrMeshOptions(...))`

@@ -12,12 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from festim_microstructure.meshing.voronoi import (
-    VoronoiMicrostructure,
-    VoronoiMicrostructure3D,
-)
-from festim_microstructure.models.resolved import Physics, averages, build
-from festim_microstructure.postprocessing.measures import submesh_measure
+import festim_microstructure as fm
 
 # Physics (SI).
 T = 1073.0  # K
@@ -54,7 +49,7 @@ def physics_for(ratio, f_gb, S_v):
     target volume fraction, k from the slab."""
     delta = f_gb / S_v
     D_gb = ratio * D_m(T)
-    return Physics(
+    return fm.Physics(
         T=T,
         D_0_bulk=D0_M,
         E_D_bulk=E_M,
@@ -78,7 +73,7 @@ def boundary_conditions(axis, length, tol):
 
 def make(structure, comm):
     if structure == "iso":
-        return VoronoiMicrostructure3D.create(
+        return fm.VoronoiMicrostructure3D.create(
             size=B,
             n_seeds=ISO_SEEDS,
             seed=SEED,
@@ -86,7 +81,7 @@ def make(structure, comm):
             bulk_coarsening=BULK_COARSENING,
             comm=comm,
         )
-    return VoronoiMicrostructure.create(
+    return fm.VoronoiMicrostructure.create(
         size=B,
         n_seeds=COL_SEEDS,
         seed=SEED,
@@ -98,15 +93,15 @@ def make(structure, comm):
 
 def prepare(micro, bcs):
     """Build once and return the model plus its network area density ``S_v``."""
-    mm = build(micro, physics_for(1.0, 0.01, 1.0 / B), bcs).initialise()
+    mm = fm.build(micro, physics_for(1.0, 0.01, 1.0 / B), bcs).initialise()
     dim = micro.mesh.geometry.dim
-    return mm, submesh_measure(mm.network) / B**dim
+    return mm, fm.exports.measures.submesh_measure(mm.network) / B**dim
 
 
 def run(mm, axis, S_v, ratio, f_gb):
     physics = physics_for(ratio, f_gb, S_v)
     mm.set_physics(physics).solve()
-    q, _, _ = averages(mm)  # their Eq. 21: volume-averaged flux
+    q, _, _ = fm.exports.averages.averages(mm)  # their Eq. 21: volume-averaged flux
     D_eff = q[axis] * B / (C_IN - C_OUT)
     return dict(
         f_gb=f_gb,

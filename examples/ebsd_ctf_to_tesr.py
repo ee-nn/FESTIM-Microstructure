@@ -8,11 +8,11 @@ two rendered check images. Run::
 
 from pathlib import Path
 
-from festim_microstructure.meshing.ebsd.ctf import convert
+import festim_microstructure as fm
 
 HERE = Path(__file__).resolve().parent
 
-res = convert(
+res = fm.ebsd.convert.convert(
     str(HERE / "data" / "D7 PBF SS316L.ctf"),
     str(HERE / "data" / "d7.tesr"),
     min_pixels=15,

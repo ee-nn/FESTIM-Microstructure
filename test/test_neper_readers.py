@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from festim_microstructure.meshing.neper import NeperMicrostructure, StatFile
+from festim_microstructure.formats.msh4 import StatFile
+from festim_microstructure.meshing.neper import NeperMicrostructure
 
 
 def _write(tmp_path):

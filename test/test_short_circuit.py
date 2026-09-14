@@ -11,19 +11,19 @@ pytestmark = requires_fenics
 def test_fast_boundaries_increase_inventory():
     import festim as F
 
+    from festim_microstructure.exports.measures import inventory
     from festim_microstructure.fem.subdomains import GrainBoundaryNetwork
-    from festim_microstructure.meshing.voronoi import (
+    from festim_microstructure.models.fisher import (
+        ShortCircuitParams,
+        ShortCircuitProblem,
+    )
+    from festim_microstructure.voronoi import (
         MeshSizing,
         build_mesh,
         near_segments,
         snap_segments,
         voronoi_segments,
     )
-    from festim_microstructure.models.fisher import (
-        ShortCircuitParams,
-        ShortCircuitProblem,
-    )
-    from festim_microstructure.postprocessing.measures import inventory
 
     L, h_gb = 1.0, 0.05
     segments = snap_segments(

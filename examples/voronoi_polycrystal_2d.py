@@ -16,27 +16,7 @@ from dataclasses import dataclass
 import festim as F
 import numpy as np
 
-from festim_microstructure.fem.subdomains import GrainBoundaryNetwork
-from festim_microstructure.meshing.voronoi import (
-    MeshSizing,
-    build_mesh,
-    connected_components,
-    near_segments,
-    triple_junctions,
-    voronoi_segments,
-)
-from festim_microstructure.models.fisher import (
-    ShortCircuitParams,
-    ShortCircuitProblem,
-    beta_parameter,
-    hart_bound,
-)
-from festim_microstructure.postprocessing.measures import (
-    component_count,
-    inventory,
-    junction_only_below,
-    submesh_measure,
-)
+import festim_microstructure as fm
 
 
 @dataclass
@@ -80,18 +60,18 @@ def main(s=Setup()):
     L, D_B, D_GB = s.L, s.D_B, s.D_GB
 
     # microstructure
-    segments = voronoi_segments(s.n_seeds, L, np.random.default_rng(s.seed))
-    mesh, _cell_tags, n_grains = build_mesh(
-        segments, L, MeshSizing(h_gb=s.h_gb, h_bulk=s.h_bulk)
+    segments = fm.voronoi.voronoi_segments(s.n_seeds, L, np.random.default_rng(s.seed))
+    mesh, _cell_tags, n_grains = fm.voronoi.build_mesh(
+        segments, L, fm.MeshSizing(h_gb=s.h_gb, h_bulk=s.h_bulk)
     )
     tol = 1e-7  # distance below which a point counts as lying on a ridge
-    network = GrainBoundaryNetwork(
-        id=ShortCircuitProblem.NETWORK_ID,
+    network = fm.GrainBoundaryNetwork(
+        id=fm.ShortCircuitProblem.NETWORK_ID,
         material=F.Material(D_0=D_GB, E_D=0.0),
-        locator=lambda x: near_segments(x, segments, tol),
+        locator=lambda x: fm.voronoi.near_segments(x, segments, tol),
         dim=1,
     )
-    params = ShortCircuitParams(
+    params = fm.ShortCircuitParams(
         D_b=D_B,
         D_gb=D_GB,
         delta=s.delta,
@@ -103,7 +83,7 @@ def main(s=Setup()):
         atol=1e-8,
         rtol=1e-6,
     )
-    problem = ShortCircuitProblem(
+    problem = fm.ShortCircuitProblem(
         mesh, network, charged_surface=lambda x: np.isclose(x[1], L), params=params
     )
 
@@ -114,14 +94,20 @@ def main(s=Setup()):
 
     # what we built
     ridge_length = sum(float(np.linalg.norm(q - p)) for p, q in segments)
-    facet_length = submesh_measure(network)
+    facet_length = fm.exports.measures.submesh_measure(network)
     print(
         f"microstructure: {s.n_seeds} seeds, {n_grains} grains, "
         f"{len(segments)} boundary segments"
     )
-    print(f"  triple junctions inside the box : {len(triple_junctions(segments, L))}")
-    print(f"  connected components (ridges)   : {connected_components(segments, L)}")
-    print(f"  connected components (submesh)  : {component_count(network)}")
+    print(
+        f"  triple junctions inside the box : {len(fm.voronoi.triple_junctions(segments, L))}"
+    )
+    print(
+        f"  connected components (ridges)   : {fm.voronoi.connected_components(segments, L)}"
+    )
+    print(
+        f"  connected components (submesh)  : {fm.exports.measures.component_count(network)}"
+    )
     print(f"  facets dropped on the outer box : {network.n_dropped}")
     n_cells = mesh.topology.index_map(2).size_global
     print(f"  mesh                            : {n_cells} cells")
@@ -132,14 +118,16 @@ def main(s=Setup()):
     print(f"  interior facets                 : {model.manifold_is_interior(network)}")
 
     # effect of the network
-    fast = inventory(cb_fast, cgb_fast, s.delta)
-    depth = junction_only_below([np.array(seg) for seg in segments], axis=1, top=L)
+    fast = fm.exports.measures.inventory(cb_fast, cgb_fast, s.delta)
+    depth = fm.exports.measures.junction_only_below(
+        [np.array(seg) for seg in segments], axis=1, top=L
+    )
     gb_y = cgb_fast.function_space.tabulate_dof_coordinates()[:, 1]
     deep = gb_y < depth
     c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
     _, cb_ref, cgb_ref = problem.solve(D_B)
-    ref = inventory(cb_ref, cgb_ref, s.delta)
+    ref = fm.exports.measures.inventory(cb_ref, cgb_ref, s.delta)
 
     print(
         f"\nafter t = {s.t_end} (lattice diffusion alone reaches "
@@ -151,10 +139,10 @@ def main(s=Setup()):
     f_gb = s.delta * ridge_length / L**2
     print(f"  boundary area fraction f       : {f_gb:.3e}")
     print(
-        f"  Hart bound f D_gb + (1-f) D_b  : {hart_bound(f_gb, D_GB, D_B):.3e}"
+        f"  Hart bound f D_gb + (1-f) D_b  : {fm.models.fisher.hart_bound(f_gb, D_GB, D_B):.3e}"
         f"  (vs D_b = {D_B:.3e})"
     )
-    beta = beta_parameter(s.delta, D_GB, D_B, s.t_end)
+    beta = fm.models.fisher.beta_parameter(s.delta, D_GB, D_B, s.t_end)
     print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
 
     bulk_y = cb_fast.function_space.tabulate_dof_coordinates()[:, 1]

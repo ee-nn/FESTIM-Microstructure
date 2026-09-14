@@ -33,32 +33,7 @@ from dataclasses import dataclass
 import festim as F
 import numpy as np
 
-from festim_microstructure.fem.subdomains import (
-    GrainBoundaryNetwork,
-    TaggedGrainBoundaryNetwork,
-)
-from festim_microstructure.meshing.voronoi import (
-    GB_TAG_3D,
-    MeshSizing,
-    build_mesh_3d,
-    connected_components_3d,
-    near_faces,
-    polygon_area,
-    triple_lines,
-    voronoi_faces,
-)
-from festim_microstructure.models.fisher import (
-    ShortCircuitParams,
-    ShortCircuitProblem,
-    beta_parameter,
-    hart_bound,
-)
-from festim_microstructure.postprocessing.measures import (
-    component_count,
-    inventory,
-    junction_only_below,
-    submesh_measure,
-)
+import festim_microstructure as fm
 
 
 @dataclass
@@ -83,25 +58,27 @@ class Setup:
 def main(s=Setup()):
     L, D_B, D_GB = s.L, s.D_B, s.D_GB
 
-    faces = voronoi_faces(s.n_seeds, L, np.random.default_rng(s.seed))
-    mesh, facet_tags = build_mesh_3d(faces, L, MeshSizing(h_gb=s.h_gb, h_bulk=s.h_bulk))
+    faces = fm.voronoi.voronoi_faces(s.n_seeds, L, np.random.default_rng(s.seed))
+    mesh, facet_tags = fm.voronoi.build_mesh_3d(
+        faces, L, fm.MeshSizing(h_gb=s.h_gb, h_bulk=s.h_bulk)
+    )
     material = F.Material(D_0=D_GB, E_D=0.0)
     if s.locate_geometrically:
-        network = GrainBoundaryNetwork(
-            id=ShortCircuitProblem.NETWORK_ID,
+        network = fm.GrainBoundaryNetwork(
+            id=fm.ShortCircuitProblem.NETWORK_ID,
             material=material,
-            locator=lambda x: near_faces(x, faces),
+            locator=lambda x: fm.voronoi.near_faces(x, faces),
             dim=2,
         )
     else:
-        network = TaggedGrainBoundaryNetwork(
-            id=ShortCircuitProblem.NETWORK_ID,
+        network = fm.TaggedGrainBoundaryNetwork(
+            id=fm.ShortCircuitProblem.NETWORK_ID,
             material=material,
             facet_tags=facet_tags,
-            entity_ids=[GB_TAG_3D],
+            entity_ids=[fm.voronoi.GB_TAG_3D],
             dim=2,
         )
-    params = ShortCircuitParams(
+    params = fm.ShortCircuitParams(
         D_b=D_B,
         D_gb=D_GB,
         delta=s.delta,
@@ -112,7 +89,7 @@ def main(s=Setup()):
         atol=1e-14,
         rtol=1e-12,
     )
-    problem = ShortCircuitProblem(
+    problem = fm.ShortCircuitProblem(
         mesh, network, charged_surface=lambda x: np.isclose(x[2], L), params=params
     )
     model, cb_fast, cgb_fast = problem.solve(
@@ -120,16 +97,20 @@ def main(s=Setup()):
     )
 
     # what we built
-    lines, triple_length, quadruple = triple_lines(faces)
-    face_area = sum(polygon_area(poly) for poly in faces)
-    sub_area = submesh_measure(network)
+    lines, triple_length, quadruple = fm.voronoi.triple_lines(faces)
+    face_area = sum(fm.voronoi.polygon_area(poly) for poly in faces)
+    sub_area = fm.exports.measures.submesh_measure(network)
     print(f"microstructure: {s.n_seeds} seeds, {len(faces)} boundary polygons")
     print(
         f"  triple lines                    : {len(lines)} (length {triple_length:.3f})"
     )
     print(f"  quadruple points                : {len(quadruple)}")
-    print(f"  connected components (faces)    : {connected_components_3d(faces)}")
-    print(f"  connected components (submesh)  : {component_count(network)}")
+    print(
+        f"  connected components (faces)    : {fm.voronoi.connected_components_3d(faces)}"
+    )
+    print(
+        f"  connected components (submesh)  : {fm.exports.measures.component_count(network)}"
+    )
     n_cells = mesh.topology.index_map(3).size_global
     print(f"  mesh                            : {n_cells} cells")
     print(
@@ -139,14 +120,14 @@ def main(s=Setup()):
     print(f"  interior facets                 : {model.manifold_is_interior(network)}")
 
     # effect of the network
-    fast = inventory(cb_fast, cgb_fast, s.delta)
-    depth = junction_only_below(faces, axis=2, top=L)
+    fast = fm.exports.measures.inventory(cb_fast, cgb_fast, s.delta)
+    depth = fm.exports.measures.junction_only_below(faces, axis=2, top=L)
     gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
     deep = gb_z < depth
     c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
     _, cb_ref, cgb_ref = problem.solve(D_B)
-    ref = inventory(cb_ref, cgb_ref, s.delta)
+    ref = fm.exports.measures.inventory(cb_ref, cgb_ref, s.delta)
 
     print(
         f"\nafter t = {s.t_end} (lattice diffusion alone reaches "
@@ -158,10 +139,10 @@ def main(s=Setup()):
     f_gb = s.delta * face_area / L**3
     print(f"  boundary volume fraction f     : {f_gb:.3e}")
     print(
-        f"  Hart bound f D_gb + (1-f) D_b  : {hart_bound(f_gb, D_GB, D_B):.3e}"
+        f"  Hart bound f D_gb + (1-f) D_b  : {fm.models.fisher.hart_bound(f_gb, D_GB, D_B):.3e}"
         f"  (vs D_b = {D_B:.3e})"
     )
-    beta = beta_parameter(s.delta, D_GB, D_B, s.t_end)
+    beta = fm.models.fisher.beta_parameter(s.delta, D_GB, D_B, s.t_end)
     print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
 
     bulk_z = cb_fast.function_space.tabulate_dof_coordinates()[:, 2]

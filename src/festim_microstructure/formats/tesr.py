@@ -1,4 +1,4 @@
-"""Write a Neper ``.tesr`` raster tessellation."""
+"""Read and write Neper ``.tesr`` raster tessellations."""
 
 from __future__ import annotations
 
@@ -7,7 +7,83 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["TesrData", "write_tesr"]
+__all__ = ["TesrData", "read_tesr", "read_tesr_full", "tesr_origin", "write_tesr"]
+
+
+def tesr_origin(path):
+    """(ox, oy) of the raster, 0 unless the file carries an **origin section."""
+    with open(path) as fh:
+        tok = fh.read().split()
+    if "**origin" not in tok:
+        return (0.0, 0.0)
+    i = tok.index("**origin")
+    return (float(tok[i + 1]), float(tok[i + 2]))
+
+
+def read_tesr_full(path):
+    """header, **cell/*ori, **data, **oridata, **oridef of an ascii tesr.
+
+    The superset of :func:`read_tesr`, which returns only the cell map;
+    EBSD read-back checks use this reader too.
+    """
+    with open(path) as fh:
+        tok = fh.read().split()
+    i = tok.index("**general")
+    if int(tok[i + 1]) != 2:
+        raise ValueError(f"{path}: not a 2D tesr")
+    nx, ny = int(tok[i + 2]), int(tok[i + 3])
+    n = nx * ny
+    out = {"nx": nx, "ny": ny, "vox": (float(tok[i + 4]), float(tok[i + 5]))}
+
+    i = tok.index("**cell")
+    ncell = int(tok[i + 1])
+    out["ncell"] = ncell
+    j = tok.index("*crysym", i)
+    out["crysym"] = tok[j + 1]
+    j = tok.index("*ori", i)
+    out["orides"] = tok[j + 1]
+    if not out["orides"].startswith("rodrigues"):
+        raise ValueError(
+            f"{path}: **cell/*ori is {out['orides']!r}; this reader only "
+            "understands the rodrigues descriptor ctf.py writes"
+        )
+    out["cell_ori"] = np.array(tok[j + 2 : j + 2 + 3 * ncell], dtype=float).reshape(
+        ncell, 3
+    )
+
+    i = tok.index("**data")
+    if tok[i + 1] != "ascii":
+        raise ValueError(f"{path}: **data is {tok[i + 1]}, write it as ascii")
+    out["cells"] = np.array(tok[i + 2 : i + 2 + n], dtype=int).reshape(ny, nx)
+
+    if "**oridata" in tok:
+        i = tok.index("**oridata")
+        r = np.array(tok[i + 3 : i + 3 + 3 * n], dtype=float).reshape(n, 3)
+        out["vox_ori"] = r.reshape(ny, nx, 3)
+        i = tok.index("**oridef")
+        out["oridef"] = (
+            np.array(tok[i + 2 : i + 2 + n], dtype=int).reshape(ny, nx).astype(bool)
+        )
+    return out
+
+
+def read_tesr(path):
+    """(cell ids as (ny, nx) array, (voxel size x, y)) from an ascii tesr.
+
+    Raises ValueError on a file this reader cannot handle, rather than exiting:
+    the caller is another module, not a shell.
+    """
+    with open(path) as fh:
+        tok = fh.read().split()
+    i = tok.index("**general")
+    if int(tok[i + 1]) != 2:
+        raise ValueError(f"{path}: not a 2D tesr")
+    nx, ny = int(tok[i + 2]), int(tok[i + 3])
+    vox = float(tok[i + 4]), float(tok[i + 5])
+    i = tok.index("**data")
+    if tok[i + 1] != "ascii":
+        raise ValueError(f"{path}: **data is {tok[i + 1]}, write it as ascii")
+    return np.array(tok[i + 2 : i + 2 + nx * ny], dtype=int).reshape(ny, nx), vox
 
 
 @dataclass

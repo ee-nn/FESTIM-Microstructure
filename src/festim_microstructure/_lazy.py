@@ -1,8 +1,8 @@
 """PEP 562 lazy attribute access for the package ``__init__`` modules.
 
-The package has a split personality: ``meshing.voronoi.geometry2d`` and the
+The package has a split personality: ``voronoi.geometry2d`` and the
 whole EBSD converter are pure NumPy/SciPy, while ``models``, ``fem`` and
-``meshing.ebsd.pipeline`` need DOLFINx and FESTIM. A top-level namespace built
+``meshing.ebsd`` need DOLFINx and FESTIM. A top-level namespace built
 the usual way -- ``from .models.resolved import build`` in ``__init__.py`` --
 would drag FEniCS into ``import festim_microstructure``, so a user who only
 wants to convert an EBSD map could not import the package at all without it.

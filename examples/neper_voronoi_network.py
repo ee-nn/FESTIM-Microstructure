@@ -19,26 +19,7 @@ from pathlib import Path
 import festim as F
 import numpy as np
 
-from festim_microstructure.fem.subdomains import TaggedGrainBoundaryNetwork
-from festim_microstructure.meshing.neper import (
-    NeperMicrostructure,
-    NeperOptions,
-    NeperRun,
-    read_mesh,
-    run_neper,
-)
-from festim_microstructure.models.fisher import (
-    ShortCircuitParams,
-    ShortCircuitProblem,
-    beta_parameter,
-    hart_bound,
-)
-from festim_microstructure.models.properties import gb_diffusivity_field
-from festim_microstructure.postprocessing.measures import (
-    component_count,
-    inventory,
-    submesh_measure,
-)
+import festim_microstructure as fm
 
 
 @dataclass
@@ -57,7 +38,7 @@ class Setup:
 
     theta_min: float = 0.0  # keep only boundaries above this disorientation (deg)
     theta_dependent_D: bool = False  # see gb_diffusivity_field, CHECK before enabling
-    neper: NeperOptions = field(default_factory=NeperOptions)
+    neper: fm.NeperOptions = field(default_factory=fm.NeperOptions)
     stem: str = "poly"
     workdir: Path = Path(__file__).resolve().parent / "results"
     force: bool = False
@@ -66,23 +47,25 @@ class Setup:
 def main(s=Setup()):
     L, D_B, D_GB = s.L, s.D_B, s.D_GB
 
-    base = run_neper(
+    base = fm.meshing.neper.run_neper(
         s.n_cells,
         s.seed,
         options=s.neper,
-        run=NeperRun(stem=s.stem, workdir=str(s.workdir), force=s.force),
+        run=fm.NeperRun(stem=s.stem, workdir=str(s.workdir), force=s.force),
     )
-    micro = NeperMicrostructure.from_base(base, theta_min=s.theta_min, options=s.neper)
-    mesh, cell_tags, facet_tags = read_mesh(base, gdim=3)
+    micro = fm.NeperMicrostructure.from_base(
+        base, theta_min=s.theta_min, options=s.neper
+    )
+    mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=3)
 
-    network = TaggedGrainBoundaryNetwork(
-        id=ShortCircuitProblem.NETWORK_ID,
+    network = fm.TaggedGrainBoundaryNetwork(
+        id=fm.ShortCircuitProblem.NETWORK_ID,
         material=F.Material(D_0=D_GB, E_D=0.0),
         facet_tags=facet_tags,
         entity_ids=micro.network_ids,
         dim=2,
     )
-    params = ShortCircuitParams(
+    params = fm.ShortCircuitParams(
         D_b=D_B,
         D_gb=D_GB,
         delta=s.delta,
@@ -93,7 +76,7 @@ def main(s=Setup()):
         atol=1e-14,
         rtol=1e-12,
     )
-    problem = ShortCircuitProblem(
+    problem = fm.ShortCircuitProblem(
         mesh, network, charged_surface=lambda x: np.isclose(x[2], L), params=params
     )
 
@@ -103,14 +86,18 @@ def main(s=Setup()):
         # initialise once, then swap the material in and initialise again
         problem.build(D_GB, exports).initialise()
         network.material = F.Material(
-            D_0=gb_diffusivity_field(network, micro.theta, D_B, D_GB), E_D=0.0
+            D_0=fm.materials.gb_diffusivity_field(network, micro.theta, D_B, D_GB),
+            E_D=0.0,
         )
     model, cb_fast, cgb_fast = problem.solve(D_GB, exports)
 
     # what we built
     print(micro.report(n_cells=s.n_cells))
-    area_mesh, area_tess = submesh_measure(network), micro.network_measure
-    n_comp = component_count(network)
+    area_mesh, area_tess = (
+        fm.exports.measures.submesh_measure(network),
+        micro.network_measure,
+    )
+    n_comp = fm.exports.measures.component_count(network)
     n_cells = mesh.topology.index_map(3).size_global
     print(f"  mesh                            : {n_cells} cells")
     print(
@@ -122,14 +109,14 @@ def main(s=Setup()):
     print(f"  interior facets                 : {model.manifold_is_interior(network)}")
 
     # effect of the network
-    fast = inventory(cb_fast, cgb_fast, s.delta)
+    fast = fm.exports.measures.inventory(cb_fast, cgb_fast, s.delta)
     depth = micro.junction_only_below(L)
     gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
     deep = gb_z < depth
     c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
     _, cb_ref, cgb_ref = problem.solve(D_B)
-    ref = inventory(cb_ref, cgb_ref, s.delta)
+    ref = fm.exports.measures.inventory(cb_ref, cgb_ref, s.delta)
 
     print(
         f"\nafter t = {s.t_end} (lattice diffusion alone reaches "
@@ -141,10 +128,10 @@ def main(s=Setup()):
     f_gb = s.delta * area_tess / L**3
     print(f"  boundary volume fraction f     : {f_gb:.3e}")
     print(
-        f"  Hart bound f D_gb + (1-f) D_b  : {hart_bound(f_gb, D_GB, D_B):.3e}"
+        f"  Hart bound f D_gb + (1-f) D_b  : {fm.models.fisher.hart_bound(f_gb, D_GB, D_B):.3e}"
         f"  (vs D_b = {D_B:.3e})"
     )
-    beta = beta_parameter(s.delta, D_GB, D_B, s.t_end)
+    beta = fm.models.fisher.beta_parameter(s.delta, D_GB, D_B, s.t_end)
     print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
 
     bulk_z = cb_fast.function_space.tabulate_dof_coordinates()[:, 2]

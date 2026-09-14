@@ -3,7 +3,7 @@
 A workflow in three steps:
 
 1. **Build a polycrystal** whose grain boundaries the mesh conforms to
-   (`meshing/voronoi.py`).
+   (`voronoi/`).
 2. **Solve the resolved problem** — one FESTIM subdomain per grain, coupled
    through the boundary network declared as a single codim-1 subdomain
    (`models/resolved.py`).
@@ -90,7 +90,7 @@ and `--k-sweep` walks across the transition.
 For geometry only, without a solve:
 
 ```python
-from festim_microstructure.meshing.voronoi import VoronoiMicrostructure
+from festim_microstructure.voronoi import VoronoiMicrostructure
 
 micro = VoronoiMicrostructure.create(
     size=20e-6, n_seeds=48, aspect=4, cells_per_grain=10

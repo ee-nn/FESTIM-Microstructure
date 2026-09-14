@@ -3,7 +3,7 @@
 GBs are codimension-one facets; their physical width remains a model coefficient.
 
 This was one module; it is now split by concern, and the names it exported are
-re-exported here, so ``from festim_microstructure.meshing.voronoi import X``
+re-exported here, so ``from festim_microstructure.voronoi import X``
 keeps working:
 
 ``_geometry``

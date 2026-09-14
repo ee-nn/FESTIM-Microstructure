@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from festim_microstructure.meshing.ebsd import orientation as ori
+from festim_microstructure.ebsd import orientation as ori
 
 
 def test_self_test_runs():

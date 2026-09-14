@@ -8,10 +8,6 @@ protocol without being built.
 import numpy as np
 import pytest
 
-from festim_microstructure.meshing.voronoi import (
-    VoronoiMicrostructure,
-    VoronoiMicrostructure3D,
-)
 from festim_microstructure.microstructure import (
     BoundaryNetwork,
     MeshedMicrostructure,
@@ -19,6 +15,7 @@ from festim_microstructure.microstructure import (
     missing_members,
     require,
 )
+from festim_microstructure.voronoi import VoronoiMicrostructure, VoronoiMicrostructure3D
 
 
 def _meshed(**overrides):
@@ -89,7 +86,7 @@ def test_boundary_network_implementations_are_found_dimension_agnostically(
     stubbed_heavy_deps,
 ):
     """Neper (faces) and EBSD (edges) answer to the same names."""
-    from festim_microstructure.meshing.ebsd.pipeline import EbsdMicrostructure
+    from festim_microstructure.meshing.ebsd import EbsdMicrostructure
     from festim_microstructure.meshing.neper import NeperMicrostructure
 
     for cls in (NeperMicrostructure, EbsdMicrostructure):
