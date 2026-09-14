@@ -56,7 +56,6 @@ class Identification:
     n_cells: int
     k_exchange: float
     equilibrium_error: float
-    gb_facets_missed: int
 
     @staticmethod
     def _principal(D):
@@ -91,7 +90,6 @@ class Identification:
             f"{np.asarray(self.D_cell)[1, 1] / hart[1, 1]:.3f} (yy)"
             "   [whole-cell estimate, the one the bound applies to]",
             f"  local equilibrium error       : {self.equilibrium_error:.2e}",
-            f"  grain-boundary facets missed  : {self.gb_facets_missed}",
         ]
         return "\n".join(lines)
 
@@ -100,8 +98,6 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
     """Solve the two cell problems and assemble the effective tensor."""
     half = 0.5 * (1.0 - window_fraction) * micro.size
     window = ((half, half), (micro.size - half, micro.size - half))
-    _, missed = fm.fem.subdomains.check_network_covers_grain_boundaries(micro)
-
     Q_cell, H_cell, Q_win, H_win = (np.zeros((2, 2)) for _ in range(4))
     eq_error = 0.0
     hart = None
@@ -146,7 +142,6 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
         n_cells=micro.mesh.topology.index_map(2).size_global,
         k_exchange=physics.k_exchange,
         equilibrium_error=eq_error,
-        gb_facets_missed=missed,
     )
 
 

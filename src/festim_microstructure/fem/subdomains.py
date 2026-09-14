@@ -13,7 +13,6 @@ __all__ = [
     "GrainBoundaryNetwork",
     "GrainSurface",
     "TaggedGrainBoundaryNetwork",
-    "check_network_covers_grain_boundaries",
 ]
 
 
@@ -125,25 +124,3 @@ class GrainSurface(F.SurfaceSubdomain):
         adjacent = facet_to_cell.array[facet_to_cell.offsets[facets]]
         keep = np.isin(adjacent, self.cell_tags.find(self.grain_id))
         return facets[keep].astype(np.int32)
-
-
-def check_network_covers_grain_boundaries(micro):
-    """Return ``(all boundaries, missing boundaries)`` for a microstructure."""
-    mesh, tags = micro.mesh, micro.cell_tags
-    tdim = mesh.topology.dim
-    mesh.topology.create_connectivity(tdim - 1, tdim)
-    facet_to_cell = mesh.topology.connectivity(tdim - 1, tdim)
-    index_map = tags.topology.index_map(tdim)
-    values = np.zeros(index_map.size_local + index_map.num_ghosts, dtype=np.int32)
-    values[tags.indices] = tags.values
-
-    # One vectorized locator call avoids an expensive facet-by-facet search.
-    facets = np.arange(mesh.topology.index_map(tdim - 1).size_local, dtype=np.int32)
-    offsets = facet_to_cell.offsets
-    interior = facets[(offsets[facets + 1] - offsets[facets]) == 2]
-    pair = facet_to_cell.array[offsets[interior][:, None] + np.arange(2)]
-    boundaries = interior[values[pair[:, 0]] != values[pair[:, 1]]]
-    if boundaries.size == 0:
-        return 0, 0
-    on_network = micro.locator(facet_midpoints(mesh, boundaries).T)
-    return int(boundaries.size), int(np.count_nonzero(~on_network))
