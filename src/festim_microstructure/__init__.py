@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 from ._lazy import lazy_namespace
 from .meshing.neper import NeperMicrostructure as NeperMicrostructure
-from .meshing.neper import NeperOptions as NeperOptions
 from .meshing.neper import NeperRun as NeperRun
+from .meshing.neper import NeperSettings as NeperSettings
 from .meshing.neper import TesrMeshOptions as TesrMeshOptions
 from .microstructure import BoundaryNetwork as BoundaryNetwork
 from .microstructure import MeshedMicrostructure as MeshedMicrostructure
@@ -82,7 +82,7 @@ __getattr__, __dir__, __all__ = lazy_namespace(
         "Microstructure",
         "TaggedPolycrystal",
         "NeperMicrostructure",
-        "NeperOptions",
+        "NeperSettings",
         "NeperRun",
         "TesrMeshOptions",
         "MeshSizing",

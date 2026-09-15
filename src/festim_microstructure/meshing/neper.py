@@ -21,8 +21,8 @@ __all__ = [
     "FACE_KEYS",
     "VER_KEYS",
     "NeperMicrostructure",
-    "NeperOptions",
     "NeperRun",
+    "NeperSettings",
     "TesrMeshOptions",
     "find_binary",
     "mesh_tesr",
@@ -35,7 +35,6 @@ FACE_KEYS = ("domface", "theta", "area", "zmin", "zmax")
 EDGE_KEYS = ("domtype", "facenb", "length")
 VER_KEYS = ("domtype", "edgenb")
 
-
 # Binaries.
 
 
@@ -43,7 +42,7 @@ VER_KEYS = ("domtype", "edgenb")
 class NeperRun:
     """Where a Neper invocation writes, and which binaries it uses.
 
-    Separated from :class:`NeperOptions` and :class:`TesrMeshOptions` because
+    Separated from :class:`NeperSettings` and :class:`TesrMeshOptions` because
     it answers a different question: those two say *what* to compute, this says
     *where to put it*. Both entry points took the same five loose arguments for
     it.
@@ -92,55 +91,63 @@ def run_interruptible(cmd, cwd=None, env=None):
 
 
 @dataclass
-class NeperOptions:
+class NeperSettings:
     """Options forwarded to ``neper -T`` and ``neper -M``.
 
     ``rclface`` controls GB refinement and ``rcl`` the cell interior.
+
+    Attributes:
+        rcl (float): Element size in the grain interiors, relative to average cell size.
+        rclface (float): Element size on the grain boundaries.
+        rcledge (float | None): Element size on the triple lines; None = same as the
+            faces.
+        pl (float): Progression factor: max length ratio between adjacent 1D elements.
+        mesh_qual_min (float | None): Multimeshing retries each face and polyhedron with
+            several algorithms until this is reached, so quality target and meshing time
+            trade off directly; 0.9 is Neper's default and 0.7 is reasonable while
+            iterating.
+        mesh_max_time (float | None): Seconds per face/polyhedron; the default is 1000
+            s, long enough for one pathological cell to stall a run without saying so.
+            Try 30 when diagnosing.
+        regularize (bool): ``-reg 1``: removes the small edges and faces that otherwise
+            produce unusable tets at the triple lines -- which is where this whole
+            problem lives. It makes internal faces slightly non-planar, which is the
+            reason to let Neper mesh rather than rebuilding the geometry with OCC.
+        reg_rsel (float | None): ``-rsel``, the small-edge length used by
+            regularization. Neper's default is 1, picked to suit the *default* ``-rcl``;
+            it should track whatever ``rcl`` you actually use.
+        periodicity (str | None): e.g. ``"x,y"``. MUTUALLY EXCLUSIVE with
+            ``regularize``: Neper rejects ``-reg 1`` on a periodic tessellation. To have
+            both, set ``rsel`` and leave ``regularize`` off, so the small edges are
+            suppressed at the tessellation stage instead.
+        rsel (float | None): Small-edge control when periodic; try ``rcl`` as a first
+            value.
+        morpho (str): ``voronoi`` is a Poisson-Voronoi tessellation: uniform random
+            seeds, no optimization stage, effectively instant. ``gg`` is the
+            grain-growth morphology (lognormal equivalent diameter and sphericity); more
+            realistic, but fitting it can run for tens of thousands of iterations.
+        morpho_stop (str | None): Only used when ``morpho`` involves an optimization.
+            Neper's default stopping rule has an unreachable second clause, so the run
+            grinds on a plateau; a value or iteration cap makes the cost bounded.
+        face_keys (tuple): Columns requested in the face statistics output.
+        edge_keys (tuple): Columns requested in the edge statistics output.
+        ver_keys (tuple): Columns requested in the vertex statistics output.
     """
 
     rcl: float = 0.8
-    """Element size in the grain interiors, relative to average cell size."""
     rclface: float = 0.2
-    """Element size on the grain boundaries."""
     rcledge: float | None = None
-    """Element size on the triple lines; None = same as the faces."""
     pl: float = 2.5
-    """Progression factor: max length ratio between adjacent 1D elements."""
     mesh_qual_min: float | None = 0.7
-    """Multimeshing retries each face and polyhedron with several algorithms
-    until this is reached, so quality target and meshing time trade off
-    directly; 0.9 is Neper's default and 0.7 is reasonable while iterating."""
     mesh_max_time: float | None = None
-    """Seconds per face/polyhedron; the default is 1000 s, long enough for one
-    pathological cell to stall a run without saying so. Try 30 when
-    diagnosing."""
 
     regularize: bool = True
-    """``-reg 1``: removes the small edges and faces that otherwise produce
-    unusable tets at the triple lines -- which is where this whole problem
-    lives. It makes internal faces slightly non-planar, which is the reason to
-    let Neper mesh rather than rebuilding the geometry with OCC."""
     reg_rsel: float | None = 0.8
-    """``-rsel``, the small-edge length used by regularization. Neper's default
-    is 1, picked to suit the *default* ``-rcl``; it should track whatever
-    ``rcl`` you actually use."""
     periodicity: str | None = None
-    """e.g. ``"x,y"``. MUTUALLY EXCLUSIVE with ``regularize``: Neper rejects
-    ``-reg 1`` on a periodic tessellation. To have both, set ``rsel`` and leave
-    ``regularize`` off, so the small edges are suppressed at the tessellation
-    stage instead."""
     rsel: float | None = None
-    """Small-edge control when periodic; try ``rcl`` as a first value."""
 
     morpho: str = "voronoi"
-    """``voronoi`` is a Poisson-Voronoi tessellation: uniform random seeds, no
-    optimization stage, effectively instant. ``gg`` is the grain-growth
-    morphology (lognormal equivalent diameter and sphericity); more realistic,
-    but fitting it can run for tens of thousands of iterations."""
     morpho_stop: str | None = "eps<1e-6||val<1e-3||iter>=20000"
-    """Only used when ``morpho`` involves an optimization. Neper's default
-    stopping rule has an unreachable second clause, so the run grinds on a
-    plateau; a value or iteration cap makes the cost bounded."""
 
     face_keys: tuple = FACE_KEYS
     edge_keys: tuple = EDGE_KEYS
@@ -167,7 +174,7 @@ def run_neper(n, seed=1, options=None, run=None):
     optimization -- is a pure function of ``(n, seed, morpho)``, so it is cached
     on its own: a failure in ``-M`` should not cost it again.
     """
-    opt = options or NeperOptions()
+    opt = options or NeperSettings()
     opt.validate()
     run = run or NeperRun()
     stem, force = run.stem, run.force
@@ -286,10 +293,10 @@ class NeperMicrostructure:
         Args:
             base: output of :func:`run_neper` (path without extension).
             theta_min: keep only boundaries above this disorientation (degrees).
-            options: the :class:`NeperOptions` the stats were written with (for
+            options: the :class:`NeperSettings` the stats were written with (for
                 the key tuples).
         """
-        opt = options or NeperOptions()
+        opt = options or NeperSettings()
         return cls(
             base=Path(base),
             faces=StatFile(str(base) + ".stface", opt.face_keys),

@@ -42,7 +42,7 @@ dt = 0.05
 
 theta_min = 0.0  # keep only boundaries above this disorientation (deg)
 theta_dependent_D = False  # see gb_diffusivity_field, CHECK before enabling
-neper = fm.NeperOptions()
+config = fm.NeperSettings()
 stem = "poly"
 workdir = OUTPUT_DIR
 force = False
@@ -51,10 +51,10 @@ force = False
 base = fm.meshing.neper.run_neper(
     n_cells,
     seed,
-    options=neper,
+    options=config,
     run=fm.NeperRun(stem=stem, workdir=str(workdir), force=force),
 )
-micro = fm.NeperMicrostructure.from_base(base, theta_min=theta_min, options=neper)
+micro = fm.NeperMicrostructure.from_base(base, theta_min=theta_min, options=config)
 mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=3)
 
 # The tessellation knows the topology; this is the same polycrystal as the
