@@ -12,7 +12,7 @@ that both get called "a microstructure":
   Neper and EBSD readers.
 
 Both are declared as :pep:`544` protocols, so an implementation conforms by
-having the right attributes rather than by inheriting: ``NeperMicrostructure``
+having the right attributes rather than by inheriting: ``NeperMesh``
 is built from stat files and has no mesh, and forcing it into a common base
 class would mean giving it attributes it cannot fill.
 
@@ -43,10 +43,11 @@ __all__ = [
 class Microstructure(Protocol):
     """What every microstructure in this package can say about itself.
 
-    Deliberately thin. ``n_grains`` is *not* here: a
-    :class:`NeperMicrostructure` is read from the face/edge/vertex stat files
-    and genuinely does not know how many cells the tessellation had, which is
-    why its ``report`` takes the count as an argument.
+    Deliberately thin. ``n_grains`` is *not* here: a :class:`NeperMesh` built by
+    :meth:`~festim_microstructure.meshing.neper.NeperMesh.from_base` is read
+    from the face/edge/vertex stat files, which say nothing about how many cells
+    the tessellation had, so its report names the count only when it was given
+    one.
     """
 
     def report(self) -> str:

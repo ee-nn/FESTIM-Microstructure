@@ -6,7 +6,7 @@ disorientation, lengths, and junctions from Neper's element sets.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from mpi4py import MPI
@@ -26,7 +26,7 @@ from festim_microstructure.meshing.diagnostics import (
     measure,
     overlay,
 )
-from festim_microstructure.meshing.neper import NeperRun, TesrMeshOptions, mesh_tesr
+from festim_microstructure.meshing.neper import TesrMeshOptions, mesh_tesr
 from festim_microstructure.plotting import draw_raster, scale_bar_ax, use_agg
 
 __all__ = [
@@ -74,8 +74,9 @@ def run_ebsd_pipeline(
     """Mesh an EBSD raster and return the extension-free output path."""
     base = mesh_tesr(
         options.tesr,
-        options=options.mesh,
-        run=NeperRun(
+        # where the output goes now lives on the meshing options themselves
+        replace(
+            options.mesh,
             stem=options.stem,
             workdir=workdir,
             neper_bin=neper_bin,

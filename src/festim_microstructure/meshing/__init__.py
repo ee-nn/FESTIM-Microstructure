@@ -11,21 +11,17 @@ if TYPE_CHECKING:
     from .ebsd import EbsdMicrostructure as EbsdMicrostructure
     from .ebsd import EbsdOptions as EbsdOptions
     from .ebsd import run_ebsd_pipeline as run_ebsd_pipeline
-    from .neper import NeperMicrostructure as NeperMicrostructure
+    from .neper import NeperMesh as NeperMesh
     from .neper import NeperSettings as NeperSettings
-    from .neper import NeperRun as NeperRun
     from .neper import TesrMeshOptions as TesrMeshOptions
     from .neper import mesh_tesr as mesh_tesr
-    from .neper import run_neper as run_neper
 
 _SUBMODULES = ("neper", "ebsd", "diagnostics")
 _NAMES = {
-    "NeperMicrostructure": ".neper",
+    "NeperMesh": ".neper",
     "NeperSettings": ".neper",
-    "NeperRun": ".neper",
     "TesrMeshOptions": ".neper",
     "mesh_tesr": ".neper",
-    "run_neper": ".neper",
     "EbsdMicrostructure": ".ebsd",
     "EbsdOptions": ".ebsd",
     "run_ebsd_pipeline": ".ebsd",

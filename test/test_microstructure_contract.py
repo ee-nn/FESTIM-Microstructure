@@ -88,14 +88,14 @@ def test_boundary_network_implementations_are_found_dimension_agnostically(
 ):
     """Neper (faces) and EBSD (edges) answer to the same names."""
     from festim_microstructure.meshing.ebsd import EbsdMicrostructure
-    from festim_microstructure.meshing.neper import NeperMicrostructure
+    from festim_microstructure.meshing.neper import NeperMesh
 
-    for cls in (NeperMicrostructure, EbsdMicrostructure):
+    for cls in (NeperMesh, EbsdMicrostructure):
         assert missing_members(cls, BoundaryNetwork) == []
         # the dimension-specific spellings stay available
         assert hasattr(cls, "network_entity_ids")
 
-    assert NeperMicrostructure.network_area is NeperMicrostructure.network_measure
+    assert NeperMesh.network_area is NeperMesh.network_measure
     assert EbsdMicrostructure.network_length is EbsdMicrostructure.network_measure
     assert VoronoiMicrostructure.ridge_length is not None
 

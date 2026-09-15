@@ -1,18 +1,20 @@
 """Run Neper tessellation/meshing workflows and read their topology data.
 
-Supports generated polycrystals and 2D EBSD rasters. NeperMicrostructure
-interprets the topology statistics read by formats.msh4.
+Supports generated polycrystals and 2D EBSD rasters. :class:`NeperMesh` is the
+whole 3D path in one object: it generates the tessellation, meshes it, reads the
+mesh, and interprets the topology statistics read by formats.msh4.
 """
 
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 import numpy as np
 
 from .._binaries import find_binary, subprocess_env
-from ..formats.msh4 import StatFile
+from ..formats.msh4 import StatFile, read_mesh
 
 # Keep DOLFINx imports local so Neper/stat tools remain lightweight.
 
@@ -20,14 +22,12 @@ __all__ = [
     "EDGE_KEYS",
     "FACE_KEYS",
     "VER_KEYS",
-    "NeperMicrostructure",
-    "NeperRun",
+    "NeperMesh",
     "NeperSettings",
     "TesrMeshOptions",
     "find_binary",
     "mesh_tesr",
     "run_interruptible",
-    "run_neper",
 ]
 
 # Stat columns are scalar, one per entity, in id order.
@@ -39,17 +39,28 @@ VER_KEYS = ("domtype", "edgenb")
 
 
 @dataclass
-class NeperRun:
+class _Outputs:
     """Where a Neper invocation writes, and which binaries it uses.
 
-    Separated from :class:`NeperSettings` and :class:`TesrMeshOptions` because
-    it answers a different question: those two say *what* to compute, this says
-    *where to put it*. Both entry points took the same five loose arguments for
-    it.
+    Inherited rather than composed, so the caller of :class:`NeperMesh` or
+    :func:`mesh_tesr` fills in one settings object instead of two. Both entry
+    points need the same five values and neither needs them to vary
+    independently of the rest.
+
+    Attributes:
+        stem (str): Basename Neper is told to write, and so the name of every
+            output file.
+        workdir (str | Path): Directory those files go in; created if missing.
+        neper_bin (str | None): Path to the neper binary; ``None`` looks at
+            ``FM_NEPER_BIN`` and then ``PATH``.
+        gmsh_bin (str | None): The same for gmsh.
+        force (bool): Regenerate even when the outputs are already there. Each
+            stage is otherwise cached on its own output file, so an interrupted
+            run resumes rather than restarting.
     """
 
     stem: str = "poly"
-    workdir: str = "results"
+    workdir: str | Path = "results"
     neper_bin: str | None = None
     gmsh_bin: str | None = None
     force: bool = False
@@ -91,12 +102,19 @@ def run_interruptible(cmd, cwd=None, env=None):
 
 
 @dataclass
-class NeperSettings:
-    """Options forwarded to ``neper -T`` and ``neper -M``.
+class NeperSettings(_Outputs):
+    """Everything :class:`NeperMesh` needs beyond a cell count and a seed.
 
-    ``rclface`` controls GB refinement and ``rcl`` the cell interior.
+    Mostly options forwarded to ``neper -T`` and ``neper -M``: ``rclface``
+    controls GB refinement and ``rcl`` the cell interior. ``theta_min`` is the
+    exception, read back out of the statistics after the run rather than passed
+    to Neper. Output paths and binaries come from :class:`_Outputs`.
 
     Attributes:
+        theta_min (float): Keep only boundaries whose disorientation exceeds
+            this, in degrees. Read after meshing, so changing it costs nothing:
+            the mesh still carries every face, and only which of them count as
+            the network changes.
         rcl (float): Element size in the grain interiors, relative to average cell size.
         rclface (float): Element size on the grain boundaries.
         rcledge (float | None): Element size on the triple lines; None = same as the
@@ -134,6 +152,8 @@ class NeperSettings:
         ver_keys (tuple): Columns requested in the vertex statistics output.
     """
 
+    theta_min: float = 0.0
+
     rcl: float = 0.8
     rclface: float = 0.2
     rcledge: float | None = None
@@ -164,7 +184,7 @@ class NeperSettings:
             )
 
 
-def run_neper(n, seed=1, options=None, run=None):
+def _generate(n, seed, opt):
     """Generate and mesh a polycrystal. Returns the base path (no extension).
 
     ``-T`` and ``-M`` are two calls rather than one so that the ``.tess`` is a
@@ -174,17 +194,14 @@ def run_neper(n, seed=1, options=None, run=None):
     optimization -- is a pure function of ``(n, seed, morpho)``, so it is cached
     on its own: a failure in ``-M`` should not cost it again.
     """
-    opt = options or NeperSettings()
-    opt.validate()
-    run = run or NeperRun()
-    stem, force = run.stem, run.force
-    base = run.base
+    stem, force = opt.stem, opt.force
+    base = opt.base
     print(f"neper outputs -> {base.parent}")
     if base.with_suffix(".msh4").exists() and not force:
         print(f"  reusing {base.name}.msh4")
         return base
 
-    neper_bin, gmsh_bin, env = run.binaries()
+    neper_bin, gmsh_bin, env = opt.binaries()
 
     morpho = opt.morpho
     if opt.rsel is not None:
@@ -267,43 +284,98 @@ def run_neper(n, seed=1, options=None, run=None):
     return base
 
 
-@dataclass
-class NeperMicrostructure:
-    """The tessellation's own description of itself, read back from the stats.
+class NeperMesh:
+    """A Neper polycrystal: generated, meshed, read back, and described.
 
-    Every number here is Neper's, computed on the exact topology rather than
-    reconstructed from the geometry. Implements
+    Constructing one runs ``neper -T`` and ``neper -M`` -- or reuses whatever an
+    earlier run left in ``settings.workdir`` -- and then reads the tessellation's
+    own statistics. It unpacks into what a model is built from::
+
+        mesh, cell_tags, facet_tags, network_ids = fm.NeperMesh(100, 1)
+
+    ``network_ids`` is a list of face ids rather than one marker because Neper
+    tags every tessellation face separately; pass it to
+    :class:`~festim_microstructure.microstructure.TaggedPolycrystal` as
+    ``gb_tag``.
+
+    Every number reported here is Neper's, computed on the exact topology rather
+    than reconstructed from the geometry. Implements
     :class:`~festim_microstructure.microstructure.BoundaryNetwork`.
 
-    Build it with :meth:`from_base`; the constructor only stores already-read
-    stat files, so the class can be instantiated in a test without three files
-    on disk.
+    The DOLFINx mesh is read on first use rather than in the constructor, so a
+    tessellation can be generated and inspected -- disorientations, junction
+    counts, boundary area -- on a machine with no solver stack installed.
+    Reading is collective, and stays so: every rank runs the same statements.
+
+    :meth:`from_base` builds one from files an earlier run wrote, without
+    invoking Neper at all.
     """
 
-    base: Path
-    faces: StatFile
-    edges: StatFile
-    vertices: StatFile
-    theta_min: float = 0.0
+    def __init__(self, n_cells=None, seed=1, settings=None, *, base=None):
+        self.settings = settings or NeperSettings()
+        self.n_cells = n_cells
+        self.seed = seed
+        if base is None:
+            if n_cells is None:
+                raise TypeError(
+                    "NeperMesh(n_cells, seed, settings) generates a tessellation "
+                    "and NeperMesh.from_base(base) reads one an earlier run left "
+                    "on disk; this call gave neither a cell count nor a base path"
+                )
+            self.settings.validate()
+            base = _generate(n_cells, seed, self.settings)
+        self.base = Path(base)
+        self.faces = StatFile(f"{self.base}.stface", self.settings.face_keys)
+        self.edges = StatFile(f"{self.base}.stedge", self.settings.edge_keys)
+        self.vertices = StatFile(f"{self.base}.stver", self.settings.ver_keys)
 
     @classmethod
-    def from_base(cls, base, theta_min=0.0, options=None):
-        """Read the three stat files ``run_neper`` wrote.
+    def from_base(cls, base, settings=None):
+        """Read the three stat files an earlier run wrote, without running Neper.
 
         Args:
-            base: output of :func:`run_neper` (path without extension).
-            theta_min: keep only boundaries above this disorientation (degrees).
-            options: the :class:`NeperSettings` the stats were written with (for
-                the key tuples).
+            base: extension-free output path.
+            settings: the :class:`NeperSettings` the stats were written with, for
+                the key tuples and ``theta_min``.
         """
-        opt = options or NeperSettings()
-        return cls(
-            base=Path(base),
-            faces=StatFile(str(base) + ".stface", opt.face_keys),
-            edges=StatFile(str(base) + ".stedge", opt.edge_keys),
-            vertices=StatFile(str(base) + ".stver", opt.ver_keys),
-            theta_min=theta_min,
-        )
+        return cls(base=base, settings=settings)
+
+    def __iter__(self):
+        """``mesh, cell_tags, facet_tags, network_ids``, in that order.
+
+        The four things a model is built from, so that one statement takes the
+        caller from a cell count to a microstructure.
+        """
+        yield self.mesh
+        yield self.cell_tags
+        yield self.facet_tags
+        yield self.network_ids
+
+    # The DOLFINx half, read once on demand. Three properties over one cached
+    # read, so that touching any of them does not re-read the other two.
+    @cached_property
+    def _read(self):
+        return read_mesh(self.base, gdim=3)
+
+    @property
+    def mesh(self):
+        """``dolfinx.mesh.Mesh`` of the tessellation."""
+        return self._read[0]
+
+    @property
+    def cell_tags(self):
+        """Polyhedron (grain) id of every cell."""
+        return self._read[1]
+
+    @property
+    def facet_tags(self):
+        """Tessellation face id of every tagged facet."""
+        return self._read[2]
+
+    @property
+    def theta_min(self):
+        """Read from the settings, so there is one place to change it."""
+        return self.settings.theta_min
 
     # `domface` is the id of the domain face a tessellation face lies on, and
     # -1 when it lies on none. A face can only meet the boundary by lying on a
@@ -364,11 +436,11 @@ class NeperMicrostructure:
         m = (self.vertices["domtype"] < 0) & (self.vertices["edgenb"] >= 4)
         return int(m.sum())
 
-    def report(self, n_cells=None):
+    def report(self):
         n_tl, len_tl = self.triple_lines
         kept, total = int(self.network_mask.sum()), int(self.interior_mask.sum())
         theta = self.faces["theta"][self.network_mask]
-        head = f"{n_cells} cells, " if n_cells is not None else ""
+        head = f"{self.n_cells} cells, " if self.n_cells is not None else ""
         lines = [
             f"microstructure: {head}{self.faces.n} faces",
             f"  grain boundaries (interior)     : {total}",
@@ -391,8 +463,8 @@ class NeperMicrostructure:
 
 
 @dataclass
-class TesrMeshOptions:
-    """Everything :func:`mesh_tesr` passes to Neper for a raster input."""
+class TesrMeshOptions(_Outputs):
+    """Everything :func:`mesh_tesr` needs: what to compute, and where to put it."""
 
     crysym: str = "cubic"
     orides: str = "rodrigues:passive"
@@ -423,7 +495,7 @@ def _need(path, force):
     return False
 
 
-def mesh_tesr(tesr, options=None, run=None):
+def mesh_tesr(tesr, options=None):
     """A single EBSD map -> triangular mesh conforming to the raster's own
     grain boundaries. Returns the base path (no extension).
 
@@ -444,12 +516,11 @@ def mesh_tesr(tesr, options=None, run=None):
     caller converts the mesh to metres after reading it.
 
     This replaces the former ``ebsd_to_mesh.sh``; each stage is cached on its
-    output file unless ``run.force``.
+    output file unless ``options.force``.
     """
     opt = options or TesrMeshOptions()
-    run = run or NeperRun()
-    stem, force = run.stem, run.force
-    base = run.base
+    stem, force = opt.stem, opt.force
+    base = opt.base
     wd = base.parent
     tesr = Path(tesr).resolve()
     if not tesr.is_file():
@@ -463,7 +534,7 @@ def mesh_tesr(tesr, options=None, run=None):
             "argument is a structured field, so a path with whitespace arrives "
             "as several unusable fragments."
         )
-    neper_bin, gmsh_bin, env = run.binaries()
+    neper_bin, gmsh_bin, env = opt.binaries()
     tmp = wd / "tmp"
     tmp.mkdir(exist_ok=True)
 

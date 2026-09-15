@@ -72,7 +72,7 @@ Step 3 records `FM_NEPER_BIN`, `FM_GMSH_BIN` and `FM_POVRAY_BIN` as conda
 environment variables of `festim-microstructure` (`conda env config vars`), so
 they are exported on activate and cleared on deactivate; nothing is written to
 your shell profile. If you prefer, skip the script and export the same three
-variables yourself -- or pass paths explicitly (`run_neper(..., neper_bin=...)`).
+variables yourself -- or pass paths explicitly (`NeperSettings(neper_bin=...)`).
 Resolution order is always explicit argument, then the variable, then `PATH`.
 
 The Neper environment is optional. Without it, the Gmsh-based Voronoi route
@@ -200,7 +200,7 @@ FESTIM-Microstructure/
 │   │   ├── gmsh_builder.py
 │   │   └── polycrystal.py
 │   ├── meshing/                # tessellation -> mesh -> BoundaryNetwork
-│   │   ├── neper.py            # subprocess driver, options, NeperMicrostructure
+│   │   ├── neper.py            # NeperMesh: generate, mesh, read, describe
 │   │   ├── ebsd.py
 │   │   └── diagnostics.py
 │   ├── resolved.py             # build, MicroModel, SolveOptions

@@ -10,7 +10,9 @@ see :mod:`festim_microstructure.meshing.neper` for what Neper adds (``domface``,
 
 Neper tags every tessellation face separately, so the network is the *list* of
 face ids above the disorientation threshold rather than one marker; that list is
-what ``gb_tag`` carries here.
+what ``gb_tag`` carries here. Constructing the :class:`fm.NeperMesh` runs Neper
+and reads what it wrote, and unpacks into the four things the model is built
+from.
 
 Run::
 
@@ -40,31 +42,27 @@ c0 = 1.0
 t_end = 3.0
 dt = 0.05
 
-theta_min = 0.0  # keep only boundaries above this disorientation (deg)
 theta_dependent_D = False  # see gb_diffusivity_field, CHECK before enabling
-config = fm.NeperSettings()
-stem = "poly"
-workdir = OUTPUT_DIR
-force = False
+settings = fm.NeperSettings(
+    stem="poly",
+    workdir=OUTPUT_DIR,
+    force=False,
+    theta_min=0.0,  # keep only boundaries above this disorientation (deg)
+)
 
 # Build the microstructure and simulation
-base = fm.meshing.neper.run_neper(
-    n_cells,
-    seed,
-    options=config,
-    run=fm.NeperRun(stem=stem, workdir=str(workdir), force=force),
-)
-micro = fm.NeperMicrostructure.from_base(base, theta_min=theta_min, options=config)
-mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=3)
+neper = fm.NeperMesh(n_cells, seed, settings)
+mesh, cell_tags, facet_tags, network_ids = neper
 
 # The tessellation knows the topology; this is the same polycrystal as the
 # model sees it: one tagged subdomain per grain, the network as face ids.
 # Untextured, and crystal_anisotropy is 1 below, so the angles never enter.
+
 poly = fm.TaggedPolycrystal(
     mesh=mesh,
     cell_tags=cell_tags,
     facet_tags=facet_tags,
-    gb_tag=micro.network_ids,
+    gb_tag=network_ids,
     name=f"neper {n_cells} cells, seed {seed}",
 )
 physics = fm.Physics(
@@ -88,19 +86,19 @@ if theta_dependent_D:
     # once, swap the material in, and initialise again
     model.initialise()
     model.network.material = F.Material(
-        D_0=fm.materials.gb_diffusivity_field(model.network, micro.theta, D_B, D_GB),
+        D_0=fm.materials.gb_diffusivity_field(model.network, neper.theta, D_B, D_GB),
         E_D=0.0,
     )
     model.initialise(force=True)
 model.run()
-fm.exports.averages.write_vtx(model, str(base.parent / "neper"), time=t_end)
+fm.exports.averages.write_vtx(model, str(neper.base.parent / "neper"), time=t_end)
 network, cgb_fast = model.network, model.network_solution
 
 # Inspect the mesh and boundary network
-print(micro.report(n_cells=n_cells))
+print(neper.report())
 area_mesh, area_tess = (
     fm.exports.measures.submesh_measure(network),
-    micro.network_measure,
+    neper.network_measure,
 )
 n_comp = fm.exports.measures.component_count(network)
 n_mesh_cells = mesh.topology.index_map(3).size_global
@@ -117,7 +115,7 @@ print(
 
 # Analyse grain-boundary transport
 fast = fm.exports.averages.inventory(model)
-depth = micro.junction_only_below(L)
+depth = neper.junction_only_below(L)
 gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
 deep = gb_z < depth
 c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
