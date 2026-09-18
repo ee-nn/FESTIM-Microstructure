@@ -9,8 +9,8 @@ interface kinetics. The effective diffusivity is the ratio of the average flux
 to the average gradient (Eq. 21). In FESTIM that is a HydrogenTransportProblem
 with two volume subdomains carrying two materials, solved with
 transient=False. This file reproduces their Fig. 4 panels A, B (the two
-microstructures, drawn as isometric cubes) and D, E, G, H (D_eff/D_m against
-grain-boundary density for D_GB/D_m = 100, 10, 0.2 and 0.1).
+microstructures, drawn as isometric cubes) and E, H (D_eff/D_m against
+grain-boundary density for D_GB/D_m = 10 and 0.1).
 
 WHY THE BOUNDARY IS A VOLUME AND NOT A MANIFOLD
 -----------------------------------------------
@@ -101,9 +101,11 @@ below ~64 the thinnest band is under two cells wide.
 OUTPUTS
 -------
 li2022-fig4ab.png   isometric cubes of the two microstructures, panels A-B
-li2022-fig4.png     D_eff/D_m against f_GB for the four ratios, panels D,E,G,H,
+li2022-fig4.png     D_eff/D_m against f_GB for the two ratios, panels E,H,
                     with Hart (Eq. 28) and HS (Eq. 33)
 """
+
+import csv
 
 from dataclasses import dataclass
 from functools import cached_property
@@ -126,7 +128,7 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 T = 1073.0  # K; only scales D_m (their Sect. 3.4)
 D0_M = 5.13e-8  # m^2/s, Liu et al. 2014, cited in their Sect. 2.3
 E_M = 0.21  # eV
-RATIOS = [100.0, 10.0, 0.2, 0.1]  # D_GB/D_m of their panels D, E, G, H
+RATIOS = [10.0, 0.1]  # D_GB/D_m of their panels E, H
 C_IN = 0.4e24  # m^-3, their 0.4 and 0.1 (arbitrary units)
 C_OUT = 0.1e24
 
@@ -140,16 +142,16 @@ ISO_N = round(B / DX)  # 96 cells per side, their grid
 ISO_SEEDS = (
     6  # seeds per side -> 216 grains, g = 16 nm, ~6 per edge as in their Fig. 4A
 )
-# Band width / grain spacing; target ``f_GB`` is 0.3--0.7.
-ISO_W_OVER_G = [0.11, 0.15, 0.20, 0.26, 0.33]
+F_GB_THEIRS = [0.3, 0.4, 0.5, 0.6, 0.7]
+F_GB_THIN = [0.003, 0.01, 0.03, 0.1]
+F_GB = [*F_GB_THIN, *F_GB_THEIRS]
 
 COL_N = round(B / DX)  # 96 cells per side in x-y
 COL_SEEDS = (
     5  # seeds per side -> 25 columns, g = 19 nm, ~5 per edge as in their Fig. 4B
 )
-COL_W_OVER_G = [0.16, 0.22, 0.29, 0.37, 0.46]  # f_GB ~ 0.3-0.7
 
-RENDER_INDEX = 0  # which band width of the sweep is drawn in panels A-B (0 = thinnest)
+RENDER_INDEX = len(F_GB_THIN)  # draw the f_GB = 0.3 target in panels A-B
 
 STRUCTURES = ["col_z", "col_x", "iso"]  # their Col_I(Z), Col_I(X), Iso
 LABEL = {"col_z": "Col_I(Z)", "col_x": "Col_I(X)", "iso": "Iso"}
@@ -488,8 +490,8 @@ def draw_fig4ab(iso_case, col_case, f_iso=None, f_col=None):
 
 
 def draw_fig4(rows):
-    fig, axes = plt.subplots(2, 2, figsize=(9, 7))
-    f = np.linspace(0.25, 0.75, 100)
+    fig, axes = plt.subplots(1, 2, figsize=(10, 6))
+    f = np.geomspace(0.002, 0.8, 200)
     style = {
         "col_z": dict(marker="*", ms=9, ls="none", color="tab:red", label="Col_I(Z)"),
         "col_x": dict(
@@ -513,29 +515,76 @@ def draw_fig4(rows):
                 axp.plot(
                     [q["f_gb"] for q in sub], [q["D_eff_over_D_m"] for q in sub], **st
                 )
-        axp.text(0.05, 0.9, f"$D_{{GB}}/D_m$ = {r:g}", transform=axp.transAxes)
-        axp.set_xlim(0.25, 0.75)
-        axp.legend(fontsize=7, loc="lower right" if r > 1 else "upper right")
-    for axp in axes[1]:
-        axp.set_xlabel("grain-boundary volume fraction $f_{GB}$ = $S_v$ x 1 nm")
-    for axp in axes[:, 0]:
-        axp.set_ylabel(r"$D^{eff}/D_m$")
+        axp.text(0.05, 0.9, f"$D_{{GB}}/D_m$ = {r:g}", transform=axp.transAxes, fontsize=18)
+        axp.set_xscale("log")
+        if r > 1:
+            axp.set_yscale("log")
+        axp.set_xlim(0.002, 0.8)
+        axp.legend(fontsize=13, loc="lower right" if r > 1 else "upper right")
+    for axp in axes:
+        axp.set_box_aspect(1.1)
+        axp.tick_params(axis="both", which="both", labelsize=16)
+        axp.set_xlabel("Boundary volume fraction $f_{GB}$", fontsize=18)
+    for axp in axes[:1]:
+        axp.set_ylabel(r"$D^{eff}/D_m$", fontsize=20)
     fig.suptitle(
-        "Li et al. 2022 Fig. 4 D,E,G,H — Voronoi foam / extruded Voronoi columns, "
+        "Li et al. 2022 Fig. 4 E,H\nVoronoi foam / columns, "
         "volumetric GB band",
-        fontsize=10,
+        fontsize=16,
     )
     fig.tight_layout()
     fig.savefig(OUTPUT_DIR / "li2022-fig4.png", dpi=150)
 
 
 # ----------------------------------------------------------------------------
-def cases_for(structure):
-    if structure == "iso":
-        foam = Foam(dim=3, n_seeds=ISO_SEEDS)
-        return [Case(structure, foam, wg * foam.g) for wg in ISO_W_OVER_G]
-    foam = Foam(dim=2, n_seeds=COL_SEEDS)
-    return [Case(structure, foam, wg * foam.g) for wg in COL_W_OVER_G]
+def cases_for(structure, comm):
+    """Choose band widths matching target fractions to mesh-cell resolution."""
+    foam = Foam(dim=3 if structure == "iso" else 2,
+                n_seeds=ISO_SEEDS if structure == "iso" else COL_SEEDS)
+    mesh = make_mesh(Case(structure, foam, 0.0), comm)
+    tdim = mesh.topology.dim
+    n_local = mesh.topology.index_map(tdim).size_local
+    mid = dolfinx.mesh.compute_midpoints(
+        mesh, tdim, np.arange(n_local, dtype=np.int32)
+    )
+    distances = np.sort(foam.face_distance(mid.T)) if n_local else np.array([])
+    total = comm.allreduce(n_local, op=MPI.SUM)
+    cases = []
+    for target in F_GB:
+        lo, hi = 0.0, foam.B
+        best_width, best_error = hi, float("inf")
+        for _ in range(48):
+            width = (lo + hi) / 2
+            count = comm.allreduce(
+                int(np.searchsorted(distances, width / 2, side="right")), op=MPI.SUM
+            )
+            fraction = count / total
+            error = abs(fraction - target)
+            if error < best_error:
+                best_width, best_error = width, error
+            if fraction < target:
+                lo = width
+            else:
+                hi = width
+        cases.append(Case(structure, foam, best_width))
+    return cases, mesh
+
+
+def write_csv(rows, fname):
+    """Export every simulation field and reference values at each sample."""
+    if not rows:
+        return
+    records = []
+    for row in rows:
+        record = dict(row)
+        f, ratio = row["f_gb"], row["ratio"]
+        record["hart_D_eff_over_D_m"] = hart(f, ratio)
+        record["hs_D_eff_over_D_m"] = hashin_shtrikman(f, ratio)
+        records.append(record)
+    with fname.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(records[0]))
+        writer.writeheader()
+        writer.writerows(records)
 
 
 def main():
@@ -543,9 +592,10 @@ def main():
     mpl.use("Agg")
     comm = MPI.COMM_WORLD
     rows = []
+    render_cases = {}
     for structure in STRUCTURES:
-        cases = cases_for(structure)
-        mesh = make_mesh(cases[0], comm)  # the mesh does not depend on w
+        cases, mesh = cases_for(structure, comm)
+        render_cases[structure] = cases[RENDER_INDEX]
         for case in cases:
             cells_grain, cells_gb, f_gb = classify_cells(mesh, case)
             if comm.rank == 0:
@@ -571,12 +621,13 @@ def main():
                     )
     if comm.rank != 0:
         return
+    write_csv(rows, OUTPUT_DIR / "li2022-fig4.csv")
     # One measured ``f_GB`` per band width.
     fi = [q["f_gb"] for q in rows if q["structure"] == "iso"][:: len(RATIOS)]
     fc = [q["f_gb"] for q in rows if q["structure"] == "col_z"][:: len(RATIOS)]
     draw_fig4ab(
-        cases_for("iso")[RENDER_INDEX],
-        cases_for("col_z")[RENDER_INDEX],
+        render_cases["iso"],
+        render_cases["col_z"],
         fi[RENDER_INDEX] if len(fi) > RENDER_INDEX else None,
         fc[RENDER_INDEX] if len(fc) > RENDER_INDEX else None,
     )

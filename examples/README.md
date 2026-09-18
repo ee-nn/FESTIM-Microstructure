@@ -35,3 +35,16 @@ The EBSD conversion writes `results/ebsd_ctf_to_tesr/d7.tesr`, which
 paths. For the two JSON-producing scripts, `--out` is relative to that script's
 results folder and must stay inside it. Homogenisation field exports include
 the cell size and seed in their names to preserve each case in a sweep.
+
+`plot_li2022_fig4.py` recreates the two Li Fig. 4 comparison PNGs from their
+CSV outputs, requiring only NumPy and Matplotlib:
+
+```bash
+python examples/plot_li2022_fig4.py
+```
+
+Running the file reads `results/li2022_fig4/li2022-fig4.csv` and
+`results/li2022_fig4_codim/li2022-fig4-codim-thin.csv`, relative to the script,
+and saves each PNG beside its CSV. No command-line options are needed.
+The analytical reference curves are recomputed; all simulation markers are
+read from the CSV files.

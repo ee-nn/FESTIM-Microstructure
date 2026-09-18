@@ -5,6 +5,8 @@ The resolved model gives a GB tangential conductance ``delta * D_gb`` and uses
 thin-boundary result with volumetric Hart and Hashin-Shtrikman references.
 """
 
+import csv
+
 from pathlib import Path
 
 from mpi4py import MPI
@@ -22,7 +24,7 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 T = 1073.0  # K
 D0_M = 5.13e-8  # m^2/s, Liu et al. 2014, cited in their Sect. 2.3
 E_M = 0.21  # eV
-RATIOS = [100.0, 10.0, 0.2, 0.1]  # D_GB/D_m of their panels D, E, G, H
+RATIOS = [10.0, 0.1]  # D_GB/D_m of their panels E, H
 C_IN = 0.4e24  # m^-3
 C_OUT = 0.1e24
 
@@ -201,7 +203,7 @@ def draw_fig4ab(iso, columns, f_gb):
 
 
 def draw(rows, fname, f_lo, f_hi, logx):
-    fig, axes = plt.subplots(2, 2, figsize=(9, 7))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 6))
     f = np.geomspace(f_lo, f_hi, 200) if logx else np.linspace(f_lo, f_hi, 200)
     style = {
         "col_x": dict(
@@ -249,26 +251,46 @@ def draw(rows, fname, f_lo, f_hi, logx):
                 axp.plot(
                     [q["f_gb"] for q in sub], [q["D_eff_over_D_m"] for q in sub], **st
                 )
-        axp.text(0.05, 0.9, f"$D_{{GB}}/D_m$ = {r:g}", transform=axp.transAxes)
+        axp.text(0.05, 0.9, f"$D_{{GB}}/D_m$ = {r:g}", transform=axp.transAxes, fontsize=18)
         if logx:
             axp.set_xscale("log")
             if r > 1:
                 axp.set_yscale("log")
         axp.set_xlim(f_lo, f_hi)
-        axp.legend(fontsize=10, loc="lower right" if r > 1 else "upper right")
-    for axp in axes[1]:
-        axp.set_xlabel("boundary volume fraction $f_{GB} = \\delta\\,S_v$")
-    for axp in axes[:, 0]:
-        axp.set_ylabel(r"$D^{eff}/D_m$")
+        axp.legend(fontsize=13, loc="lower right" if r > 1 else "upper right")
+    for axp in axes:
+        axp.set_box_aspect(1.1)
+        axp.tick_params(axis="both", which="both", labelsize=16)
+        axp.set_xlabel("Boundary volume fraction $f_{GB}$", fontsize=18)
+    for axp in axes[:1]:
+        axp.set_ylabel(r"$D^{eff}/D_m$", fontsize=20)
     fig.suptitle(
-        "Li et al. 2022 Fig. 4, codim-1 boundary with thickness δ (k = 2 D_GB/δ)",
-        fontsize=10,
+        "Li et al. 2022 Fig. 4, codim-1 boundary\nThickness δ (k = 2 D_GB/δ)",
+        fontsize=16,
     )
     fig.tight_layout()
     fig.savefig(fname, dpi=300)
 
 
 # ----------------------------------------------------------------------------
+def write_csv(rows, fname):
+    """Export every simulation field and reference values at each sample."""
+    if not rows:
+        return
+    records = []
+    for row in rows:
+        record = dict(row)
+        f, ratio = row["f_gb"], row["ratio"]
+        record["hart_D_eff_over_D_m"] = hart(f, ratio)
+        record["hs_D_eff_over_D_m"] = hashin_shtrikman(f, ratio)
+        record["col_z_exact_D_eff_over_D_m"] = codim_parallel(f, ratio)
+        records.append(record)
+    with fname.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(records[0]))
+        writer.writeheader()
+        writer.writerows(records)
+
+
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     mpl.use("Agg")
@@ -298,6 +320,7 @@ def main():
                     )
     if comm.rank != 0:
         return
+    write_csv(rows, OUTPUT_DIR / "li2022-fig4-codim-thin.csv")
     draw_fig4ab(micros["iso"], micros["col_x"], F_GB_THEIRS[0])
     draw(rows, OUTPUT_DIR / "li2022-fig4-codim-thin.png", 0.002, 0.8, logx=True)
 
