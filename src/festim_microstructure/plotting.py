@@ -197,7 +197,8 @@ def use_agg():
     mpl.use("Agg")
     import matplotlib.pyplot as plt
 
-    plt.rcParams.update(RCPARAMS)
+    for key, value in RCPARAMS.items():
+        plt.rcParams[key] = value
     return plt
 
 
