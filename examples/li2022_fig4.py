@@ -106,7 +106,6 @@ li2022-fig4.png     D_eff/D_m against f_GB for the two ratios, panels E,H,
 """
 
 import csv
-
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -515,7 +514,9 @@ def draw_fig4(rows):
                 axp.plot(
                     [q["f_gb"] for q in sub], [q["D_eff_over_D_m"] for q in sub], **st
                 )
-        axp.text(0.05, 0.9, f"$D_{{GB}}/D_m$ = {r:g}", transform=axp.transAxes, fontsize=18)
+        axp.text(
+            0.05, 0.9, f"$D_{{GB}}/D_m$ = {r:g}", transform=axp.transAxes, fontsize=18
+        )
         axp.set_xscale("log")
         if r > 1:
             axp.set_yscale("log")
@@ -528,8 +529,7 @@ def draw_fig4(rows):
     for axp in axes[:1]:
         axp.set_ylabel(r"$D^{eff}/D_m$", fontsize=20)
     fig.suptitle(
-        "Li et al. 2022 Fig. 4 E,H\nVoronoi foam / columns, "
-        "volumetric GB band",
+        "Li et al. 2022 Fig. 4 E,H\nVoronoi foam / columns, volumetric GB band",
         fontsize=16,
     )
     fig.tight_layout()
@@ -539,14 +539,14 @@ def draw_fig4(rows):
 # ----------------------------------------------------------------------------
 def cases_for(structure, comm):
     """Choose band widths matching target fractions to mesh-cell resolution."""
-    foam = Foam(dim=3 if structure == "iso" else 2,
-                n_seeds=ISO_SEEDS if structure == "iso" else COL_SEEDS)
+    foam = Foam(
+        dim=3 if structure == "iso" else 2,
+        n_seeds=ISO_SEEDS if structure == "iso" else COL_SEEDS,
+    )
     mesh = make_mesh(Case(structure, foam, 0.0), comm)
     tdim = mesh.topology.dim
     n_local = mesh.topology.index_map(tdim).size_local
-    mid = dolfinx.mesh.compute_midpoints(
-        mesh, tdim, np.arange(n_local, dtype=np.int32)
-    )
+    mid = dolfinx.mesh.compute_midpoints(mesh, tdim, np.arange(n_local, dtype=np.int32))
     distances = np.sort(foam.face_distance(mid.T)) if n_local else np.array([])
     total = comm.allreduce(n_local, op=MPI.SUM)
     cases = []

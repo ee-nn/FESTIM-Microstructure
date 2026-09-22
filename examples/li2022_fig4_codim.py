@@ -6,7 +6,6 @@ thin-boundary result with volumetric Hart and Hashin-Shtrikman references.
 """
 
 import csv
-
 from pathlib import Path
 
 from mpi4py import MPI
@@ -251,7 +250,9 @@ def draw(rows, fname, f_lo, f_hi, logx):
                 axp.plot(
                     [q["f_gb"] for q in sub], [q["D_eff_over_D_m"] for q in sub], **st
                 )
-        axp.text(0.05, 0.9, f"$D_{{GB}}/D_m$ = {r:g}", transform=axp.transAxes, fontsize=18)
+        axp.text(
+            0.05, 0.9, f"$D_{{GB}}/D_m$ = {r:g}", transform=axp.transAxes, fontsize=18
+        )
         if logx:
             axp.set_xscale("log")
             if r > 1:

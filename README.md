@@ -315,11 +315,17 @@ workdir = Path("results")
 workdir.mkdir(parents=True, exist_ok=True)
 tesr = workdir / "poly.tesr"
 result = fm.ebsd.convert.convert(
-    "examples/data/D7 PBF SS316L.ctf", str(tesr),
-    min_pixels=15, max_mad=1.5, allow_error=True,
-    crop="0,306,0,306", diagnostics=True,
+    "examples/data/D7 PBF SS316L.ctf",
+    str(tesr),
+    min_pixels=15,
+    max_mad=1.5,
+    allow_error=True,
+    crop="0,306,0,306",
+    diagnostics=True,
 )
-base = fm.meshing.ebsd.run_ebsd_pipeline(fm.EbsdOptions(tesr=str(tesr)), workdir=workdir)
+base = fm.meshing.ebsd.run_ebsd_pipeline(
+    fm.EbsdOptions(tesr=str(tesr)), workdir=workdir
+)
 ```
 
 Configure EBSD meshing with `fm.EbsdOptions(mesh=fm.TesrMeshOptions(...))`

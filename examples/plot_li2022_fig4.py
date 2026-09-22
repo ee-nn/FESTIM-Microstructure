@@ -74,9 +74,7 @@ def draw_volumetric(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
     }
     for axp, r in zip(axes.flat, RATIOS, strict=True):
         axp.plot(f, hart(f, r), "-", color="0.6", label="Hart")
-        axp.plot(
-            f, hashin_shtrikman(f, r), ":", color="tab:blue", label="Iso (X/Y/Z)"
-        )
+        axp.plot(f, hashin_shtrikman(f, r), ":", color="tab:blue", label="Iso (X/Y/Z)")
         for key, st in style.items():
             sub = sorted(
                 (q for q in rows if q["structure"] == key and q["ratio"] == r),
@@ -196,7 +194,8 @@ def main():
         print(f"Saved {output}")
         # Volumetric fractions differ slightly from targets due to mesh resolution.
         paper_rows = [
-            row for row in rows
+            row
+            for row in rows
             if np.any(np.isclose(row["f_gb"], PAPER_F_GB, rtol=0, atol=1e-3))
         ]
         if not paper_rows:

@@ -43,9 +43,9 @@ import dolfinx
 import festim as F
 import numpy as np
 import ufl
+from gb_homogenisation import identify, make_microstructure
 
 import festim_microstructure as fm
-from gb_homogenisation import identify, make_microstructure
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
