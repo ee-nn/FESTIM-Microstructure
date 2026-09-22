@@ -620,9 +620,9 @@ def mesh_tesr(tesr, options=None):
     n_cells = sum(1 for _ in open(ori))
     print(f"  grains: {n_cells}")
 
-    # 1. mesh the raster. Gmsh v4 because FESTIM reads it with
-    #    dolfinx.io.gmshio and needs the 1D element sets, which carry the
-    #    reconstructed edge ids. -tmp must exist beforehand.
+    # mesh the raster. Gmsh v4 because FESTIM reads it with
+    # dolfinx.io.gmshio and needs the 1D element sets, which carry the
+    # reconstructed edge ids. -tmp must exist beforehand.
     msh = base.with_suffix(".msh4")
     if _need(msh, force):
         run_interruptible(
