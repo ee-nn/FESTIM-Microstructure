@@ -19,6 +19,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+plt.rcParams.update({"lines.linewidth": 2.5, "lines.markeredgewidth": 1.5})
+
 RATIOS = [10.0, 0.1]
 PAPER_F_GB = np.array([0.3, 0.4, 0.5, 0.6, 0.7])
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -65,18 +67,15 @@ def draw_volumetric(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
     fig, axes = plt.subplots(1, 2, figsize=(11, 7), layout="constrained")
     f = np.geomspace(f_lo, f_hi, 200) if logx else np.linspace(f_lo, f_hi, 200)
     style = {
-        "col_z": dict(marker="*", ms=9, ls="none", color="tab:red", label="Col_I(Z)"),
+        "col_z": dict(marker="*", ms=14, ls="none", color="tab:red", label="Col_I(Z)"),
         "col_x": dict(
-            marker="*", ms=9, ls="none", color="tab:red", mfc="none", label="Col_I(X)"
-        ),
-        "iso": dict(
-            marker="o", ms=6, ls="none", color="tab:purple", mfc="none", label="Iso"
+            marker="*", ms=14, ls="none", color="tab:red", mfc="none", label="Col_I(X)"
         ),
     }
     for axp, r in zip(axes.flat, RATIOS, strict=True):
-        axp.plot(f, hart(f, r), "-", color="0.6", label="Hart, their Eq. 28")
+        axp.plot(f, hart(f, r), "-", color="0.6", label="Hart")
         axp.plot(
-            f, hashin_shtrikman(f, r), ":", color="tab:blue", label="HS, their Eq. 33"
+            f, hashin_shtrikman(f, r), ":", color="tab:blue", label="Iso (X/Y/Z)"
         )
         for key, st in style.items():
             sub = sorted(
@@ -87,7 +86,7 @@ def draw_volumetric(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
                 axp.plot(
                     [q["f_gb"] for q in sub], [q["D_eff_over_D_m"] for q in sub], **st
                 )
-        axp.set_title(f"$D_{{GB}}/D_m$ = {r:g}", fontsize=18, pad=12)
+        axp.set_title(f"$D_{{GB}}/D_m$ = {r:g}", fontsize=21, pad=12)
         if logx:
             axp.set_xscale("log")
             if r > 1:
@@ -95,16 +94,19 @@ def draw_volumetric(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
         axp.set_xlim(f_lo, f_hi)
         if not logx:
             axp.set_xticks(PAPER_F_GB)
-        axp.legend(fontsize=13, loc="upper left" if r > 1 else "lower left")
+        axp.legend(
+            fontsize=18,
+            loc="upper left" if r > 1 else ("lower left" if logx else "upper right"),
+        )
     for axp in axes:
         axp.set_box_aspect(1.1)
-        axp.tick_params(axis="both", which="both", labelsize=16)
-        axp.set_xlabel("Boundary volume fraction $f_{GB}$", fontsize=18)
+        axp.tick_params(axis="both", which="both", labelsize=19)
+        axp.set_xlabel("Boundary volume fraction $f_{GB}$", fontsize=21)
     for axp in axes[:1]:
-        axp.set_ylabel(r"$D^{eff}/D_m$", fontsize=20)
+        axp.set_ylabel(r"$D^{eff}/D_m$", fontsize=23)
     fig.suptitle(
         "Li et al. 2022 Fig. 4 E,H\nVoronoi foam / columns, volumetric GB band",
-        fontsize=16,
+        fontsize=19,
     )
     fig.savefig(fname, dpi=150, bbox_inches="tight", pad_inches=0.2)
     plt.close(fig)
@@ -121,39 +123,31 @@ def draw_codim(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
     style = {
         "col_x": dict(
             marker="*",
-            ms=9,
+            ms=14,
             ls="none",
             color="tab:red",
             mfc="none",
-            label="Col_I(X), codim",
-        ),
-        "iso": dict(
-            marker="o",
-            ms=6,
-            ls="none",
-            color="tab:purple",
-            mfc="none",
-            label="Iso, codim",
+            label="Col_I(X)",
         ),
     }
     sampled_f = sorted({row["f_gb"] for row in rows if f_lo <= row["f_gb"] <= f_hi})
     for axp, r in zip(axes.flat, RATIOS, strict=True):
-        axp.plot(f, hart(f, r), "-", color="0.6", label="Hart bound (volumetric)")
+        axp.plot(f, hart(f, r), "-", color="0.6", label="Hart")
         axp.plot(
             sampled_f,
             codim_parallel(np.asarray(sampled_f), r),
             marker="*",
-            ms=8,
+            ms=13,
             ls="none",
             color="tab:red",
-            label="Col_I(Z), codim: 1 + f r (exact)",
+            label="Col_I(Z)",
         )
         axp.plot(
             f,
             hashin_shtrikman(f, r),
             ":",
             color="tab:blue",
-            label="Hashin-Shtrikman (volumetric)",
+            label="Iso (X/Y/Z)",
         )
         for key, st in style.items():
             sub = sorted(
@@ -164,7 +158,7 @@ def draw_codim(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
                 axp.plot(
                     [q["f_gb"] for q in sub], [q["D_eff_over_D_m"] for q in sub], **st
                 )
-        axp.set_title(f"$D_{{GB}}/D_m$ = {r:g}", fontsize=18, pad=12)
+        axp.set_title(f"$D_{{GB}}/D_m$ = {r:g}", fontsize=21, pad=12)
         if logx:
             axp.set_xscale("log")
             if r > 1:
@@ -172,16 +166,19 @@ def draw_codim(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
         axp.set_xlim(f_lo, f_hi)
         if not logx:
             axp.set_xticks(PAPER_F_GB)
-        axp.legend(fontsize=13, loc="upper left" if r > 1 else "lower left")
+        axp.legend(
+            fontsize=18,
+            loc="upper left" if r > 1 else ("lower left" if logx else "upper right"),
+        )
     for axp in axes:
         axp.set_box_aspect(1.1)
-        axp.tick_params(axis="both", which="both", labelsize=16)
-        axp.set_xlabel("Boundary volume fraction $f_{GB}$", fontsize=18)
+        axp.tick_params(axis="both", which="both", labelsize=19)
+        axp.set_xlabel("Boundary volume fraction $f_{GB}$", fontsize=21)
     for axp in axes[:1]:
-        axp.set_ylabel(r"$D^{eff}/D_m$", fontsize=20)
+        axp.set_ylabel(r"$D^{eff}/D_m$", fontsize=23)
     fig.suptitle(
         "Li et al. 2022 Fig. 4, codim-1 boundary\nThickness δ (k = 2 D_GB/δ)",
-        fontsize=16,
+        fontsize=19,
     )
     fig.savefig(fname, dpi=300, bbox_inches="tight", pad_inches=0.2)
     plt.close(fig)
