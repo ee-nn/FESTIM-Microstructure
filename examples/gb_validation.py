@@ -8,7 +8,7 @@ Test A -- a different boundary condition
     Permeation across the cell: concentration fixed on two opposite faces and
     *no flux* on the other two, which is a different constraint on the
     fluctuation than the uniform-gradient condition the tensor was fitted under.
-    The resolved model gives both the mean flux and the mean gradient, and the
+    The microstructure model gives both the mean flux and the mean gradient, and the
     constitutive law it is supposed to obey is
 
         q_bar = -D_eff . grad_c_bar
@@ -17,7 +17,7 @@ Test A -- a different boundary condition
     homogeneous solve involved.
 
 Test B -- a transient, against an actual homogeneous model
-    Uptake from one face into an initially empty cell, resolved microstructure
+    Uptake from one face into an initially empty cell, the modelled microstructure
     against a plain rectangle carrying the tensor. This is the end-to-end
     question: same geometry, same boundary condition, one field instead of a few
     hundred, and the inventory histories should lie on top of each other. It
@@ -144,14 +144,14 @@ def homogeneous_model(
 
 
 def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
-    """Compare resolved and homogeneous uptake over one slow-axis crossing time."""
+    """Compare microstructure and homogeneous uptake over one crossing time."""
     size = micro.size
     slow = min(np.linalg.eigvalsh(0.5 * (D_eff + D_eff.T)))
     final_time = 0.35 * size**2 / slow
     dt = final_time / n_steps
     bcs = [("top", lambda x: np.isclose(x[1], size), 1.0)]
 
-    resolved = fm.build(
+    micro_model = fm.build(
         micro,
         physics,
         bcs=bcs,
@@ -161,8 +161,8 @@ def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
             stepsize=F.Stepsize(initial_value=dt),
         ),
     )
-    resolved.model.show_progress_bar = False  # the stepping is driven here
-    resolved.initialise()
+    micro_model.model.show_progress_bar = False  # the stepping is driven here
+    micro_model.initialise()
 
     homogeneous, c, _, mesh_h = homogeneous_model(
         size,
@@ -183,23 +183,23 @@ def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
         )
         return mesh_h.comm.allreduce(dolfinx.fem.assemble_scalar(form), op=MPI.SUM)
 
-    times, resolved_inventory, model_inventory = [0.0], [0.0], [0.0]
-    while resolved.model.t.value < final_time - 0.5 * dt:
-        resolved.model.iterate()
+    times, micro_inventory, model_inventory = [0.0], [0.0], [0.0]
+    while micro_model.model.t.value < final_time - 0.5 * dt:
+        micro_model.model.iterate()
         homogeneous.iterate()
-        times.append(float(resolved.model.t))
-        resolved_inventory.append(fm.exports.averages.inventory(resolved))
+        times.append(float(micro_model.model.t))
+        micro_inventory.append(fm.exports.averages.inventory(micro_model))
         model_inventory.append(homogeneous_inventory())
         if verbose and len(times) % 10 == 0:
             print(
-                f"    t = {times[-1]:.3e} s  resolved {resolved_inventory[-1]:.4e}"
+                f"    t = {times[-1]:.3e} s  microstructure {micro_inventory[-1]:.4e}"
                 f"  homogeneous {model_inventory[-1]:.4e}",
                 flush=True,
             )
 
     return (
         np.array(times),
-        np.array(resolved_inventory),
+        np.array(micro_inventory),
         np.array(model_inventory),
         final_time,
     )
@@ -268,23 +268,23 @@ def main(argv=None):
     if args.skip_transient:
         dump()
         return
-    print("test B -- uptake transient, resolved microstructure vs homogeneous model")
-    times, resolved, homogeneous, final_time = uptake(
+    print("test B -- uptake transient, microstructure vs homogeneous model")
+    times, microstructure, homogeneous, final_time = uptake(
         micro, physics, D_eff, n_steps=args.steps
     )
     record["uptake"] = {
         "times": times.tolist(),
-        "resolved": resolved.tolist(),
+        "microstructure": microstructure.tolist(),
         "homogeneous": homogeneous.tolist(),
         "final_time": final_time,
     }
     dump()
-    saturation = resolved[-1]
-    deviation = np.abs(resolved - homogeneous) / max(saturation, 1e-300)
+    saturation = microstructure[-1]
+    deviation = np.abs(microstructure - homogeneous) / max(saturation, 1e-300)
     print(f"  final time                     : {final_time:.3e} s")
     print(
         f"  inventory at the end           : "
-        f"resolved {resolved[-1]:.4e}, homogeneous {homogeneous[-1]:.4e}"
+        f"microstructure {microstructure[-1]:.4e}, homogeneous {homogeneous[-1]:.4e}"
     )
     print(
         f"  max deviation over the history : {100 * deviation.max():.2f} % of the "
@@ -293,15 +293,16 @@ def main(argv=None):
     print(f"  deviation at the end           : {100 * deviation[-1]:.2f} %")
 
     half = 0.5 * saturation
-    t_resolved = np.interp(half, resolved, times)
+    t_microstructure = np.interp(half, microstructure, times)
     t_homogeneous = np.interp(half, homogeneous, times)
     print(
-        f"  time to half saturation        : resolved {t_resolved:.3e} s, "
+        f"  time to half saturation        : microstructure {t_microstructure:.3e} s, "
         f"homogeneous {t_homogeneous:.3e} s "
-        f"({100 * abs(t_homogeneous - t_resolved) / t_resolved:.1f} % apart)"
+        f"({100 * abs(t_homogeneous - t_microstructure) / t_microstructure:.1f} % "
+        "apart)"
     )
     record["half_saturation"] = {
-        "resolved": float(t_resolved),
+        "microstructure": float(t_microstructure),
         "homogeneous": float(t_homogeneous),
     }
     dump()

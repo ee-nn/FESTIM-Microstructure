@@ -1,4 +1,4 @@
-"""Identify an anisotropic effective diffusivity from resolved cell problems.
+"""Identify an anisotropic effective diffusivity from microstructure cell problems.
 
 Whole-cell Taylor estimates are upper bounds; interior-window estimates reduce
 boundary clamping. A large grain/GB mismatch means no single-field ``D_eff``.
@@ -31,7 +31,7 @@ def make_microstructure(size, grain_size, aspect=1.0, seed=0, cells_per_grain=10
 
 
 def hart_bound(model: fm.MicroModel):
-    """Return the parallel Hart/Voigt bound for the resolved microstructure."""
+    """Return the parallel Hart/Voigt bound for the modelled microstructure."""
     micro, physics = model.micro, model.physics
     if not isinstance(micro, fm.VoronoiMicrostructure):
         raise TypeError("this 2D Hart bound requires a VoronoiMicrostructure")

@@ -1,4 +1,4 @@
-"""Averages, inventories, and field diagnostics for resolved transport models."""
+"""Averages, inventories, and field diagnostics for transport models."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import numpy as np
 import ufl
 
 if TYPE_CHECKING:
-    from festim_microstructure.resolved import MicroModel
+    from festim_microstructure.model import MicroModel
 
 __all__ = [
     "averages",

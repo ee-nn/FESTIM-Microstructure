@@ -1,6 +1,6 @@
 """Reproduce Li et al. (2022), Fig. 4, with the codimension-one GB model.
 
-The resolved model gives a GB tangential conductance ``delta * D_gb`` and uses
+The model gives a GB tangential conductance ``delta * D_gb`` and uses
 ``k = 2 * D_gb / delta`` to match transverse slab resistance. It compares the
 thin-boundary result with volumetric Hart and Hashin-Shtrikman references.
 """

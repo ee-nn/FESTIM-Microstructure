@@ -1,25 +1,17 @@
-"""Per-grain lattice fields coupled through one codimension-one GB network.
+"""Hydrogen transport through grains and a codimension-one GB network.
 
-Each grain exchanges ``k (c_grain - c_gb)`` with the collapsed boundary slab;
-the network equation uses ``k / delta``. Sweepable coefficients remain DOLFINx
-constants or functions to avoid FFCx recompilation.
+Each grain has its own lattice concentration field and exchanges hydrogen with
+the collapsed boundary slab at a rate ``k (c_grain - c_gb)``. The network
+equation uses ``k / delta`` because the physical boundary width ``delta`` is a
+model coefficient rather than a meshed dimension.
 
-This is the only transport model in the package. The Fisher model that used to
-sit beside it -- one lattice field for the whole polycrystal, a source of
-``2 k (c_b - c_gb) / delta`` on the network -- is the limit of this one in which
-the boundary offers no resistance to permeation, so that the per-grain fields
-agree across every boundary and glue into a single continuous field. That limit
-is reached when ``2 / k`` is small against ``grain_size / D_bulk``; see
-:meth:`~festim_microstructure.materials.Physics.interface_resistance_ratio`,
-which reports the quotient.
+An interior facet contributes one exchange term for each adjacent grain. For
+each side, the network source ``k (c_grain - c_gb) / delta`` balances the grain
+flux ``k (c_gb - c_grain)`` after accounting for the slab width. This preserves
+mass while allowing the lattice concentration to jump across a boundary.
 
-Both sides of a boundary are accounted for here, and that is the other reason
-for keeping only this model. An interior facet carries one source per adjacent
-grain, ``k (c_i - c_gb) / delta`` each, against one flux ``k (c_gb - c_i)`` out
-of each grain: what the slab gains, the grains lose. With a single lattice
-field FESTIM applies the exchange once per facet (the two restrictions read the
-same value), so the ``2 k / delta`` source gained twice what the lattice lost,
-and an interior network created hydrogen at ``k (c_b - c_gb)`` per unit area.
+Sweepable coefficients remain DOLFINx constants or functions so changing the
+physics does not require FFCx to recompile the forms.
 """
 
 from __future__ import annotations
@@ -89,7 +81,7 @@ SURFACE_ID_0 = 2_000_000  # the per-grain boundary patches are numbered from her
 
 @dataclass
 class MicroModel:
-    """A built (not yet solved) resolved problem, and the handles to read it."""
+    """A built grain/network problem and the handles used to solve and inspect it."""
 
     model: F.HydrogenTransportProblemDiscontinuous
     micro: MeshedMicrostructure
@@ -215,7 +207,7 @@ def build(
     exports=(),
     solve: SolveOptions | None = None,
 ):
-    """Assemble a resolved model for a microstructure and grain-surface BCs.
+    """Assemble the transport model for a microstructure and grain-surface BCs.
 
     ``bcs`` contains ``(name, locator, value)`` tuples. ``exchange_rate`` maps a
     grain id to ``k`` and defaults to ``physics.k_exchange``. Stepping and

@@ -6,7 +6,7 @@ built from all the grain-boundary facets is topologically connected, so a single
 continuous field lives on it and hydrogen crosses from one boundary to another with no
 junction condition to write. The grains each carry a lattice field of their own and
 exchange with that network at the rate ``k``; see
-:mod:`festim_microstructure.resolved`.
+:mod:`festim_microstructure.model`.
 
 Run::
 

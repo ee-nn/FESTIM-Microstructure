@@ -4,7 +4,7 @@ Three protocols, because there are really two different things in this package
 that both get called "a microstructure":
 
 * :class:`MeshedMicrostructure` -- a mesh with one tagged subdomain per grain,
-  which is what :func:`festim_microstructure.resolved.build` needs. Implemented
+  which is what :func:`festim_microstructure.model.build` needs. Implemented
   by the Voronoi builders, and by :class:`TaggedPolycrystal` for a mesh that
   came from somewhere else.
 * :class:`BoundaryNetwork` -- a tessellation topology with a per-entity
@@ -57,7 +57,7 @@ class Microstructure(Protocol):
 
 @runtime_checkable
 class MeshedMicrostructure(Microstructure, Protocol):
-    """A meshed polycrystal: the contract of :func:`...resolved.build`.
+    """A meshed polycrystal: the contract of :func:`...model.build`.
 
     ``facet_tags``/``gb_tag`` may be ``None``: a builder that cannot tag the
     grain-boundary facets leaves them unset and the network is located
@@ -151,7 +151,7 @@ class TaggedPolycrystal:
     Pass the measured angles to give the grains a texture.
 
     Supply either ``facet_tags`` with ``gb_tag`` (one value or a sequence) or a
-    ``network_locator``; :func:`~festim_microstructure.resolved.build` prefers
+    ``network_locator``; :func:`~festim_microstructure.model.build` prefers
     the tags.
     """
 

@@ -481,7 +481,7 @@ def figure_validation(validation, path):
     full = validation["identification"]["size"] ** 2
     labels = []
     for key, color, label in (
-        ("resolved", SERIES[0], "resolved microstructure"),
+        ("microstructure", SERIES[0], "microstructure model"),
         ("homogeneous", SERIES[1], "homogeneous D_eff"),
     ):
         y = np.array(uptake[key]) / full

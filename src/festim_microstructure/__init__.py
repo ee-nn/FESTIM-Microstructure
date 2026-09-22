@@ -1,4 +1,4 @@
-"""Microstructure-resolved hydrogen transport tools for FESTIM.
+"""Microstructure-scale hydrogen transport tools for FESTIM.
 
 The curated geometry and network API is imported eagerly. Solver-dependent
 names resolve on first access, keeping standalone EBSD tools and ``fm-check``
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from . import meshing as meshing
     from . import microstructure as microstructure
     from . import plotting as plotting
-    from . import resolved as resolved
+    from . import model as model
     from . import voronoi as voronoi
     from .fem.subdomains import Grain as Grain
     from .fem.subdomains import GrainBoundaryNetwork as GrainBoundaryNetwork
@@ -37,9 +37,9 @@ if TYPE_CHECKING:
     from .materials import Physics as Physics
     from .meshing.ebsd import EbsdMicrostructure as EbsdMicrostructure
     from .meshing.ebsd import EbsdOptions as EbsdOptions
-    from .resolved import MicroModel as MicroModel
-    from .resolved import SolveOptions as SolveOptions
-    from .resolved import build as build
+    from .model import MicroModel as MicroModel
+    from .model import SolveOptions as SolveOptions
+    from .model import build as build
 
 try:
     from ._version import __version__
@@ -56,16 +56,16 @@ _SUBMODULES = (
     "meshing",
     "microstructure",
     "plotting",
-    "resolved",
+    "model",
     "voronoi",
 )
 _NAMES = {
     "EbsdMicrostructure": ".meshing.ebsd",
     "EbsdOptions": ".meshing.ebsd",
-    "MicroModel": ".resolved",
+    "MicroModel": ".model",
     "Physics": ".materials",
-    "SolveOptions": ".resolved",
-    "build": ".resolved",
+    "SolveOptions": ".model",
+    "build": ".model",
     "Grain": ".fem.subdomains",
     "GrainBoundaryNetwork": ".fem.subdomains",
     "GrainSurface": ".fem.subdomains",

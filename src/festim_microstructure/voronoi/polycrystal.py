@@ -2,7 +2,7 @@
 
 Both classes implement
 :class:`~festim_microstructure.microstructure.MeshedMicrostructure`, so
-:func:`~festim_microstructure.resolved.build` accepts either. What used
+:func:`~festim_microstructure.model.build` accepts either. What used
 to be two parallel classes with the same methods spelled differently is now one
 base plus the parts that genuinely depend on the dimension.
 

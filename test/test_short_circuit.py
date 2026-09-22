@@ -13,7 +13,7 @@ pytestmark = requires_fenics
 def test_fast_boundaries_increase_inventory():
     from festim_microstructure.exports.averages import inventory
     from festim_microstructure.materials import Physics
-    from festim_microstructure.resolved import SolveOptions, build
+    from festim_microstructure.model import SolveOptions, build
     from festim_microstructure.voronoi import VoronoiMicrostructure
 
     micro = VoronoiMicrostructure.create(

@@ -19,7 +19,7 @@ What does change relative to the 2D script:
   point-to-segment distance, and the fragment operation already knows exactly which
   facets are grain boundaries.
 * The mouths are the curves where the network meets the charged face, which
-  :func:`~festim_microstructure.resolved.build` derives from the mesh dimension.
+  :func:`~festim_microstructure.model.build` derives from the mesh dimension.
 * The grain-boundary volume fraction is delta * area / L**3 instead of
   delta * length / L**2.
 

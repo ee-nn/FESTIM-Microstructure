@@ -4,9 +4,9 @@ A workflow in three steps:
 
 1. **Build a polycrystal** whose grain boundaries the mesh conforms to
    (`voronoi/`).
-2. **Solve the resolved problem** — one FESTIM subdomain per grain, coupled
+2. **Solve the microstructure problem** — one FESTIM subdomain per grain, coupled
    through the boundary network declared as a single codim-1 subdomain
-   (`models/resolved.py`).
+   (`src/festim_microstructure/model.py`).
 3. **Identify an anisotropic `D_eff`** for a homogeneous model, and then check
    that it predicts things it was not fitted to (`examples/gb_homogenisation.py`,
    `examples/gb_validation.py`).
@@ -26,7 +26,7 @@ and driven across it, far fewer boundaries are usefully oriented and the same
 scale stays dim. That difference is the anisotropy, before any number is put
 on it.*
 
-## What the resolved model is
+## What the transport model is
 
 Every Voronoi cell is its own `festim.VolumeSubdomain` with its own
 `festim.Species`, so the lattice concentration may **jump** from grain to grain.
@@ -165,7 +165,7 @@ crossing a grain, the grains decouple: the apparent tensor runs away and even
 inverts its anisotropy, because the flux still runs along the network while
 `<grad c>` inside the now-isolated grains collapses. That divergence is the
 diagnosis, not a number to use -- the material has become dual-porosity and wants
-a two-field model, which is exactly what the resolved problem already is.
+a two-field model, which is exactly the structure of the microstructure problem.
 
 ## Numerics worth knowing
 

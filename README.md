@@ -2,7 +2,7 @@
 
 ⚠️ This repo is in its early stages and is actively being built. ⚠️ 
 
-Microstructure-resolved hydrogen transport modelling built on
+Microstructure-scale hydrogen transport modelling built on
 [FESTIM](https://festim.readthedocs.io/).
 
 `festim-microstructure` is a companion package to FESTIM, similar to 
@@ -203,7 +203,7 @@ FESTIM-Microstructure/
 │   │   ├── neper.py            # NeperMesh: generate, mesh, read, describe
 │   │   ├── ebsd.py
 │   │   └── diagnostics.py
-│   ├── resolved.py             # build, MicroModel, SolveOptions
+│   ├── model.py                # build, MicroModel, SolveOptions
 │   ├── fem/
 │   │   ├── solvers.py
 │   │   └── subdomains.py
