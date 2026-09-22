@@ -48,24 +48,31 @@ h_gb = 0.004 * L  # mesh size at the boundaries
 h_bulk = 0.04 * L  # mesh size in the grain interiors
 
 # Microstructure
-segments = fm.voronoi.voronoi_segments(n_seeds, L, np.random.default_rng(seed))
-mesh, cell_tags, n_grains = fm.voronoi.build_mesh(
-    segments, L, fm.MeshSizing(h_gb=h_gb, h_bulk=h_bulk)
+seeds, boundaries = fm.voronoi.tessellate(
+    n_seeds, L, np.random.default_rng(seed), dim=2
+)
+mesh_data = fm.voronoi.build_mesh(
+    boundaries, L, fm.MeshSizing(h_gb=h_gb, h_bulk=h_bulk), dim=2, seeds=seeds
 )
 # Built here rather than through VoronoiMicrostructure.create, which would
 # mesh the cell to its own sizing: this keeps the mesh the example asked for.
 # Untextured, and crystal_anisotropy is 1 below, so the angles never enter.
 micro = fm.VoronoiMicrostructure(
+    dim=2,
     size=L,
     n_seeds=n_seeds,
     seed=seed,
-    segments=segments,
-    mesh=mesh,
-    cell_tags=cell_tags,
-    grain_ids=np.arange(1, n_grains + 1),
-    orientations=np.zeros(n_grains),
+    seeds=seeds,
+    boundaries=boundaries,
+    mesh=mesh_data.mesh,
+    cell_tags=mesh_data.cell_tags,
+    facet_tags=mesh_data.facet_tags,
+    gb_tag=mesh_data.gb_tag,
+    grain_ids=mesh_data.grain_ids,
+    orientations=np.zeros(len(mesh_data.grain_ids)),
     h_gb=h_gb,
 )
+mesh, n_grains = micro.mesh, micro.n_grains
 physics = fm.Physics(
     T=T,
     D_0_bulk=D_B,  # E_D = 0: the Arrhenius factor is already included above
@@ -87,14 +94,18 @@ fm.exports.averages.write_vtx(model, OUTPUT_DIR / "voronoi", time=t_end)
 network, cgb_fast = model.network, model.network_solution
 
 # Inspect the mesh and boundary network
-ridge_length = sum(float(np.linalg.norm(q - p)) for p, q in segments)
+ridge_length = fm.voronoi.network_measure(boundaries, dim=2)
 facet_length = fm.exports.measures.submesh_measure(network)
 print(
     f"microstructure: {n_seeds} seeds, {n_grains} grains, "
-    f"{len(segments)} boundary segments"
+    f"{len(boundaries)} boundary segments"
 )
-print(f"triple junctions inside box: {len(fm.voronoi.triple_junctions(segments, L))}")
-print(f"connected components (ridges): {fm.voronoi.connected_components(segments, L)}")
+topology = fm.voronoi.junctions(boundaries, dim=2, size=L)
+print(f"triple junctions inside box: {len(topology.points)}")
+print(
+    "connected components (ridges): "
+    f"{fm.voronoi.connected_components(boundaries, dim=2, size=L)}"
+)
 print(f"connected components (submesh): {fm.exports.measures.component_count(network)}")
 print(f"  facets dropped on the outer box : {network.n_dropped}")
 n_cells = mesh.topology.index_map(2).size_global
@@ -110,7 +121,7 @@ print(
 # Compare fast boundaries with lattice diffusion
 fast = fm.exports.averages.inventory(model)
 depth = fm.exports.measures.junction_only_below(
-    [np.array(seg) for seg in segments], axis=1, top=L
+    [np.array(boundary) for boundary in boundaries], axis=1, top=L
 )
 gb_y = cgb_fast.function_space.tabulate_dof_coordinates()[:, 1]
 deep = gb_y < depth

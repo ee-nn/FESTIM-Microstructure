@@ -8,7 +8,8 @@ from festim_microstructure import voronoi as V
 
 @pytest.fixture
 def segments():
-    return V.voronoi_segments(24, 1.0, np.random.default_rng(3), aspect=1.0)
+    _, boundaries = V.tessellate(24, 1.0, np.random.default_rng(3), dim=2, aspect=1.0)
+    return boundaries
 
 
 def test_segments_lie_inside_the_box(segments):
@@ -41,13 +42,13 @@ def test_main_component_carries_the_network(segments):
     ridges that is not joined to the rest; the network proper must still be one
     component holding essentially all the ridge length."""
     lengths = _component_lengths(segments, 1.0)
-    assert V.connected_components(segments, 1.0) == len(lengths)
+    assert V.connected_components(segments, dim=2, size=1.0) == len(lengths)
     assert lengths[0] / sum(lengths) > 0.95
-    assert len(V.triple_junctions(segments, 1.0)) > 0
+    assert len(V.junctions(segments, dim=2, size=1.0).points) > 0
 
 
 def test_network_tensor_trace_is_ridge_length(segments):
-    tensor = V.network_tensor(segments)
+    tensor = V.network_tensor(segments, dim=2)
     length = sum(np.linalg.norm(q - p) for p, q in segments)
     assert np.isclose(np.trace(tensor), length)
     assert np.allclose(tensor, tensor.T)
@@ -55,15 +56,15 @@ def test_network_tensor_trace_is_ridge_length(segments):
 
 def test_elongated_grains_give_an_anisotropic_tensor():
     rng = np.random.default_rng(3)
-    segs = V.voronoi_segments(24, 1.0, rng, aspect=4.0)
-    evals = np.linalg.eigvalsh(V.network_tensor(segs))
+    _, boundaries = V.tessellate(24, 1.0, rng, dim=2, aspect=4.0)
+    evals = np.linalg.eigvalsh(V.network_tensor(boundaries, dim=2))
     # ridges run mostly along x, so the xx moment dominates
     assert evals[1] > 2 * evals[0]
 
 
 def test_snap_puts_edge_endpoints_back_on_the_box(segments):
     tol = 0.0137  # deliberately not a divisor of the box side
-    snapped = V.snap_segments(segments, tol, 1.0)
+    snapped = V.snap(segments, tol, 1.0, dim=2)
     pts = np.array([p for seg in snapped for p in seg])
     near_edge = np.abs(pts) < tol
     assert np.all(pts[near_edge] == 0.0)
@@ -71,31 +72,38 @@ def test_snap_puts_edge_endpoints_back_on_the_box(segments):
     assert np.all(pts[near_far] == 1.0)
 
 
-def test_near_segments_marks_midpoints_but_not_far_points(segments):
+def test_near_marks_midpoints_but_not_far_points(segments):
     mids = np.array([(p + q) / 2 for p, q in segments]).T
     mids = np.vstack([mids, np.zeros(mids.shape[1])])
-    assert V.near_segments(mids, segments, 1e-9).all()
+    assert V.near(mids, segments, 1e-9, dim=2).all()
     far = np.array([[-1.0], [-1.0], [0.0]])
-    assert not V.near_segments(far, segments, 1e-3).any()
-
-
-def test_clip_to_box_keeps_interior_segment_and_drops_outside():
-    box = np.array([1.0, 1.0])
-    p, q = np.array([0.2, 0.2]), np.array([0.8, 0.8])
-    a, b = V.clip_to_box(p, q, box)
-    assert np.allclose(a, p) and np.allclose(b, q)
-    assert V.clip_to_box(np.array([2.0, 2.0]), np.array([3.0, 3.0]), box) is None
+    assert not V.near(far, segments, 1e-3, dim=2).any()
 
 
 def test_3d_faces_are_planar_rings_inside_the_cube():
-    faces = V.voronoi_faces(8, 1.0, np.random.default_rng(1))
+    _, faces = V.tessellate(8, 1.0, np.random.default_rng(1), dim=3)
     assert len(faces) > 0
     for poly in faces:
         assert poly.shape[1] == 3 and len(poly) >= 3
         assert poly.min() >= -1e-9 and poly.max() <= 1.0 + 1e-9
         n = np.cross(poly[1] - poly[0], poly[2] - poly[0])
         assert np.allclose((poly - poly[0]) @ n, 0.0, atol=1e-9 * np.linalg.norm(n))
-        assert V.polygon_area(poly) > 0
-    assert V.connected_components_3d(faces) == 1
-    lines, length, _ = V.triple_lines(faces)
-    assert len(lines) > 0 and length > 0
+    assert V.network_measure(faces, dim=3) > 0
+    assert V.connected_components(faces, dim=3) == 1
+    topology = V.junctions(faces, dim=3)
+    assert len(topology.lines) > 0 and topology.line_measure > 0
+    tensor = V.network_tensor(faces, dim=3)
+    assert np.isclose(np.trace(tensor), 2 * V.network_measure(faces, dim=3))
+
+
+def test_3d_topology_is_independent_of_physical_scale():
+    size = 1e-6
+    _, boundaries = V.tessellate(8, size, np.random.default_rng(1), dim=3)
+    assert V.connected_components(boundaries, dim=3, size=size) == 1
+    assert V.junctions(boundaries, dim=3, size=size).line_measure > 0
+
+
+@pytest.mark.parametrize("dim", [1, 4])
+def test_dimension_must_be_two_or_three(dim):
+    with pytest.raises(ValueError, match="dim must be 2 or 3"):
+        V.tessellate(8, 1.0, np.random.default_rng(1), dim=dim)

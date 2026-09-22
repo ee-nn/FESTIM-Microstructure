@@ -1,7 +1,7 @@
 """Conforming Gmsh meshes for a Voronoi tessellation, in 2D and 3D.
 
 The only module in the subpackage that imports Gmsh or DOLFINx, and it does so
-inside the functions, so that the geometry modules stay importable without a
+inside the functions, so that the geometry module stays importable without a
 FEniCS install.
 """
 
@@ -13,14 +13,25 @@ from typing import Any
 import numpy as np
 
 __all__ = [
-    "GB_TAG_3D",
+    "GB_TAG",
+    "MeshData",
     "MeshSizing",
     "build_mesh",
-    "build_mesh_3d",
     "grain_tags_from_seeds",
 ]
 
-GB_TAG_3D = 2  # physical group of the grain-boundary facets written by build_mesh_3d
+GB_TAG = 2
+
+
+@dataclass(frozen=True)
+class MeshData:
+    """Dimension-independent result of :func:`build_mesh`."""
+
+    mesh: Any
+    cell_tags: Any
+    facet_tags: Any
+    grain_ids: np.ndarray
+    gb_tag: int | None
 
 
 @dataclass(frozen=True)
@@ -72,7 +83,31 @@ def _unpack(result: Any, *names: str) -> tuple[Any, ...]:
     return tuple(result[index[n]] for n in names)
 
 
-def build_mesh(segments, size, sizing, comm=None, msh_path=None):
+def build_mesh(boundaries, size, sizing, dim, seeds=None, comm=None, msh_path=None):
+    """Build a conforming mesh for 2D segments or 3D polygons."""
+    if dim == 2:
+        mesh, cell_tags, n_grains = _build_mesh_2d(
+            boundaries, size, sizing, comm=comm, msh_path=msh_path
+        )
+        return MeshData(
+            mesh=mesh,
+            cell_tags=cell_tags,
+            facet_tags=None,
+            grain_ids=np.arange(1, n_grains + 1, dtype=np.int32),
+            gb_tag=None,
+        )
+    if dim == 3:
+        if seeds is None:
+            raise ValueError("seeds are required to tag the grains of a 3D mesh")
+        mesh, facet_tags = _build_mesh_3d(
+            boundaries, size, sizing, comm=comm, msh_path=msh_path
+        )
+        cell_tags, grain_ids = grain_tags_from_seeds(mesh, seeds, size)
+        return MeshData(mesh, cell_tags, facet_tags, grain_ids, GB_TAG)
+    raise ValueError(f"dim must be 2 or 3, got {dim!r}")
+
+
+def _build_mesh_2d(segments, size, sizing, comm=None, msh_path=None):
     """A triangular mesh of ``[0, size]^2`` whose facets lie on every ridge.
 
     Returns ``(mesh, cell_tags, n_grains)``, the tags marking each Voronoi cell
@@ -136,12 +171,12 @@ def build_mesh(segments, size, sizing, comm=None, msh_path=None):
     return mesh, cell_tags, len(grain_surfaces)
 
 
-def build_mesh_3d(faces, size, sizing, comm=None, msh_path=None):
+def _build_mesh_3d(faces, size, sizing, comm=None, msh_path=None):
     """A tet mesh of ``[0, size]^3`` whose facets conform to every polygon.
 
     Returns ``(mesh, facet_tags)``. Every fragment of the box is the same
     material and goes in one volume group (id 1); the grain-boundary facets are
-    tagged :data:`GB_TAG_3D`, so the network is picked up from the facet tags by
+    tagged :data:`GB_TAG`, so the network is picked up from the facet tags by
     :class:`~festim_microstructure.fem.subdomains.GrainBoundaryNetwork`.
     """
     from mpi4py import MPI
@@ -155,10 +190,10 @@ def build_mesh_3d(faces, size, sizing, comm=None, msh_path=None):
     gmsh.model.add("polycrystal3d")
     occ = gmsh.model.occ
 
-    box = occ.addBox(0, 0, 0, size, size, size)
+    box = occ.addBox(0, 0, 0, 1.0, 1.0, 1.0)
     surfaces = []
     for poly in faces:
-        pts = [occ.addPoint(*p) for p in poly]
+        pts = [occ.addPoint(*(p / size)) for p in poly]
         lines = [occ.addLine(pts[i], pts[(i + 1) % len(pts)]) for i in range(len(pts))]
         surfaces.append(occ.addPlaneSurface([occ.addCurveLoop(lines)]))
     # fragment forces the box to be split along every polygon, so the generated mesh
@@ -168,24 +203,25 @@ def build_mesh_3d(faces, size, sizing, comm=None, msh_path=None):
 
     gb_surfaces = sorted({t for entry in out_map[1:] for (d, t) in entry if d == 2})
     gmsh.model.addPhysicalGroup(3, [t for (d, t) in out if d == 3], 1)
-    gmsh.model.addPhysicalGroup(2, gb_surfaces, GB_TAG_3D)
+    gmsh.model.addPhysicalGroup(2, gb_surfaces, GB_TAG)
 
-    # The 3D model is built in the same units the caller passed, so no rescaling.
-    sizing.apply(gmsh, gb_surfaces, "SurfacesList", scale=1.0)
+    sizing.apply(gmsh, gb_surfaces, "SurfacesList", scale=size)
 
     gmsh.model.mesh.generate(3)
     if msh_path is not None:
         gmsh.write(str(msh_path))
     result = model_to_mesh(gmsh.model, comm, 0, gdim=3)
     gmsh.finalize()
-    return _unpack(result, "mesh", "facet_tags")
+    mesh, facet_tags = _unpack(result, "mesh", "facet_tags")
+    mesh.geometry.x[:] *= size
+    return mesh, facet_tags
 
 
 def grain_tags_from_seeds(mesh, seeds, size):
     """Cell tags for a mesh that conforms to the periodic Voronoi of ``seeds``.
 
     Each cell takes the index of the nearest seed *image* (the seeds tiled over
-    the 3x3x3 neighbourhood, as :func:`~.geometry3d.voronoi_faces` tiles them).
+    the neighbouring periodic images, as :func:`~.geometry.tessellate` does).
     Every facet of a conforming mesh lies on a bisector plane of two seeds, so a
     cell is never straddling and the classification is exact. Pieces cut off by
     image seeds get ids of their own, as the 2D mesher's ``fragment`` gives them.

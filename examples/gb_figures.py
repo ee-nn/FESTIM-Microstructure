@@ -182,8 +182,8 @@ def figure_microstructure(micro, physics, path, size_um):
 
     fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.3))
     scale = 1e6  # metres -> microns
-    segments_um = [(p * scale, q * scale) for p, q in micro.segments]
-    grain_um = scale * np.sqrt(micro.area / micro.n_grains)
+    segments_um = [(p * scale, q * scale) for p, q in micro.boundaries]
+    grain_um = scale * np.sqrt(micro.domain_measure / micro.n_grains)
 
     ax = axes[0]
     ax.add_patch(

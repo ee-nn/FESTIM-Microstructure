@@ -33,12 +33,13 @@ def make_microstructure(size, grain_size, aspect=1.0, seed=0, cells_per_grain=10
 def hart_bound(model: fm.MicroModel):
     """Return the parallel Hart/Voigt bound for the modelled microstructure."""
     micro, physics = model.micro, model.physics
-    if not isinstance(micro, fm.VoronoiMicrostructure):
-        raise TypeError("this 2D Hart bound requires a VoronoiMicrostructure")
-    tensor = fm.voronoi.network_tensor(micro.segments)
-    return fm.exports.averages.mean_lattice_tensor(
-        model
-    ) + physics.delta * physics.D_gb / micro.area * (tensor)
+    if not isinstance(micro, fm.VoronoiMicrostructure) or micro.dim != 2:
+        raise TypeError("this Hart bound requires a 2D VoronoiMicrostructure")
+    tensor = fm.voronoi.network_tensor(micro.boundaries, micro.dim)
+    return (
+        fm.exports.averages.mean_lattice_tensor(model)
+        + physics.delta * physics.D_gb / micro.domain_measure * tensor
+    )
 
 
 @dataclass
@@ -138,7 +139,7 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
         D_hart=hart.tolist(),
         D_bulk=physics.D_bulk,
         size=micro.size,
-        grain_size=np.sqrt(micro.area / micro.n_grains),
+        grain_size=np.sqrt(micro.domain_measure / micro.n_grains),
         aspect=micro.aspect,
         seed=micro.seed,
         n_seeds=micro.n_seeds,
@@ -199,7 +200,7 @@ def main(argv=None):
             micro = make_microstructure(
                 size, args.grain_size, args.aspect, seed, args.cells_per_grain
             )
-            grain_size = np.sqrt(micro.area / micro.n_grains)
+            grain_size = np.sqrt(micro.domain_measure / micro.n_grains)
             physics = fm.Physics(
                 T=args.temperature, crystal_anisotropy=args.crystal_anisotropy
             )
@@ -228,7 +229,7 @@ def main(argv=None):
             args.seeds[0],
             args.cells_per_grain,
         )
-        grain_size = np.sqrt(micro.area / micro.n_grains)
+        grain_size = np.sqrt(micro.domain_measure / micro.n_grains)
         print(f"exchange-rate sweep on the {1e6 * args.sizes[0]:.1f} um cell")
         for k in args.k_sweep:
             physics = fm.Physics(

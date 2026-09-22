@@ -16,7 +16,7 @@ from festim_microstructure.microstructure import (
     missing_members,
     require,
 )
-from festim_microstructure.voronoi import VoronoiMicrostructure, VoronoiMicrostructure3D
+from festim_microstructure.voronoi import VoronoiMicrostructure
 
 
 def _meshed(**overrides):
@@ -60,26 +60,15 @@ def test_require_raises_with_the_missing_names_and_the_call_site():
     assert "MeshedMicrostructure" in message
 
 
-@pytest.mark.parametrize(
-    "cls", [VoronoiMicrostructure, VoronoiMicrostructure3D], ids=["2d", "3d"]
-)
-def test_voronoi_classes_declare_the_whole_meshed_contract(cls):
-    """Every member must be reachable on the class, not only on an instance.
-
-    Both used to spell parts of this differently -- ``grain_ids`` was a field on
-    one and a property on the other, and vice versa for ``n_grains`` -- so a
-    consumer could not rely on either.
-    """
-    assert missing_members(cls, MeshedMicrostructure) == []
+def test_voronoi_class_declares_the_whole_meshed_contract():
+    """Every protocol member is reachable before a dimension is selected."""
+    assert missing_members(VoronoiMicrostructure, MeshedMicrostructure) == []
 
 
-@pytest.mark.parametrize(
-    "cls", [VoronoiMicrostructure, VoronoiMicrostructure3D], ids=["2d", "3d"]
-)
-def test_both_dimensions_agree_on_which_names_are_fields(cls):
-    fields = {f.name for f in cls.__dataclass_fields__.values()}
+def test_dimension_agnostic_voronoi_fields():
+    fields = {f.name for f in VoronoiMicrostructure.__dataclass_fields__.values()}
     assert "grain_ids" in fields
-    assert "n_grains" not in fields  # a property on both, derived from grain_ids
+    assert "n_grains" not in fields  # derived from grain_ids
     assert {"facet_tags", "gb_tag"} <= fields
 
 
@@ -97,7 +86,6 @@ def test_boundary_network_implementations_are_found_dimension_agnostically(
 
     assert NeperMesh.network_area is NeperMesh.network_measure
     assert EbsdMicrostructure.network_length is EbsdMicrostructure.network_measure
-    assert VoronoiMicrostructure.ridge_length is not None
 
 
 def test_tagged_polycrystal_satisfies_the_meshed_contract():

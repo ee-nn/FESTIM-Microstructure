@@ -178,7 +178,7 @@ Two traps, both from the problem being unscaled (`D ~ 1e-11 m2/s`, cell area
   solution freezes while `t` keeps advancing. It looks exactly like a steady
   state, at the wrong value -- here it saturated at 43 % of the right inventory.
   `ATOL = 1e-25` in `solvers.py`; nondimensionalising is the better fix.
-* **A tessellation that did not tessellate.** `snap_segments` rounds ridge
+* **A tessellation that did not tessellate.** `voronoi.snap` rounds boundary
   endpoints onto a grid to merge near-degenerate junctions, and `size / tol` is
   not a whole number, so endpoints that the clip had put *exactly* on the edge of
   the cell were nudged off it. Nudged inward, they left a two-nanometre gap;

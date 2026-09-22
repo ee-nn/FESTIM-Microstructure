@@ -1,6 +1,6 @@
 """PEP 562 lazy attribute access for the package ``__init__`` modules.
 
-The package has a split personality: ``voronoi.geometry2d`` and the
+The package has a split personality: ``voronoi.geometry`` and the
 whole EBSD converter are pure NumPy/SciPy, while ``model``, ``fem`` and
 ``meshing.ebsd`` need DOLFINx and FESTIM. A top-level namespace built
 the usual way -- ``from .model import build`` in ``__init__.py`` --

@@ -78,9 +78,10 @@ def boundary_conditions(axis, length, tol):
 
 def make(structure, comm):
     if structure == "iso":
-        return fm.VoronoiMicrostructure3D.create(
+        return fm.VoronoiMicrostructure.create(
             size=B,
             n_seeds=ISO_SEEDS,
+            dim=3,
             seed=SEED,
             cells_per_grain=ISO_CELLS_PER_GRAIN,
             bulk_coarsening=BULK_COARSENING,
@@ -151,7 +152,7 @@ def draw_isometric(ax, micro, title):
         ax.plot_surface(X, Y, Z, color=GRAIN_COLOR, alpha=0.55, shade=False)
 
     if micro.mesh.geometry.dim == 3:
-        polygons = [face * 1e9 for face in micro.faces]
+        polygons = [face * 1e9 for face in micro.boundaries]
     else:
         polygons = [
             np.array(
@@ -163,7 +164,7 @@ def draw_isometric(ax, micro, title):
                 ]
             )
             * 1e9
-            for p, q in micro.segments
+            for p, q in micro.boundaries
         ]
     ax.add_collection3d(
         Poly3DCollection(polygons, facecolor=GB_COLOR, edgecolor=GB_COLOR, alpha=0.72)

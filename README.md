@@ -194,9 +194,7 @@ FESTIM-Microstructure/
 │   │   ├── convert.py
 │   │   └── diagnostics.py
 │   ├── voronoi/                # generated 2D/3D tessellations and Gmsh meshes
-│   │   ├── _geometry.py
-│   │   ├── geometry2d.py
-│   │   ├── geometry3d.py
+│   │   ├── geometry.py         # dimension-dispatched tessellation geometry
 │   │   ├── gmsh_builder.py
 │   │   └── polycrystal.py
 │   ├── meshing/                # tessellation -> mesh -> BoundaryNetwork
@@ -233,6 +231,8 @@ import festim as F
 import festim_microstructure as fm
 
 micro = fm.VoronoiMicrostructure.create(size=100e-6, n_seeds=64)
+# The same entry point builds 3D structures with dim=3.
+micro_3d = fm.VoronoiMicrostructure.create(size=100e-6, n_seeds=64, dim=3)
 model = fm.build(micro, fm.Physics(T=600.0), bcs).run()
 ```
 
@@ -274,8 +274,8 @@ fm.SolveOptions
 fm.TaggedPolycrystal
 fm.GrainBoundaryNetwork
 fm.voronoi.build_mesh
-fm.voronoi.near_segments
-fm.voronoi.voronoi_segments
+fm.voronoi.near
+fm.voronoi.tessellate
 ```
 
 Examples are executable workflows, intentionally kept outside the installed

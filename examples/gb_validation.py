@@ -242,7 +242,7 @@ def main(argv=None):
     ident = identify(micro, physics)
     print(ident.report())
     D_eff = np.asarray(ident.D_window)
-    capacity = 1.0 + physics.delta * micro.network_measure / micro.area
+    capacity = 1.0 + physics.delta * micro.network_measure / micro.domain_measure
     print(f"  effective capacity 1 + delta|Gamma|/A : {capacity:.5f}")
     print()
 

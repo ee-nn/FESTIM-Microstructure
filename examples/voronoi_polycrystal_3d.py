@@ -15,7 +15,8 @@ What does change relative to the 2D script:
 * The network is tagged in gmsh with a physical group and picked up from the facet
   tags instead of being located geometrically.
   The geometric route still works (``locate_geometrically=True`` uses
-  :func:`near_faces`) but a point-to-polygon distance is much more delicate than a
+  :func:`festim_microstructure.voronoi.near`) but point-to-polygon distance is
+  more delicate than a
   point-to-segment distance, and the fragment operation already knows exactly which
   facets are grain boundaries.
 * The mouths are the curves where the network meets the charged face, which
@@ -53,35 +54,38 @@ dt = 0.05
 # Mesh sizing
 h_gb = 0.05  # mesh size at the boundaries
 h_bulk = 0.15  # mesh size in the grain interiors
-locate_geometrically = False  # use near_faces instead of the facet tags
+locate_geometrically = False  # use the geometric locator instead of facet tags
 
 # Microstructure
-faces = fm.voronoi.voronoi_faces(n_seeds, L, np.random.default_rng(seed))
-mesh, facet_tags = fm.voronoi.build_mesh_3d(
-    faces, L, fm.MeshSizing(h_gb=h_gb, h_bulk=h_bulk)
+seeds, boundaries = fm.voronoi.tessellate(
+    n_seeds, L, np.random.default_rng(seed), dim=3
 )
-# voronoi_faces draws its seeds from the generator before anything else, so
-# the same seed reproduces them; each cell then takes the id of its nearest
-# seed image, which is what makes the grains separable subdomains.
-seeds = np.random.default_rng(seed).uniform(0, L, (n_seeds, 3))
-cell_tags, grain_ids = fm.voronoi.grain_tags_from_seeds(mesh, seeds, L)
+mesh_data = fm.voronoi.build_mesh(
+    boundaries,
+    L,
+    fm.MeshSizing(h_gb=h_gb, h_bulk=h_bulk),
+    dim=3,
+    seeds=seeds,
+)
 tagged = not locate_geometrically
-micro = fm.VoronoiMicrostructure3D(
+micro = fm.VoronoiMicrostructure(
+    dim=3,
     size=L,
     n_seeds=n_seeds,
     seed=seed,
     seeds=seeds,
-    faces=faces,
-    mesh=mesh,
-    cell_tags=cell_tags,
-    facet_tags=facet_tags if tagged else None,
-    gb_tag=fm.voronoi.GB_TAG_3D if tagged else None,
-    grain_ids=grain_ids,
+    boundaries=boundaries,
+    mesh=mesh_data.mesh,
+    cell_tags=mesh_data.cell_tags,
+    facet_tags=mesh_data.facet_tags if tagged else None,
+    gb_tag=mesh_data.gb_tag if tagged else None,
+    grain_ids=mesh_data.grain_ids,
     # ids come from the seed images and need not be contiguous, so the
     # orientations are indexed by the largest of them. Untextured here.
-    orientations=np.zeros(int(grain_ids.max())),
+    orientations=np.zeros(int(mesh_data.grain_ids.max())),
     h_gb=h_gb,
 )
+mesh = micro.mesh
 physics = fm.Physics(
     T=500.0,  # with E_D = 0 on both phases, nothing depends on it
     D_0_bulk=D_B,
@@ -103,14 +107,18 @@ fm.exports.averages.write_vtx(model, OUTPUT_DIR / "voronoi3d", time=t_end)
 network, cgb_fast = model.network, model.network_solution
 
 # Inspect the mesh and boundary network
-lines, triple_length, quadruple = fm.voronoi.triple_lines(faces)
-face_area = sum(fm.voronoi.polygon_area(poly) for poly in faces)
+topology = fm.voronoi.junctions(boundaries, dim=3)
+face_area = fm.voronoi.network_measure(boundaries, dim=3)
 sub_area = fm.exports.measures.submesh_measure(network)
-print(f"microstructure: {n_seeds} seeds, {len(faces)} boundary polygons")
-print(f"  triple lines                    : {len(lines)} (length {triple_length:.3f})")
-print(f"  quadruple points                : {len(quadruple)}")
+print(f"microstructure: {n_seeds} seeds, {len(boundaries)} boundary polygons")
 print(
-    f"  connected components (faces)    : {fm.voronoi.connected_components_3d(faces)}"
+    f"  triple lines                    : {len(topology.lines)} "
+    f"(length {topology.line_measure:.3f})"
+)
+print(f"  quadruple points                : {len(topology.points)}")
+print(
+    f"  connected components (faces)    : "
+    f"{fm.voronoi.connected_components(boundaries, dim=3)}"
 )
 print(
     f"  connected components (submesh)  : "
@@ -129,7 +137,7 @@ print(
 
 # Compare fast boundaries with lattice diffusion
 fast = fm.exports.averages.inventory(model)
-depth = fm.exports.measures.junction_only_below(faces, axis=2, top=L)
+depth = fm.exports.measures.junction_only_below(boundaries, axis=2, top=L)
 gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
 deep = gb_z < depth
 c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0

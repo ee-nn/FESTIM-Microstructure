@@ -44,19 +44,21 @@ def test_geometric_network_covers_all_grain_boundaries():
     from festim_microstructure.voronoi import (
         MeshSizing,
         build_mesh,
-        near_segments,
-        snap_segments,
-        voronoi_segments,
+        near,
+        snap,
+        tessellate,
     )
 
     L, h_gb = 1.0, 0.05
-    segments = snap_segments(
-        voronoi_segments(6, L, np.random.default_rng(0)), 0.1 * h_gb, L
+    _, boundaries = tessellate(6, L, np.random.default_rng(0), dim=2)
+    boundaries = snap(boundaries, 0.1 * h_gb, L, dim=2)
+    mesh_data = build_mesh(
+        boundaries, L, MeshSizing(h_gb=h_gb, h_bulk=4 * h_gb), dim=2
     )
-    mesh, cell_tags, _ = build_mesh(segments, L, MeshSizing(h_gb=h_gb, h_bulk=4 * h_gb))
+    mesh, cell_tags = mesh_data.mesh, mesh_data.cell_tags
 
     def locator(x):
-        return near_segments(x, segments, 0.05 * h_gb)
+        return near(x, boundaries, 0.05 * h_gb, dim=2)
 
     tdim = mesh.topology.dim
     mesh.topology.create_connectivity(tdim - 1, tdim)
@@ -69,6 +71,6 @@ def test_geometric_network_covers_all_grain_boundaries():
     offsets = facet_to_cell.offsets
     interior = facets[(offsets[facets + 1] - offsets[facets]) == 2]
     pair = facet_to_cell.array[offsets[interior][:, None] + np.arange(2)]
-    boundaries = interior[values[pair[:, 0]] != values[pair[:, 1]]]
-    assert boundaries.size > 0
-    assert locator(facet_midpoints(mesh, boundaries).T).all()
+    boundary_facets = interior[values[pair[:, 0]] != values[pair[:, 1]]]
+    assert boundary_facets.size > 0
+    assert locator(facet_midpoints(mesh, boundary_facets).T).all()
