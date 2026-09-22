@@ -33,7 +33,6 @@ from festim_microstructure.fem.subdomains import (
     GrainSurface,
 )
 from festim_microstructure.materials import (
-    ConstantDiffusivity,
     Physics,
     crystal_diffusivity_field,
     fill_crystal_diffusivity_field,
@@ -41,6 +40,33 @@ from festim_microstructure.materials import (
 from festim_microstructure.microstructure import MeshedMicrostructure, require
 
 __all__ = ["MicroModel", "SolveOptions", "build"]
+
+
+class _MutableScalarDiffusivity(F.Material):
+    """Retain one mutable DOLFINx diffusivity constant per mesh."""
+
+    def __init__(self, D):
+        super().__init__(D_0=float(D), E_D=0.0)
+        self._constants = {}
+
+    @property
+    def D_value(self):
+        return self.D_0
+
+    @D_value.setter
+    def D_value(self, value):
+        self.D_0 = float(value)
+        for constant in self._constants.values():
+            constant.value = dolfinx.default_scalar_type(self.D_0)
+
+    def get_diffusion_coefficient(self, mesh=None, temperature=None, species=None):
+        # Parent mesh and each submesh need distinct constants.
+        key = id(mesh)
+        if key not in self._constants:
+            self._constants[key] = dolfinx.fem.Constant(
+                mesh, dolfinx.default_scalar_type(self.D_0)
+            )
+        return self._constants[key]
 
 
 @dataclass
@@ -95,7 +121,7 @@ class MicroModel:
     lattice_field: dolfinx.fem.Function | None = None
     k_constants: dict = field(default_factory=dict)  # grain id -> exchange rate
     delta_constant: dolfinx.fem.Constant | None = None
-    gb_material: ConstantDiffusivity | None = None
+    gb_material: _MutableScalarDiffusivity | None = None
     _initialised: bool = False
     _initial_guess: list | None = None  # the unknowns as initialise() left them
 
@@ -233,7 +259,7 @@ def build(
         for g in micro.grain_ids
     ]
     tdim = micro.mesh.topology.dim
-    gb_material = ConstantDiffusivity(physics.D_gb)
+    gb_material = _MutableScalarDiffusivity(physics.D_gb)
     # Tagged facets avoid geometric network detection.
     located = (
         {"facet_tags": micro.facet_tags, "entity_ids": micro.gb_tag}

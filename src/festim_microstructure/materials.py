@@ -10,7 +10,6 @@ import festim as F
 import numpy as np
 
 __all__ = [
-    "ConstantDiffusivity",
     "Physics",
     "beta_parameter",
     "crystal_diffusivity_field",
@@ -18,33 +17,6 @@ __all__ = [
     "gb_diffusivity_field",
     "hart_bound",
 ]
-
-
-class ConstantDiffusivity(F.Material):
-    """A material retaining one mutable DOLFINx diffusivity constant per mesh."""
-
-    def __init__(self, D):
-        super().__init__(D_0=float(D), E_D=0.0)
-        self._constants = {}
-
-    @property
-    def D_value(self):
-        return self.D_0
-
-    @D_value.setter
-    def D_value(self, value):
-        self.D_0 = float(value)
-        for constant in self._constants.values():
-            constant.value = dolfinx.default_scalar_type(self.D_0)
-
-    def get_diffusion_coefficient(self, mesh=None, temperature=None, species=None):
-        # Parent mesh and each submesh need distinct constants.
-        key = id(mesh)
-        if key not in self._constants:
-            self._constants[key] = dolfinx.fem.Constant(
-                mesh, dolfinx.default_scalar_type(self.D_0)
-            )
-        return self._constants[key]
 
 
 @dataclass
