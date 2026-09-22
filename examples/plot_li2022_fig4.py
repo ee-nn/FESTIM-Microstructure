@@ -13,9 +13,9 @@ plotting routines. Simulation markers come from the CSV records.
 import csv
 from pathlib import Path
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
