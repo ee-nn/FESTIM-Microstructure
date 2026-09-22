@@ -21,6 +21,7 @@ Run::
 """
 
 from pathlib import Path
+from typing import Any
 
 import festim as F
 import numpy as np
@@ -101,7 +102,10 @@ area_mesh, area_tess = (
     neper.network_measure,
 )
 n_comp = fm.exports.measures.component_count(network)
-n_mesh_cells = mesh.topology.index_map(3).size_global
+# ``NeperMesh`` can be unpacked as an array-like object by static type
+# checkers, although the runtime value is the DOLFINx mesh.
+mesh_obj: Any = mesh
+n_mesh_cells = mesh_obj.topology.index_map(mesh_obj.topology.dim).size_global
 print(f"  mesh                            : {n_mesh_cells} cells")
 print(
     f"  network captured by the submesh : {area_mesh:.4f} of {area_tess:.4f}"
