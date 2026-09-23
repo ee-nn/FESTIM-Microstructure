@@ -1,4 +1,11 @@
-"""Microstructure-scale hydrogen transport tools for FESTIM.
+"""Microstructures for FESTIM: meshes, tagged subdomains, coefficient fields.
+
+The package creates and interprets polycrystals -- Voronoi, Neper, EBSD --
+converts them into FESTIM subdomains and diffusivity fields, and supplies the
+post-processing a grain-boundary study needs. The transport model itself is
+declared with FESTIM: species, exchange terms, boundary conditions, settings
+and solving are ``festim.HydrogenTransportProblemDiscontinuous``'s, exactly as
+in its manifold documentation. See ``examples/`` for the pattern.
 
 The curated geometry and network API is imported eagerly. Solver-dependent
 names resolve on first access, keeping standalone EBSD tools and ``fm-check``
@@ -27,18 +34,13 @@ if TYPE_CHECKING:
     from . import materials as materials
     from . import meshing as meshing
     from . import microstructure as microstructure
-    from . import model as model
     from . import plotting as plotting
     from . import voronoi as voronoi
     from .fem.subdomains import Grain as Grain
     from .fem.subdomains import GrainBoundaryNetwork as GrainBoundaryNetwork
     from .fem.subdomains import GrainSurface as GrainSurface
-    from .materials import Physics as Physics
     from .meshing.ebsd import EbsdMicrostructure as EbsdMicrostructure
     from .meshing.ebsd import EbsdOptions as EbsdOptions
-    from .model import MicroModel as MicroModel
-    from .model import SolveOptions as SolveOptions
-    from .model import build as build
 
 try:
     from ._version import __version__
@@ -55,16 +57,11 @@ _SUBMODULES = (
     "meshing",
     "microstructure",
     "plotting",
-    "model",
     "voronoi",
 )
 _NAMES = {
     "EbsdMicrostructure": ".meshing.ebsd",
     "EbsdOptions": ".meshing.ebsd",
-    "MicroModel": ".model",
-    "Physics": ".materials",
-    "SolveOptions": ".model",
-    "build": ".model",
     "Grain": ".fem.subdomains",
     "GrainBoundaryNetwork": ".fem.subdomains",
     "GrainSurface": ".fem.subdomains",

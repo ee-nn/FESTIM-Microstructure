@@ -5,11 +5,13 @@ A workflow in three steps:
 1. **Build a polycrystal** whose grain boundaries the mesh conforms to
    (`voronoi/`).
 2. **Solve the microstructure problem** — one FESTIM subdomain per grain, coupled
-   through the boundary network declared as a single codim-1 subdomain
-   (`src/festim_microstructure/model.py`).
+   through the boundary network declared as a single codim-1 subdomain. The
+   problem is declared with FESTIM directly (`cell_problem()` in
+   `examples/gb_homogenisation.py`); the package supplies the tagged subdomains
+   (`src/festim_microstructure/fem/subdomains.py`), the lattice tensor field
+   (`materials.py`) and the averages (`exports/averages.py`).
 3. **Identify an anisotropic `D_eff`** for a homogeneous model, and then check
-   that it predicts things it was not fitted to (`examples/gb_homogenisation.py`,
-   `examples/gb_validation.py`).
+   that it predicts things it was not fitted to (`examples/gb_homogenisation.py`).
 
 Voronoi cells stand in for the Neper microstructure. Nothing above the mesh
 generator depends on that choice: `Microstructure` only has to supply a list of
@@ -99,11 +101,22 @@ print(micro.report())
 ```
 
 ```bash
-python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6 --out rve.json   # + RVE convergence
-python examples/gb_homogenisation.py --k-sweep 1e-6 1e-4 1e-2 3 --out rve.json  # the transition
-python examples/gb_validation.py --out validation.json      # predict, do not just fit
-python examples/gb_figures.py --rve rve.json --validation validation.json  # the figures above
+# One run: size convergence, exchange sweep, validation and all five figures
+python examples/gb_homogenisation.py --sizes 3e-6 2e-6 4e-6 \
+    --k-sweep 1e-6 1e-4 1e-2 3
+
+# Redraw the summary plots from saved JSON, without running simulations
+python examples/gb_homogenisation.py --plot-only
 ```
+
+Validation and field maps use the first size and seed (3 um in the command
+above), with the same temperature and crystal anisotropy as identification.
+The first identification is reused; field data are captured during its two
+solves. All JSON, PNG and optional VTX outputs live in
+`examples/results/gb_homogenisation/`. Use `--skip-validation`,
+`--skip-transient`, `--skip-figures`, or `--skip-fields` to omit stages.
+`--steps` sets the transient step count. `--plot-only` does not recreate field
+maps, and a validation figure requires both permeation and uptake results.
 
 Useful flags: `--aspect` (grain elongation — an equiaxed tessellation homogenises
 to a nearly isotropic tensor, so the anisotropy needs elongated grains or
@@ -143,7 +156,7 @@ On the strong axis the two estimators close from 24 % apart at 2 um to 0.6 % at
 has not reached an RVE there -- which is exactly why both estimates are reported
 rather than one.
 
-`gb_validation.py` on the 3 um cell, predicting what was never fitted:
+The validation stage on the 3 um cell, predicting what was never fitted:
 
 ![Validation against a transient and a different boundary condition](fig_validation.png)
 
@@ -177,7 +190,8 @@ Two traps, both from the problem being unscaled (`D ~ 1e-11 m2/s`, cell area
   declares convergence at zero iterations as soon as the uptake slows, and the
   solution freezes while `t` keeps advancing. It looks exactly like a steady
   state, at the wrong value -- here it saturated at 43 % of the right inventory.
-  `ATOL = 1e-25` in `solvers.py`; nondimensionalising is the better fix.
+  The study passes `atol=1e-25` (`ATOL` in `examples/gb_homogenisation.py`) to
+  `festim.Settings`; nondimensionalising is the better fix.
 * **A tessellation that did not tessellate.** `voronoi.snap` rounds boundary
   endpoints onto a grid to merge near-degenerate junctions, and `size / tol` is
   not a whole number, so endpoints that the clip had put *exactly* on the edge of
@@ -195,11 +209,15 @@ Two traps, both from the problem being unscaled (`D ~ 1e-11 m2/s`, cell area
   whether or not the two sides are separate subdomains. It would matter for
   per-grain orientations, per-grain traps, or any run at low exchange rate.)
 * **`petsc_options` cannot set a MUMPS ICNTL.** FESTIM deletes its PETSc options
-  from the database as soon as the solver is built, and `mat_mumps_*` is not read
-  until `PCSetUp` at the first solve. One subdomain per grain makes a wide, badly
-  scaled block system that MUMPS routinely under-estimates the fill-in of, and it
-  stops with `INFOG(1) = -9` -- at some exchange rates and not others, on the same
-  mesh. `tune_direct_solver()` writes the option back after `initialise()`.
+  from the database as soon as the solver is built (`create_solver` in
+  `festim/problem.py`; dolfinx's `NonlinearProblem` does the same), and
+  `mat_mumps_*` is not read until `PCSetUp` at the first solve. One subdomain per
+  grain makes a wide, badly scaled block system that MUMPS routinely
+  under-estimates the fill-in of, and it stops with `INFOG(1) = -9` -- at some
+  exchange rates and not others, on the same mesh.
+  `fm.fem.solvers.tune_direct_solver(model)` writes the option back between
+  `initialise()` and `run()`; it is the one piece of solver code the package
+  keeps.
 
 ## Caveats
 

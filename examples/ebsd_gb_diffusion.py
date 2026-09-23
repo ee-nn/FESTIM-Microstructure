@@ -20,6 +20,7 @@ Run::
 
 from pathlib import Path
 
+import dolfinx
 import festim as F
 import numpy as np
 
@@ -28,6 +29,9 @@ import festim_microstructure as fm
 OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
 HERE = Path(__file__).resolve().parent
+
+NETWORK_ID = 1_000_000  # above every grain id; a manifold shares the surface ids
+SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
 
 # Simulation parameters
 ebsd = fm.EbsdOptions(
@@ -46,7 +50,8 @@ k_exchange = 1e-4  # bulk <-> GB exchange [m/s]
 c0 = 1.0
 t_end = 36000.0
 dt = 600.0
-theta_dependent_D = False  # see gb_diffusivity_field, CHECK before enabling
+theta_dependent_D = False  # D_GB above theta_c only, D_B below; CHECK before use
+theta_c = 15.0  # degrees
 
 # Build the microstructure and simulation
 unit, uname = ebsd.unit, fm.meshing.ebsd.unit_name(ebsd.unit)
@@ -73,35 +78,76 @@ poly = fm.TaggedPolycrystal(
     gb_tag=micro.network_ids,
     name=f"EBSD map {Path(ebsd.tesr).name}",
 )
-physics = fm.Physics(
-    T=500.0,  # with E_D = 0 on both phases, nothing depends on it
-    D_0_bulk=D_B,
-    E_D_bulk=0.0,
-    D_0_gb=D_GB,
-    E_D_gb=0.0,
-    delta=delta,
-    k_exchange=k_exchange,
-    crystal_anisotropy=1.0,
+T = 500.0  # with E_D = 0 on both phases, nothing depends on it
+
+# The transport model, as FESTIM declarations; see the Voronoi examples.
+D_lattice, _ = fm.materials.crystal_diffusivity_field(poly, D_B)
+grains = fm.fem.subdomains.grain_subdomains(poly, F.Material(D=D_lattice))
+# One material for every boundary, or a diffusivity per measured boundary from
+# its disorientation; the network builds that field on its submesh.
+network = fm.fem.subdomains.grain_boundary_network(
+    NETWORK_ID,
+    poly,
+    None if theta_dependent_D else F.Material(D_0=D_GB, E_D=0.0),
+    diffusivity_by_entity=(
+        np.where(micro.theta >= theta_c, D_GB, D_B) if theta_dependent_D else None
+    ),
 )
+grain_species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
+cgb_species = F.Species("c_gb", subdomains=[network])
+species_of = dict(zip((g.id for g in grains), grain_species, strict=True))
+
+k = dolfinx.fem.Constant(mesh, k_exchange)
+width = dolfinx.fem.Constant(mesh, delta)
+sources, boundary_conditions = [], []
+for c_grain in grain_species:
+    exchange = {"c_g": c_grain, "c_n": cgb_species}
+    sources.append(
+        F.ParticleSource(
+            value=lambda c_g, c_n: (k / width) * (c_g - c_n),
+            species=cgb_species,
+            volume=network,
+            species_dependent_value=exchange,
+        )
+    )
+    boundary_conditions.append(
+        F.ParticleFluxBC(
+            subdomain=network,
+            species=c_grain,
+            value=lambda c_g, c_n: k * (c_n - c_g),
+            species_dependent_value=exchange,
+        )
+    )
+
 # the charged surface is the top edge of the map, wherever that now is
-bcs = [("charged", lambda x: np.isclose(x[1], LY), c0)]
-solve = fm.SolveOptions(
-    transient=True, final_time=t_end, stepsize=dt, atol=1e-14, rtol=1e-12
+charged = lambda x: np.isclose(x[1], LY)  # noqa: E731
+patches, mouths = fm.fem.subdomains.grain_surfaces(mesh, grains, charged, SURFACE_ID_0)
+boundary_conditions += [
+    F.FixedConcentrationBC(subdomain=p, value=c0, species=species_of[p.grain_id])
+    for p in patches
+]
+boundary_conditions.append(
+    F.FixedConcentrationBC(subdomain=mouths, value=c0, species=cgb_species)
 )
 
-model = fm.build(poly, physics, bcs, solve=solve)
-if theta_dependent_D:
-    # the submesh has to exist before a field can live on it, so initialise
-    # once, swap the material in, and initialise again
-    model.initialise()
-    model.network.material = F.Material(
-        D_0=fm.materials.gb_diffusivity_field(model.network, micro.theta, D_B, D_GB),
-        E_D=0.0,
-    )
-    model.initialise(force=True)
+model = F.HydrogenTransportProblemDiscontinuous(
+    mesh=F.Mesh(mesh),
+    subdomains=[*grains, network, *patches, mouths],
+    species=[*grain_species, cgb_species],
+    sources=sources,
+    boundary_conditions=boundary_conditions,
+    temperature=T,
+    settings=F.Settings(
+        atol=1e-14, rtol=1e-12, transient=True, final_time=t_end, stepsize=dt
+    ),
+)
+model.initialise()
+fm.fem.solvers.tune_direct_solver(model)
 model.run()
-fm.exports.averages.write_vtx(model, str(base.parent / "ebsd"), time=t_end)
-network, cgb = model.network, model.network_solution
+fm.exports.averages.write_vtx(
+    grains, grain_species, network, cgb_species, str(base.parent / "ebsd"), time=t_end
+)
+cgb = cgb_species.subdomain_to_post_processing_solution[network]
 
 # Inspect the mesh and boundary network
 print(micro.report())
@@ -117,27 +163,27 @@ print(
     f"  connected components            : "
     f"{fm.exports.measures.component_count(network)}"
 )
-print(
-    f"  interior facets                 : {model.model.manifold_is_interior(network)}"
-)
+print(f"  interior facets                 : {model.manifold_is_interior(network)}")
 
 # Analyse grain-boundary transport
 depth = micro.junction_only_below(LY)
 gb_y = cgb.function_space.tabulate_dof_coordinates()[:, 1]
 deep = gb_y < depth
 c_deep = cgb.x.array[deep].max() if deep.any() else 0.0
-print(
-    f"\n  inventory                      : {fm.exports.averages.inventory(model):.4e}"
+total = fm.exports.averages.inventory(
+    grains, grain_species, network, cgb_species, delta
 )
+print(f"\n  inventory                      : {total:.4e}")
 beta = fm.materials.beta_parameter(delta, D_GB, D_B, t_end)
 print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
-print(
-    f"  interface / lattice resistance : "
-    f"{physics.interface_resistance_ratio(np.sqrt(LX * LY / poly.n_grains)):.1e}"
-    f"  (Fisher is the 0 limit)"
+resistance = fm.materials.interface_resistance_ratio(
+    k_exchange, np.sqrt(LX * LY / poly.n_grains), D_B
 )
+print(f"  interface / lattice resistance : {resistance:.1e}  (Fisher is the 0 limit)")
 
-c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=1, depth=depth)
+c_grain_deep = fm.exports.averages.lattice_mean_below(
+    grains, grain_species, axis=1, depth=depth
+)
 print("\njunction transport: no boundary touching the charged edge reaches below")
 print(f"y = {depth:.4g}, so everything the network holds there has")
 print("crossed at least one triple junction.")

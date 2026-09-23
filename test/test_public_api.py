@@ -139,14 +139,12 @@ def _module_level_imports(path):
 @pytest.mark.parametrize(
     "path",
     sorted(
-        p
-        for p in SRC.glob("*.py")
-        if p.name not in {"_version.py", "materials.py", "model.py"}
+        p for p in SRC.glob("*.py") if p.name not in {"_version.py", "materials.py"}
     ),
     ids=lambda p: p.name,
 )
 def test_top_level_modules_carry_no_fenics_dependency(path):
-    """Only materials.py and model.py at the package root need the solver stack."""
+    """Only materials.py at the package root needs the solver stack."""
     forbidden = {"dolfinx", "festim", "ufl", "basix", "petsc4py", "mpi4py"}
     assert _module_level_imports(path) & forbidden == set()
 
@@ -186,7 +184,7 @@ assert callable(overlay)
 assert _version('dolfinx')[0] is None
 assert fm.VoronoiMicrostructure is fm.voronoi.VoronoiMicrostructure
 try:
-    fm.build
+    fm.Grain
 except ImportError:
     pass
 else:
@@ -196,7 +194,7 @@ else:
 
 
 def test_formats_do_not_depend_on_science_modules():
-    """File I/O must not import segmentation, meshing, or model construction."""
+    """File I/O must not import segmentation, meshing, or material fields."""
     for path in (SRC / "formats").glob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.ImportFrom) and node.module:
@@ -204,7 +202,6 @@ def test_formats_do_not_depend_on_science_modules():
                     (
                         "festim_microstructure.ebsd",
                         "festim_microstructure.meshing",
-                        "festim_microstructure.model",
                         "festim_microstructure.materials",
                     )
                 ), path

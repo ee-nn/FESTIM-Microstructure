@@ -1,4 +1,4 @@
-"""FESTIM/DOLFINx glue: subdomains for grains and networks, and solver settings.
+"""FESTIM/DOLFINx glue: subdomains for grains and networks, and a solver workaround.
 
 Everything here imports ``festim`` and ``dolfinx`` at module level, which is
 what separates it from :mod:`~festim_microstructure.meshing`: a microstructure
@@ -14,25 +14,27 @@ from .._lazy import lazy_namespace
 if TYPE_CHECKING:
     from . import solvers as solvers
     from . import subdomains as subdomains
-    from .solvers import ATOL as ATOL
-    from .solvers import DIRECT_SOLVER_OPTIONS as DIRECT_SOLVER_OPTIONS
     from .solvers import tune_direct_solver as tune_direct_solver
     from .subdomains import Grain as Grain
     from .subdomains import GrainBoundaryNetwork as GrainBoundaryNetwork
     from .subdomains import GrainSurface as GrainSurface
     from .subdomains import facet_midpoints as facet_midpoints
+    from .subdomains import grain_boundary_network as grain_boundary_network
+    from .subdomains import grain_subdomains as grain_subdomains
+    from .subdomains import grain_surfaces as grain_surfaces
     from .subdomains import interior_facet_mask as interior_facet_mask
 
 _SUBMODULES = ("solvers", "subdomains")
 
 _NAMES = {
-    "ATOL": ".solvers",
-    "DIRECT_SOLVER_OPTIONS": ".solvers",
     "tune_direct_solver": ".solvers",
     "Grain": ".subdomains",
     "GrainBoundaryNetwork": ".subdomains",
     "GrainSurface": ".subdomains",
     "facet_midpoints": ".subdomains",
+    "grain_boundary_network": ".subdomains",
+    "grain_subdomains": ".subdomains",
+    "grain_surfaces": ".subdomains",
     "interior_facet_mask": ".subdomains",
 }
 

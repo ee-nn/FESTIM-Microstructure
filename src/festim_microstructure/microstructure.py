@@ -1,12 +1,15 @@
-"""The microstructure contract the builders implement and the models consume.
+"""The microstructure contract the builders implement and the helpers consume.
 
 Three protocols, because there are really two different things in this package
 that both get called "a microstructure":
 
 * :class:`MeshedMicrostructure` -- a mesh with one tagged subdomain per grain,
-  which is what :func:`festim_microstructure.model.build` needs. Implemented
-  by the Voronoi builders, and by :class:`TaggedPolycrystal` for a mesh that
-  came from somewhere else.
+  which is what the subdomain factories in
+  :mod:`~festim_microstructure.fem.subdomains`, the coefficient fields in
+  :mod:`~festim_microstructure.materials` and the post-processing in
+  :mod:`~festim_microstructure.exports` read. Implemented by the Voronoi
+  builders, and by :class:`TaggedPolycrystal` for a mesh that came from
+  somewhere else.
 * :class:`BoundaryNetwork` -- a tessellation topology with a per-entity
   disorientation and masks selecting the boundaries to keep. Implemented by the
   Neper and EBSD readers.
@@ -14,11 +17,8 @@ that both get called "a microstructure":
 Both are declared as :pep:`544` protocols, so an implementation conforms by
 having the right attributes rather than by inheriting: ``NeperMesh``
 is built from stat files and has no mesh, and forcing it into a common base
-class would mean giving it attributes it cannot fill.
-
-The protocols are ``runtime_checkable`` so that :func:`require` can name the
-attributes that are missing at the call site, instead of letting the caller
-find out through an ``AttributeError`` raised somewhere inside form assembly.
+class would mean giving it attributes it cannot fill. They are
+``runtime_checkable``, so ``isinstance`` answers whether an object conforms.
 """
 
 from __future__ import annotations
@@ -34,8 +34,6 @@ __all__ = [
     "MeshedMicrostructure",
     "Microstructure",
     "TaggedPolycrystal",
-    "missing_members",
-    "require",
 ]
 
 
@@ -57,14 +55,15 @@ class Microstructure(Protocol):
 
 @runtime_checkable
 class MeshedMicrostructure(Microstructure, Protocol):
-    """A meshed polycrystal: the contract of :func:`...model.build`.
+    """A meshed polycrystal: what the subdomain and field helpers read.
 
     ``facet_tags``/``gb_tag`` may be ``None``: a builder that cannot tag the
-    grain-boundary facets leaves them unset and the network is located
-    geometrically through :meth:`locator` instead. The attributes must still
-    *exist*, so that consumers can test them rather than reach for
-    ``getattr(micro, "facet_tags", None)`` and silently take the wrong branch
-    when the name is simply misspelled.
+    grain-boundary facets leaves them unset and
+    :func:`~festim_microstructure.fem.subdomains.grain_boundary_network`
+    locates the network geometrically through :meth:`locator` instead. The
+    attributes must still *exist*, so that consumers can test them rather than
+    reach for ``getattr(micro, "facet_tags", None)`` and silently take the
+    wrong branch when the name is simply misspelled.
     """
 
     #: ``dolfinx.mesh.Mesh`` covering the whole cell.
@@ -145,14 +144,15 @@ class TaggedPolycrystal:
 
     Only ``mesh`` and ``cell_tags`` are required. ``grain_ids`` defaults to the
     distinct cell-tag values across all ranks, and ``orientations`` to zero for
-    every grain, which is the right answer whenever
-    :attr:`~festim_microstructure.materials.Physics.crystal_anisotropy` is one:
-    the lattice tensor is then isotropic and the angles do not enter the model.
-    Pass the measured angles to give the grains a texture.
+    every grain, which is the right answer whenever the ``crystal_anisotropy``
+    of :func:`~festim_microstructure.materials.crystal_diffusivity_field` is
+    one: the lattice tensor is then isotropic and the angles do not enter the
+    model. Pass the measured angles to give the grains a texture.
 
     Supply either ``facet_tags`` with ``gb_tag`` (one value or a sequence) or a
-    ``network_locator``; :func:`~festim_microstructure.model.build` prefers
-    the tags.
+    ``network_locator``;
+    :func:`~festim_microstructure.fem.subdomains.grain_boundary_network`
+    prefers the tags.
     """
 
     mesh: Any
@@ -210,61 +210,3 @@ def _global_tag_values(mesh, tags) -> np.ndarray:
     """
     local = np.unique(np.asarray(tags.values))
     return np.unique(np.concatenate(mesh.comm.allgather(local)))
-
-
-def _declared_members(protocol: type) -> set[str]:
-    """The attribute and method names a protocol class declares.
-
-    Python 3.12 exposes this as ``__protocol_attrs__``; 3.10 and 3.11 do not,
-    so walk the MRO instead. Protocol machinery is dunder-named and therefore
-    already excluded by the leading-underscore test.
-    """
-    names: set[str] = set()
-    for klass in protocol.__mro__:
-        if klass.__name__ in ("Protocol", "Generic", "object"):
-            continue
-        names |= set(getattr(klass, "__annotations__", {}))
-        names |= set(vars(klass))
-    return {name for name in names if not name.startswith("_")}
-
-
-def _has(obj: object, name: str) -> bool:
-    """Does ``obj`` provide ``name``?
-
-    ``hasattr`` is not enough when ``obj`` is a *class*: a dataclass field
-    without a default is declared but has no class attribute, so checking a
-    class directly would report every such field as missing. The declaration in
-    ``__dataclass_fields__`` counts, which lets a caller validate a type before
-    building an instance of it.
-    """
-    if hasattr(obj, name):
-        return True
-    return name in getattr(obj, "__dataclass_fields__", ())
-
-
-def missing_members(obj: object, protocol: type) -> list[str]:
-    """Names ``protocol`` declares that ``obj`` does not have.
-
-    ``obj`` may be an instance or a class. ``runtime_checkable`` protocols only
-    support ``isinstance``, which answers yes/no; for an error message worth
-    reading the caller wants the names.
-    """
-    return sorted(name for name in _declared_members(protocol) if not _has(obj, name))
-
-
-def require(obj: object, protocol: type, context: str = "") -> object:
-    """Return ``obj``, or raise ``TypeError`` naming what it is missing.
-
-    Called at the top of the functions that consume a microstructure, so that
-    an incompatible one is rejected at the call site with the list of
-    attributes it would need, rather than part-way through a build.
-    """
-    missing = missing_members(obj, protocol)
-    if missing:
-        where = f" {context}" if context else ""
-        raise TypeError(
-            f"{type(obj).__name__} does not satisfy {protocol.__name__}"
-            f"{where}: missing {', '.join(missing)}. See "
-            "festim_microstructure.microstructure for the contract."
-        )
-    return obj

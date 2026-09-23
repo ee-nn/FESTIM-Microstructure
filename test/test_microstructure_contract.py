@@ -1,4 +1,4 @@
-"""The microstructure contract: who satisfies it, and what the error says.
+"""The microstructure contract, and who satisfies it.
 
 Needs neither dolfinx nor Neper: conformance is decided on attribute names, so
 a stand-in object is enough, and the real classes are checked against the
@@ -13,10 +13,41 @@ from festim_microstructure.microstructure import (
     MeshedMicrostructure,
     Microstructure,
     TaggedPolycrystal,
-    missing_members,
-    require,
 )
 from festim_microstructure.voronoi import VoronoiMicrostructure
+
+
+def _declared_members(protocol):
+    """The attribute and method names a protocol class declares.
+
+    Python 3.12 exposes this as ``__protocol_attrs__``; 3.10 and 3.11 do not,
+    so walk the MRO instead. Protocol machinery is dunder-named and therefore
+    already excluded by the leading-underscore test.
+    """
+    names = set()
+    for klass in protocol.__mro__:
+        if klass.__name__ in ("Protocol", "Generic", "object"):
+            continue
+        names |= set(getattr(klass, "__annotations__", {}))
+        names |= set(vars(klass))
+    return {name for name in names if not name.startswith("_")}
+
+
+def _has(obj, name):
+    """``hasattr``, plus a dataclass field declared without a default, which a
+    *class* has no attribute for but does declare."""
+    if hasattr(obj, name):
+        return True
+    return name in getattr(obj, "__dataclass_fields__", ())
+
+
+def missing_members(obj, protocol):
+    """Names ``protocol`` declares that ``obj`` (an instance or a class) lacks.
+
+    ``runtime_checkable`` protocols only support ``isinstance``, which answers
+    yes/no; a failing test wants the names.
+    """
+    return sorted(name for name in _declared_members(protocol) if not _has(obj, name))
 
 
 def _meshed(**overrides):
@@ -39,7 +70,7 @@ def _meshed(**overrides):
 
 def test_a_complete_stub_satisfies_the_meshed_contract():
     assert missing_members(_meshed(), MeshedMicrostructure) == []
-    assert require(_meshed(), MeshedMicrostructure) is not None
+    assert isinstance(_meshed(), MeshedMicrostructure)
 
 
 def test_missing_members_are_named_rather_than_just_rejected():
@@ -47,17 +78,7 @@ def test_missing_members_are_named_rather_than_just_rejected():
     del type(stub).facet_tags
     del type(stub).locator
     assert missing_members(stub, MeshedMicrostructure) == ["facet_tags", "locator"]
-
-
-def test_require_raises_with_the_missing_names_and_the_call_site():
-    stub = _meshed()
-    del type(stub).orientations
-    with pytest.raises(TypeError) as excinfo:
-        require(stub, MeshedMicrostructure, context="in build()")
-    message = str(excinfo.value)
-    assert "orientations" in message
-    assert "in build()" in message
-    assert "MeshedMicrostructure" in message
+    assert not isinstance(stub, MeshedMicrostructure)
 
 
 def test_voronoi_class_declares_the_whole_meshed_contract():

@@ -6,6 +6,9 @@ exactly the half-cell the Whipple/Le Claire analysis is written for, and the
 left-hand grain is what supplies the boundary slab's second face. The slab
 therefore receives ``k (c_1 - c_gb) + k (c_2 - c_gb)``, which is the ``2 k`` of
 Fisher's equation, without either side of it being assumed.
+
+The model is FESTIM's, declared as in the Voronoi examples; here the "network"
+is the single interior mesh line at ``x = 0``, located geometrically.
 """
 
 from pathlib import Path
@@ -22,6 +25,8 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 LEFT, RIGHT = 1, 2  # grain tags either side of the boundary at x = 0
+NETWORK_ID = 1_000_000  # above every grain id; a manifold shares the surface ids
+SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
 
 
 def eval_on(fn, points):
@@ -80,30 +85,71 @@ micro = fm.TaggedPolycrystal(
     network_locator=lambda x: np.isclose(x[0], 0.0, atol=1e-11),
     name="one boundary between two grains",
 )
-# E_D = 0 on both phases: the Arrhenius factor is already included above.
-physics = fm.Physics(
-    T=T,
-    D_0_bulk=D_B,
-    E_D_bulk=0.0,
-    D_0_gb=D_GB,
-    E_D_gb=0.0,
-    delta=delta,
-    k_exchange=k_exchange,
-    crystal_anisotropy=1.0,
-)
-# Large ``k`` approaches Fisher's local-equilibrium assumption.
-model = fm.build(
-    micro,
-    physics,
-    bcs=[("charged", lambda x: np.isclose(x[1], 0.0, atol=1e-11), c0)],
-    solve=fm.SolveOptions(
-        transient=True, final_time=t_end, stepsize=dt, atol=1e-8, rtol=1e-6
-    ),
-).run()
-fm.exports.averages.write_vtx(model, OUTPUT_DIR / "fisher", time=t_end)
 
-grains = dict(zip([g.id for g in model.grains], model.grain_solutions, strict=True))
-cb_fn, cg_fn = grains[RIGHT], model.network_solution
+# The transport model, as FESTIM declarations. E_D = 0 on both phases: the
+# Arrhenius factor is already included above.
+D_lattice, _ = fm.materials.crystal_diffusivity_field(micro, D_B)
+grains = fm.fem.subdomains.grain_subdomains(micro, F.Material(D=D_lattice))
+network = fm.fem.subdomains.grain_boundary_network(
+    NETWORK_ID, micro, F.Material(D_0=D_GB, E_D=0.0)
+)
+grain_species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
+cgb_species = F.Species("c_gb", subdomains=[network])
+species_of = dict(zip((g.id for g in grains), grain_species, strict=True))
+
+# Large ``k`` approaches Fisher's local-equilibrium assumption.
+k = dolfinx.fem.Constant(mesh, k_exchange)
+width = dolfinx.fem.Constant(mesh, delta)
+sources, boundary_conditions = [], []
+for c_grain in grain_species:
+    exchange = {"c_g": c_grain, "c_n": cgb_species}
+    sources.append(
+        F.ParticleSource(
+            value=lambda c_g, c_n: (k / width) * (c_g - c_n),
+            species=cgb_species,
+            volume=network,
+            species_dependent_value=exchange,
+        )
+    )
+    boundary_conditions.append(
+        F.ParticleFluxBC(
+            subdomain=network,
+            species=c_grain,
+            value=lambda c_g, c_n: k * (c_n - c_g),
+            species_dependent_value=exchange,
+        )
+    )
+
+charged = lambda x: np.isclose(x[1], 0.0, atol=1e-11)  # noqa: E731
+patches, mouths = fm.fem.subdomains.grain_surfaces(mesh, grains, charged, SURFACE_ID_0)
+boundary_conditions += [
+    F.FixedConcentrationBC(subdomain=p, value=c0, species=species_of[p.grain_id])
+    for p in patches
+]
+boundary_conditions.append(
+    F.FixedConcentrationBC(subdomain=mouths, value=c0, species=cgb_species)
+)
+
+model = F.HydrogenTransportProblemDiscontinuous(
+    mesh=F.Mesh(mesh),
+    subdomains=[*grains, network, *patches, mouths],
+    species=[*grain_species, cgb_species],
+    sources=sources,
+    boundary_conditions=boundary_conditions,
+    temperature=T,
+    settings=F.Settings(
+        atol=1e-8, rtol=1e-6, transient=True, final_time=t_end, stepsize=dt
+    ),
+)
+model.initialise()
+fm.fem.solvers.tune_direct_solver(model)
+model.run()
+fm.exports.averages.write_vtx(
+    grains, grain_species, network, cgb_species, OUTPUT_DIR / "fisher", time=t_end
+)
+
+cb_fn = species_of[RIGHT].subdomain_to_post_processing_solution[grains[RIGHT - 1]]
+cg_fn = cgb_species.subdomain_to_post_processing_solution[network]
 
 # Analysis
 order = np.argsort(cg_fn.function_space.tabulate_dof_coordinates()[:, 1])

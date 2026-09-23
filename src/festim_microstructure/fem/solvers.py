@@ -1,28 +1,26 @@
-"""Solver settings for unscaled, many-subdomain problems."""
+"""Solver workarounds for many-subdomain problems."""
 
 from petsc4py import PETSc
 
-__all__ = ["ATOL", "DIRECT_SOLVER_OPTIONS", "tune_direct_solver"]
-
-# Unscaled problems need a tighter residual tolerance.
-ATOL = 1e-25
-"""Absolute tolerance on the Newton residual; see ``docs/gb_homogenisation.md``
-for why the default stalls silently on an unscaled problem."""
-
-DIRECT_SOLVER_OPTIONS = {
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-    "mat_mumps_icntl_14": 400,  # % headroom over the estimated workspace
-}
-"""FESTIM direct-solver options with extra MUMPS workspace."""
+__all__ = ["tune_direct_solver"]
 
 
 def tune_direct_solver(model, icntl_14=400):
-    """Set MUMPS workspace after FESTIM creates the prefixed solver.
+    """Give MUMPS ``icntl_14`` percent of workspace headroom.
 
-    The setting is read during ``PCSetUp``, after FESTIM has consumed
-    ``petsc_options``.
+    Call it between ``model.initialise()`` and ``model.run()``. One subdomain
+    per grain makes a wide, badly scaled block system whose fill-in MUMPS
+    routinely under-estimates, and it stops with ``INFOG(1) = -9`` at some
+    parameter values and not others on the same mesh.
+
+    The fix is the PETSc option ``mat_mumps_icntl_14``, but it cannot be passed
+    through the problem's ``petsc_options``: FESTIM, like dolfinx's
+    ``NonlinearProblem`` underneath it, deletes every option it was given from
+    the PETSc database as soon as the solver is built, whereas a ``mat_mumps_*``
+    option is only read at ``PCSetUp``, during the first solve. This writes the
+    option back under the solver's own prefix, where MUMPS will find it. The
+    default solver -- MUMPS behind ``preonly``/``lu`` -- is FESTIM's own, so
+    nothing else needs setting.
     """
     solver = getattr(model, "solver", None)
     snes = getattr(solver, "solver", None)

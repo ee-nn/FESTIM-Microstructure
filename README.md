@@ -21,8 +21,19 @@ import festim_microstructure as fm
 | --- | --- |
 | Microstructure generation | 2D and 3D Voronoi polycrystals via Gmsh; Neper-backed tessellations |
 | EBSD import | Conversion of EBSD orientation maps into conforming grain meshes |
-| Grain-boundary models | Short-circuit diffusion with one lattice field per grain; grain-boundary homogenisation |
+| FESTIM subdomains and fields | Tagged grains, the boundary network as one codim-1 subdomain, per-grain surface patches, lattice tensor and per-boundary diffusivity fields |
+| Post-processing | Grain-plus-network inventories and flux averages, homogenisation and short-circuit estimates, network topology checks |
 | Benchmarks | Diaz-Rodriguez baseline, dimensional and non-dimensionalised |
+
+The transport model itself is FESTIM's. Every grain is a
+`festim.VolumeSubdomain` with a `festim.Species` of its own, the grain-boundary
+network is one codimension-one `VolumeSubdomain` carrying one species, and each
+grain exchanges with it through one `ParticleFluxBC`/`ParticleSource` pair --
+exactly the pattern in FESTIM's manifold documentation. `festim_microstructure`
+creates and interprets microstructures, converts them into FESTIM-compatible
+subdomains and coefficient fields, and supplies specialised analysis; FESTIM
+owns species, reactions, boundary conditions, settings, solving and standard
+exports.
 
 ## Requirements
 
@@ -179,7 +190,7 @@ FESTIM-Microstructure/
 │   ├── _binaries.py            # Neper, Gmsh and POV-Ray executable discovery
 │   ├── check.py                # fm-check environment diagnostic
 │   ├── microstructure.py       # microstructure protocols, TaggedPolycrystal
-│   ├── materials.py            # Physics and diffusivity fields/materials
+│   ├── materials.py            # lattice tensor field, short-circuit estimates
 │   ├── plotting.py             # raster colours, scale bars, image helpers
 │   ├── formats/                # file I/O
 │   │   ├── ctf.py
@@ -201,17 +212,14 @@ FESTIM-Microstructure/
 │   │   ├── neper.py            # NeperMesh: generate, mesh, read, describe
 │   │   ├── ebsd.py
 │   │   └── diagnostics.py
-│   ├── model.py                # build, MicroModel, SolveOptions
 │   ├── fem/
-│   │   ├── solvers.py
-│   │   └── subdomains.py
+│   │   ├── solvers.py          # tune_direct_solver: the MUMPS workspace workaround
+│   │   └── subdomains.py       # Grain, GrainBoundaryNetwork, GrainSurface + factories
 │   └── exports/
 │       ├── measures.py         # submesh measures and network topology checks
-│       └── averages.py         # averages, inventory, fields, VTX output
+│       └── averages.py         # grain+network averages, inventory, fields, VTX output
 ├── examples/                   # runnable workflows; not part of the library API
-│   ├── gb_homogenisation.py    # RVE identification study
-│   ├── gb_validation.py        # validation of the RVE result
-│   ├── gb_figures.py           # bespoke figures for the study
+│   ├── gb_homogenisation.py    # RVE identification, validation and figures
 │   ├── li2022_fig4*.py         # Li et al. (2022) reproduction scripts
 │   └── ...                     # usage examples and data/
 └── test/                       # pytest; the FEniCS-dependent tests skip without it
@@ -220,35 +228,93 @@ FESTIM-Microstructure/
 Nothing importable sits at the repository root. The pure-NumPy parts of the
 package -- the EBSD converter, the orientation algebra, the Voronoi
 tessellation geometry, the Neper stat readers -- import and test without
-dolfinx or FESTIM installed; the mesh builders and models import them lazily.
+dolfinx or FESTIM installed; the mesh builders, subdomains and fields import
+them lazily.
 
 ## Usage
 
+A microstructure comes from the package; the model is declared with FESTIM.
 The names you are most likely to want sit on the package itself:
 
 ```python
+import dolfinx
 import festim as F
+import numpy as np
+
 import festim_microstructure as fm
 
 micro = fm.VoronoiMicrostructure.create(size=100e-6, n_seeds=64)
 # The same entry point builds 3D structures with dim=3.
 micro_3d = fm.VoronoiMicrostructure.create(size=100e-6, n_seeds=64, dim=3)
-model = fm.build(micro, fm.Physics(T=600.0), bcs).run()
+
+NETWORK_ID, SURFACE_ID_0 = 1_000_000, 2_000_000  # above every grain id
+D_bulk, c0 = 1e-11, 1.0
+
+# Coefficients: one lattice tensor per grain in a parent-mesh field, and an
+# ordinary FESTIM material for the boundaries.
+D_lattice, tensors = fm.materials.crystal_diffusivity_field(micro, D_bulk)
+grains = fm.fem.subdomains.grain_subdomains(micro, F.Material(D=D_lattice))
+network = fm.fem.subdomains.grain_boundary_network(
+    NETWORK_ID, micro, F.Material(D_0=2.85e-7, E_D=0.12)
+)
+grain_species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
+c_gb = F.Species("c_gb", subdomains=[network])
+
+# Each grain exchanges k (c_grain - c_gb) with the boundary slab; the network
+# equation is written per unit slab width delta, hence k / delta on its side.
+k = dolfinx.fem.Constant(micro.mesh, 3.0)
+width = dolfinx.fem.Constant(micro.mesh, 1e-9)
+sources, bcs = [], []
+for c_grain in grain_species:
+    exchange = {"c_g": c_grain, "c_n": c_gb}
+    sources.append(F.ParticleSource(
+        value=lambda c_g, c_n: (k / width) * (c_g - c_n), species=c_gb,
+        volume=network, species_dependent_value=exchange))
+    bcs.append(F.ParticleFluxBC(
+        subdomain=network, species=c_grain,
+        value=lambda c_g, c_n: k * (c_n - c_g), species_dependent_value=exchange))
+
+# A charged surface: the patch each grain owns, and the network's mouths on it.
+patches, mouths = fm.fem.subdomains.grain_surfaces(
+    micro.mesh, grains, lambda x: np.isclose(x[1], micro.size), SURFACE_ID_0
+)
+species_of = dict(zip((g.id for g in grains), grain_species))
+bcs += [F.FixedConcentrationBC(subdomain=p, value=c0, species=species_of[p.grain_id])
+        for p in patches]
+bcs.append(F.FixedConcentrationBC(subdomain=mouths, value=c0, species=c_gb))
+
+model = F.HydrogenTransportProblemDiscontinuous(
+    mesh=F.Mesh(micro.mesh),
+    subdomains=[*grains, network, *patches, mouths],
+    species=[*grain_species, c_gb],
+    sources=sources,
+    boundary_conditions=bcs,
+    temperature=600.0,
+    settings=F.Settings(atol=1e-25, rtol=1e-10, transient=False),
+)
+model.initialise()
+fm.fem.solvers.tune_direct_solver(model)  # MUMPS workspace; see its docstring
+model.run()
+
+total = fm.exports.averages.inventory(grains, grain_species, network, c_gb, 1e-9)
 ```
 
 There is one transport model. Every grain carries a lattice field of its own and
 exchanges with a single codimension-one boundary network at the rate `k`; the
 classical Fisher picture, one continuous lattice field for the whole
 polycrystal, is the limit of it in which the boundary offers no resistance to
-permeation, reached when `Physics.interface_resistance_ratio` is small.
+permeation, reached when `fm.materials.interface_resistance_ratio` is small.
+A boundary-dependent diffusivity is one value per tessellation entity,
+`grain_boundary_network(..., diffusivity_by_entity=...)`, which the network
+turns into a field on its submesh when FESTIM creates it.
 
 `dir(fm)` lists the curated top-level API. Geometry and network names load
-eagerly with NumPy and SciPy; solver-dependent names such as `fm.build` and
-`fm.Physics` load FESTIM/DOLFINx on first access. This keeps standalone EBSD
-conversion and `fm-check` usable without the solver stack.
+eagerly with NumPy and SciPy; solver-dependent names such as `fm.Grain` and
+`fm.GrainBoundaryNetwork` load FESTIM/DOLFINx on first access. This keeps
+standalone EBSD conversion and `fm-check` usable without the solver stack.
 
 The same exports are declared explicitly for type checkers, so completion,
-constructor signatures and go-to-definition work with `fm.Physics`,
+constructor signatures and go-to-definition work with `fm.TaggedPolycrystal`,
 `fm.GrainBoundaryNetwork` and the subpackage helpers. The installed
 package includes a `py.typed` marker for editors using it outside this checkout.
 
@@ -269,10 +335,10 @@ and specialised helpers under their modules:
 ```python
 import festim_microstructure as fm
 
-fm.Physics
-fm.SolveOptions
 fm.TaggedPolycrystal
 fm.GrainBoundaryNetwork
+fm.fem.subdomains.grain_surfaces
+fm.materials.crystal_diffusivity_field
 fm.voronoi.build_mesh
 fm.voronoi.near
 fm.voronoi.tessellate
@@ -290,8 +356,6 @@ python examples/ebsd_ctf_to_tesr.py             # stage 1 of the EBSD pipeline
 python examples/ebsd_gb_diffusion.py            # stages 2-3 + the transport model
 python examples/fisher_grain_boundary.py        # single boundary vs Le Claire
 python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6
-python examples/gb_validation.py
-python examples/gb_figures.py
 python examples/li2022_fig4.py                 # volumetric-band reproduction
 python examples/li2022_fig4_codim.py           # codim-1 reproduction
 ```

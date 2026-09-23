@@ -20,7 +20,8 @@ What does change relative to the 2D script:
   point-to-segment distance, and the fragment operation already knows exactly which
   facets are grain boundaries.
 * The mouths are the curves where the network meets the charged face, which
-  :func:`~festim_microstructure.model.build` derives from the mesh dimension.
+  :func:`~festim_microstructure.fem.subdomains.grain_surfaces` derives from the
+  mesh dimension.
 * The grain-boundary volume fraction is delta * area / L**3 instead of
   delta * length / L**2.
 
@@ -31,12 +32,16 @@ Run::
 
 from pathlib import Path
 
+import festim as F
 import numpy as np
 
 import festim_microstructure as fm
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+NETWORK_ID = 1_000_000  # above every grain id; a manifold shares the surface ids
+SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
 
 # Simulation parameters
 L = 1.0  # specimen size
@@ -86,25 +91,77 @@ micro = fm.VoronoiMicrostructure(
     h_gb=h_gb,
 )
 mesh = micro.mesh
-physics = fm.Physics(
-    T=500.0,  # with E_D = 0 on both phases, nothing depends on it
-    D_0_bulk=D_B,
-    E_D_bulk=0.0,
-    D_0_gb=D_GB,
-    E_D_gb=0.0,
-    delta=delta,
-    k_exchange=k_exchange,
-    crystal_anisotropy=1.0,
-)
-bcs = [("charged", lambda x: np.isclose(x[2], L), c0)]
-solve = fm.SolveOptions(
-    transient=True, final_time=t_end, stepsize=dt, atol=1e-14, rtol=1e-12
-)
+T = 500.0  # with E_D = 0 on both phases, nothing depends on it
+
+
+def grain_network_problem(D_gb):
+    """The transport model, as FESTIM declarations; see the 2D example."""
+    D_lattice, _ = fm.materials.crystal_diffusivity_field(micro, D_B)
+    grains = fm.fem.subdomains.grain_subdomains(micro, F.Material(D=D_lattice))
+    # From the facet tags when the microstructure carries them, by the
+    # geometric locator otherwise (locate_geometrically above).
+    network = fm.fem.subdomains.grain_boundary_network(
+        NETWORK_ID, micro, F.Material(D_0=D_gb, E_D=0.0)
+    )
+    grain_species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
+    c_gb = F.Species("c_gb", subdomains=[network])
+    species_of = dict(zip((g.id for g in grains), grain_species, strict=True))
+
+    sources, boundary_conditions = [], []
+    for c_grain in grain_species:
+        exchange = {"c_g": c_grain, "c_n": c_gb}
+        sources.append(
+            F.ParticleSource(
+                value=lambda c_g, c_n: (k_exchange / delta) * (c_g - c_n),
+                species=c_gb,
+                volume=network,
+                species_dependent_value=exchange,
+            )
+        )
+        boundary_conditions.append(
+            F.ParticleFluxBC(
+                subdomain=network,
+                species=c_grain,
+                value=lambda c_g, c_n: k_exchange * (c_n - c_g),
+                species_dependent_value=exchange,
+            )
+        )
+
+    charged = lambda x: np.isclose(x[2], L)  # noqa: E731
+    patches, mouths = fm.fem.subdomains.grain_surfaces(
+        mesh, grains, charged, SURFACE_ID_0
+    )
+    boundary_conditions += [
+        F.FixedConcentrationBC(subdomain=p, value=c0, species=species_of[p.grain_id])
+        for p in patches
+    ]
+    boundary_conditions.append(
+        F.FixedConcentrationBC(subdomain=mouths, value=c0, species=c_gb)
+    )
+
+    model = F.HydrogenTransportProblemDiscontinuous(
+        mesh=F.Mesh(mesh),
+        subdomains=[*grains, network, *patches, mouths],
+        species=[*grain_species, c_gb],
+        sources=sources,
+        boundary_conditions=boundary_conditions,
+        temperature=T,
+        settings=F.Settings(
+            atol=1e-14, rtol=1e-12, transient=True, final_time=t_end, stepsize=dt
+        ),
+    )
+    model.initialise()
+    fm.fem.solvers.tune_direct_solver(model)
+    return model, grains, grain_species, network, c_gb
+
 
 # Build and solve
-model = fm.build(micro, physics, bcs, solve=solve).run()
-fm.exports.averages.write_vtx(model, OUTPUT_DIR / "voronoi3d", time=t_end)
-network, cgb_fast = model.network, model.network_solution
+model, grains, grain_species, network, cgb_species = grain_network_problem(D_GB)
+model.run()
+fm.exports.averages.write_vtx(
+    grains, grain_species, network, cgb_species, OUTPUT_DIR / "voronoi3d", time=t_end
+)
+cgb_fast = cgb_species.subdomain_to_post_processing_solution[network]
 
 # Inspect the mesh and boundary network
 topology = fm.voronoi.junctions(boundaries, dim=3)
@@ -131,31 +188,22 @@ print(
     f"  network captured by the submesh : {sub_area:.4f} of {face_area:.4f}"
     f" ({100 * sub_area / face_area:.2f} %)"
 )
-print(
-    f"  interior facets                 : {model.model.manifold_is_interior(network)}"
-)
+print(f"  interior facets                 : {model.manifold_is_interior(network)}")
 
 # Compare fast boundaries with lattice diffusion
-fast = fm.exports.averages.inventory(model)
+fast = fm.exports.averages.inventory(grains, grain_species, network, cgb_species, delta)
 depth = fm.exports.measures.junction_only_below(boundaries, axis=2, top=L)
 gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
 deep = gb_z < depth
 c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
-# A second build, not model.set_physics(...): a transient problem cannot be
-# re-run from t = 0 in place.
-reference_physics = fm.Physics(
-    T=500.0,
-    D_0_bulk=D_B,
-    E_D_bulk=0.0,
-    D_0_gb=D_B,
-    E_D_gb=0.0,
-    delta=delta,
-    k_exchange=k_exchange,
-    crystal_anisotropy=1.0,
+# A second problem with D_gb = D_b: a transient problem cannot be re-run
+# from t = 0 in place.
+reference, ref_grains, ref_species, ref_network, ref_cgb = grain_network_problem(D_B)
+reference.run()
+ref = fm.exports.averages.inventory(
+    ref_grains, ref_species, ref_network, ref_cgb, delta
 )
-reference = fm.build(micro, reference_physics, bcs, solve=solve).run()
-ref = fm.exports.averages.inventory(reference)
 
 print(
     f"\nafter t = {t_end} (lattice diffusion alone reaches "
@@ -173,13 +221,14 @@ print(
 )
 beta = fm.materials.beta_parameter(delta, D_GB, D_B, t_end)
 print(f"  type-B parameter beta          : {beta:.0f}  (needs beta >> 1)")
-print(
-    f"  interface / lattice resistance : "
-    f"{physics.interface_resistance_ratio(L * n_seeds ** (-1 / 3)):.1e}"
-    f"  (Fisher is the 0 limit)"
+resistance = fm.materials.interface_resistance_ratio(
+    k_exchange, L * n_seeds ** (-1 / 3), D_B
 )
+print(f"  interface / lattice resistance : {resistance:.1e}  (Fisher is the 0 limit)")
 
-c_grain_deep = fm.exports.averages.lattice_mean_below(model, axis=2, depth=depth)
+c_grain_deep = fm.exports.averages.lattice_mean_below(
+    grains, grain_species, axis=2, depth=depth
+)
 print("\njunction transport: no boundary touching the charged face reaches below")
 print(f"z = {depth:.3f}, so everything the network holds there has")
 print("crossed at least one triple line.")
