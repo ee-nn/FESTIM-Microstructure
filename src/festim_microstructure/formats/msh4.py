@@ -33,7 +33,7 @@ class StatFile:
         return np.flatnonzero(mask).astype(np.int32) + 1
 
 
-def read_mesh(base, gdim, unit=1.0, comm=None, rank=0):
+def read_mesh(base, gdim, comm=None, rank=0):
     """Read a Neper ``.msh4`` into dolfinx.
 
     ``cell_tags`` carry the polyhedron / raster-cell (grain) id and
@@ -41,10 +41,7 @@ def read_mesh(base, gdim, unit=1.0, comm=None, rank=0):
     writes every tessellation entity as an element set and the facet physical
     ids run independently of the cell ones.
 
-    ``unit`` is metres per mesh length unit; the geometry is scaled by it
-    before any locator, submesh or dof coordinate is derived from it (an EBSD
-    raster is meshed in microns so that Gmsh's absolute tolerances are
-    exercised at O(1-100) rather than O(1e-6)).
+    Coordinates must already be in SI units (metres). No scaling is applied.
     """
     from mpi4py import MPI
 
@@ -62,8 +59,6 @@ def read_mesh(base, gdim, unit=1.0, comm=None, rank=0):
             "the msh4 round trip (for a raster mesh, check that -dim all reached "
             "neper -M)"
         )
-    if unit != 1.0:
-        mesh.geometry.x[:] *= unit
     return mesh, cell_tags, facet_tags
 
 

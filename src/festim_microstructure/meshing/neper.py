@@ -513,7 +513,7 @@ def mesh_tesr(tesr, options=None):
     ``<stem>.sttesr`` (raster geometry: ``dim, rastersizex, rastersizey,
     voxsizex, voxsizey``, in the raster's unit) and ``<stem>-grainori.txt``
     (one orientation per grain). Everything runs in the raster's unit; the
-    caller converts the mesh to metres after reading it.
+    EBSD pipeline exports a separate final mesh in metres.
 
     This replaces the former ``ebsd_to_mesh.sh``; each stage is cached on its
     output file unless ``options.force``.

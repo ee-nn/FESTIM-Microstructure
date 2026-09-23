@@ -352,8 +352,8 @@ into your own script:
 python examples/voronoi_polycrystal_2d.py       # in-process Gmsh tessellation
 python examples/voronoi_polycrystal_3d.py
 python examples/neper_voronoi_network.py        # needs neper + gmsh executables
-python examples/ebsd_ctf_to_tesr.py             # stage 1 of the EBSD pipeline
-python examples/ebsd_gb_diffusion.py            # stages 2-3 + the transport model
+python examples/ebsd_ctf_to_tesr.py             # EBSD conversion + SI mesh
+python examples/ebsd_gb_diffusion.py            # transport using the saved SI mesh
 python examples/fisher_grain_boundary.py        # single boundary vs Le Claire
 python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6
 python examples/li2022_fig4.py                 # volumetric-band reproduction

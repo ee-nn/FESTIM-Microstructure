@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -349,6 +350,48 @@ def _run(cmd, cwd, log):
     return out.returncode == 0
 
 
+def _render_neper_png(cmd, work, log):
+    """Render Neper's scene with explicit POV-Ray camera basis vectors.
+
+    Some POV-Ray builds render an empty scene with implicit camera defaults.
+    Supply the standard direction/up before Neper's camera transformations.
+    """
+    povray = cmd[cmd.index("-povray") + 1]
+    stem = cmd[cmd.index("-print") + 1]
+    scene = Path(work) / f"{stem}.pov"
+    print_index = cmd.index("-print")
+    scene_cmd = [*cmd[:print_index], "-imageformat", "pov", *cmd[print_index:]]
+    if not _run(scene_cmd, work, log):
+        return False
+    try:
+        source = scene.read_text()
+        source = re.sub(
+            r"(camera\s*\{\s*(?:orthographic|perspective)\s*)",
+            r"\1direction <0, 0, 1>\nup <0, 1, 0>\n",
+            source,
+            count=1,
+        )
+        scene.write_text(source)
+        size = cmd[cmd.index("-imagesize") + 1] if "-imagesize" in cmd else "1200:900"
+        width, height = size.split(":")
+        return _run(
+            [
+                povray,
+                f"+I{scene.name}",
+                f"+O{stem}.png",
+                f"+W{width}",
+                f"+H{height}",
+                "-D",
+                "+A0.2",
+                "+FN",
+            ],
+            work,
+            log,
+        )
+    finally:
+        scene.unlink(missing_ok=True)
+
+
 def render_checks(tesr, width, unit="um", neper="neper", povray="povray", log=print):
     """Render the written raster with neper -V. Returns the paths written.
 
@@ -388,7 +431,7 @@ def render_checks(tesr, width, unit="um", neper="neper", povray="povray", log=pr
     ):
         png = work / f"{stem}-{name}.png"
         cmd = [neper, "-V", tesr.name, "-povray", povray, *opts, "-print", png.stem]
-        if not _run(cmd, work, log):
+        if not _render_neper_png(cmd, work, log):
             continue
         # neper -V frames the flat map in the middle of a 3D canvas, so the
         # border comes off first; after that the image width *is* `width`
@@ -428,7 +471,7 @@ def render_checks(tesr, width, unit="um", neper="neper", povray="povray", log=pr
                 work,
                 log,
             )
-            and _run(
+            and _render_neper_png(
                 [
                     neper,
                     "-V",

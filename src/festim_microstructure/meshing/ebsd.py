@@ -6,6 +6,7 @@ disorientation, lengths, and junctions from Neper's element sets.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -26,13 +27,18 @@ from festim_microstructure.meshing.diagnostics import (
     measure,
     overlay,
 )
-from festim_microstructure.meshing.neper import TesrMeshOptions, mesh_tesr
+from festim_microstructure.meshing.neper import (
+    TesrMeshOptions,
+    mesh_tesr,
+    run_interruptible,
+)
 from festim_microstructure.plotting import draw_raster, scale_bar_ax, use_agg
 
 __all__ = [
     "EbsdMicrostructure",
     "EbsdOptions",
     "EdgeTable",
+    "cleanup_unscaled_files",
     "mesh_diagnostics",
     "read_extent",
     "run_ebsd_pipeline",
@@ -55,7 +61,7 @@ class EbsdOptions:
     tesr: str
     """Raster tessellation; convert source EBSD data first."""
     unit: float = 1e-6
-    """Metres per TESR unit; conversion to SI occurs when the mesh is read."""
+    """Metres per TESR unit; the final mesh and extent are saved in SI units."""
     theta_min: float = 10.0
     """Minimum GB disorientation in degrees."""
     mesh: TesrMeshOptions | None = None
@@ -71,35 +77,87 @@ class EbsdOptions:
 def run_ebsd_pipeline(
     options, workdir: str | Path = "results", neper_bin=None, gmsh_bin=None, force=True
 ):
-    """Mesh an EBSD raster and return the extension-free output path."""
-    base = mesh_tesr(
-        options.tesr,
-        # where the output goes now lives on the meshing options themselves
-        replace(
-            options.mesh,
-            stem=options.stem,
-            workdir=workdir,
-            neper_bin=neper_bin,
-            gmsh_bin=gmsh_bin,
-            force=force,
-        ),
+    """Write an SI mesh and metadata; return the extension-free output path.
+
+    Meshing and raster diagnostics run in the input units under ``workdir``,
+    with an ``-unscaled`` stem to distinguish them from the SI outputs.
+    The final mesh is always exported from that raw mesh, so cached runs do
+    not compound the conversion to metres.
+    """
+    if not np.isfinite(options.unit) or options.unit <= 0:
+        raise ValueError("unit must be a finite, positive metres-per-TESR-unit factor")
+    meshing = replace(
+        options.mesh,
+        stem=f"{options.stem}-unscaled",
+        workdir=Path(workdir),
+        neper_bin=neper_bin,
+        gmsh_bin=gmsh_bin,
+        force=force,
     )
-    mesh_diagnostics(base, unit_name(options.unit), check_images=options.check_images)
+    raw_base = mesh_tesr(options.tesr, meshing)
+    base = raw_base.parent / options.stem
+    mesh_diagnostics(
+        raw_base,
+        unit_name(options.unit),
+        check_images=options.check_images,
+        report_base=base,
+    )
+    _, gmsh, env = meshing.binaries()
+    run_interruptible(
+        [
+            gmsh,
+            str(raw_base.with_suffix(".msh4")),
+            "-save",
+            "-setnumber",
+            "Mesh.ScalingFactor",
+            str(options.unit),
+            "-format",
+            "msh41",
+            "-o",
+            str(base.with_suffix(".msh4")),
+        ],
+        env=env,
+    )
+    stats = np.loadtxt(str(raw_base) + ".sttesr", ndmin=2)
+    stats[:, 1:] *= options.unit
+    np.savetxt(str(base) + ".sttesr", stats)
+    shutil.copyfile(str(raw_base) + "-grainori.txt", str(base) + "-grainori.txt")
     return base
 
 
-def read_extent(base, unit):
-    """``(LX, LY)`` in metres, from the ``.sttesr`` that ``mesh_tesr`` wrote."""
+def read_extent(base):
+    """``(LX, LY)`` in metres, from the pipeline's SI ``.sttesr`` file."""
     cols = np.loadtxt(str(base) + ".sttesr", ndmin=2)[0]
-    return float(cols[1]) * unit, float(cols[2]) * unit
+    return float(cols[1]), float(cols[2])
 
 
-def mesh_diagnostics(base, unit_name="um", check_images=True):
+def cleanup_unscaled_files(base):
+    """Delete the temporary raster-unit files used to produce an SI mesh.
+
+    Call this only after diagnostics that need ``<stem>-unscaled-raw.tesr``
+    have been written. The final ``.msh4``, SI metadata, and diagnostics do not
+    use these files.
+
+    Returns the paths that were removed.
+    """
+    base = Path(base)
+    prefix = f"{base.name}-unscaled"
+    removed = []
+    for path in base.parent.glob(f"{prefix}*"):
+        if path.is_file():
+            path.unlink()
+            removed.append(path)
+    return removed
+
+
+def mesh_diagnostics(base, unit_name="um", check_images=True, report_base=None):
     """Write mesh-overlay and grain-area diagnostics.
 
     The area check also verifies that mesh face ids still match raster cell ids.
+    ``report_base`` controls the CSV name independently of the unscaled mesh.
     """
     base = Path(base)
+    report_base = base if report_base is None else Path(report_base)
     work = base.parent
     tesr, msh4 = f"{base}-raw.tesr", f"{base}.msh4"
 
@@ -109,7 +167,7 @@ def mesh_diagnostics(base, unit_name="um", check_images=True):
         tesr,
         msh4,
         AreaReportOptions(
-            csv=f"{base}-areachange.csv",
+            csv=f"{report_base}-areachange.csv",
             png=str(work / "check-area.png") if check_images else None,
             unit=unit_name,
         ),

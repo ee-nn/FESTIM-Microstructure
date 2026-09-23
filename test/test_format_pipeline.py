@@ -93,3 +93,40 @@ def test_mesh_area_and_overlay_use_shared_readers(tmp_path):
     out = tmp_path / "overlay.png"
     overlay(tesr, msh, output=out, log=None)
     assert out.stat().st_size > 0
+
+
+def test_neper_render_has_explicit_camera_vectors(tmp_path):
+    """Exercise the installed Neper/POV-Ray pair, including its camera defaults."""
+    from PIL import Image
+
+    from festim_microstructure._binaries import resolve_all
+    from festim_microstructure.ebsd.diagnostics import _render_neper_png
+
+    binaries = resolve_all()
+    if not binaries["neper"] or not binaries["povray"]:
+        pytest.skip("needs Neper and POV-Ray")
+    tesr = tmp_path / "map.tesr"
+    write_tesr(
+        tesr,
+        TesrData(np.array([[1, 2], [2, 1]]), np.zeros((2, 3)), (1, 1), "cubic"),
+    )
+    assert _render_neper_png(
+        [
+            binaries["neper"],
+            "-V",
+            tesr.name,
+            "-povray",
+            binaries["povray"],
+            "-imagesize",
+            "200:200",
+            "-print",
+            "map",
+        ],
+        tmp_path,
+        print,
+    )
+    rgb = np.asarray(Image.open(tmp_path / "map.png").convert("RGB"))
+    # Test the unannotated map: a scale bar cannot make a blank render pass.
+    colorful = rgb.max(axis=2).astype(int) - rgb.min(axis=2).astype(int) > 40
+    assert colorful.mean() > 0.1
+    assert not (tmp_path / "map.pov").exists()

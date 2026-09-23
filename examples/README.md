@@ -32,8 +32,13 @@ exports are in `examples/results/voronoi_polycrystal_2d/`. Meshes, diagnostics,
 figures, and JSON files use the same per-script layout. Rerunning a script can
 replace its own outputs; different scripts use separate folders.
 
-The EBSD conversion writes `results/ebsd_ctf_to_tesr/d7.tesr`, which
-`ebsd_gb_diffusion.py` reads by default. The original CTF stays in `examples/data/`.
+The EBSD preprocessing writes `results/ebsd_ctf_to_tesr/d7.tesr` and
+`poly.msh4` in metres, with SI extent and grain-orientation files alongside it.
+`ebsd_gb_diffusion.py` reads these prepared files; its simulation exports go to
+`results/ebsd_gb_diffusion/`. Temporary raster-unit meshing files use an
+`-unscaled` stem and are deleted after all diagnostic images have been written.
+Rerun preprocessing to replace meshes generated with the old unit convention.
+The original CTF stays in `examples/data/`.
 
 The consolidated study writes `identified.json`, `validation.json`, and
 `fig_*.png` under `results/gb_homogenisation/`. Validation and the field map

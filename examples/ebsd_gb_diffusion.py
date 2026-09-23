@@ -9,13 +9,8 @@ Every measured grain carries a lattice species of its own and exchanges with the
 one network species at the rate ``k``; the network is the list of edge ids above
 the disorientation threshold.
 
-Prerequisite: the ``.tesr`` written by ``examples/ebsd_ctf_to_tesr.py`` (or by
-``convert(...)``). Neper and Gmsh are found through ``FM_NEPER_BIN`` /
-``FM_GMSH_BIN`` or ``PATH``.
-
-Run::
-
-    python examples/ebsd_gb_diffusion.py
+Prerequisite: the SI ``poly.msh4`` and accompanying extent/orientation files
+written by ``examples/ebsd_ctf_to_tesr.py``.
 """
 
 from pathlib import Path
@@ -27,6 +22,7 @@ import numpy as np
 import festim_microstructure as fm
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 HERE = Path(__file__).resolve().parent
 
@@ -34,14 +30,8 @@ NETWORK_ID = 1_000_000  # above every grain id; a manifold shares the surface id
 SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
 
 # Simulation parameters
-ebsd = fm.EbsdOptions(
-    tesr=str(HERE / "results" / "ebsd_ctf_to_tesr" / "d7.tesr"),
-    unit=1e-6,
-    theta_min=10.0,
-    mesh=fm.TesrMeshOptions(rcl=0.25, mesh_qual_min=0.7),
-)
-workdir = OUTPUT_DIR
-force = True
+base = HERE / "results" / "ebsd_ctf_to_tesr" / "poly"
+theta_min = 10.0
 
 D_B = 1e-14  # lattice diffusivity     [m^2/s]
 D_GB = 1e-8  # GB diffusivity          [m^2/s]
@@ -54,17 +44,10 @@ theta_dependent_D = False  # D_GB above theta_c only, D_B below; CHECK before us
 theta_c = 15.0  # degrees
 
 # Build the microstructure and simulation
-unit, uname = ebsd.unit, fm.meshing.ebsd.unit_name(ebsd.unit)
-
-base = fm.meshing.ebsd.run_ebsd_pipeline(ebsd, workdir=workdir, force=force)
-LX, LY = fm.meshing.ebsd.read_extent(base, unit)
-mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=2, unit=unit)
+LX, LY = fm.meshing.ebsd.read_extent(base)
+mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=2)
 micro = fm.EbsdMicrostructure.from_mesh(
-    base, mesh, cell_tags, facet_tags, (LX, LY), theta_min=ebsd.theta_min
-)
-micro.check_orientations()
-fm.meshing.ebsd.write_network_png(
-    base, mesh, micro, base.parent / "poly-raw.tesr", unit, uname
+    base, mesh, cell_tags, facet_tags, (LX, LY), theta_min=theta_min
 )
 
 # The measured map as the model sees it: one tagged subdomain per grain, the
@@ -76,7 +59,7 @@ poly = fm.TaggedPolycrystal(
     cell_tags=cell_tags,
     facet_tags=facet_tags,
     gb_tag=micro.network_ids,
-    name=f"EBSD map {Path(ebsd.tesr).name}",
+    name=f"EBSD map {base.name}",
 )
 T = 500.0  # with E_D = 0 on both phases, nothing depends on it
 
@@ -145,7 +128,7 @@ model.initialise()
 fm.fem.solvers.tune_direct_solver(model)
 model.run()
 fm.exports.averages.write_vtx(
-    grains, grain_species, network, cgb_species, str(base.parent / "ebsd"), time=t_end
+    grains, grain_species, network, cgb_species, str(OUTPUT_DIR / "ebsd"), time=t_end
 )
 cgb = cgb_species.subdomain_to_post_processing_solution[network]
 
