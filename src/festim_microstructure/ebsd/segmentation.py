@@ -84,15 +84,24 @@ def relabel_and_prune(labels, ok, min_pixels):
     return out, int(keep.sum()), dropped, lost
 
 
-def grain_mean_orientations(qgrid, cellids, ncells, sym, chunk=50_000):
+def grain_mean_orientations(
+    qgrid, cellids, ncells, sym, chunk=50_000, sample_mask=None
+):
     """One orientation per grain: the symmetry-aligned quaternion mean.
 
     Each pixel is first mapped to the symmetry equivalent closest to its grain's
     reference orientation, otherwise the average of two equivalent descriptions
-    of the same orientation is not that orientation.
+    of the same orientation is not that orientation. ``sample_mask`` can exclude
+    pixels that belong to the final grain geometry but should not influence its
+    representative orientation, such as rejected or back-filled pixels.
     """
     flat_q = qgrid.reshape(-1, 4)
     flat_id = cellids.ravel()
+    if sample_mask is not None:
+        sample_mask = np.asarray(sample_mask, dtype=bool)
+        if sample_mask.shape != cellids.shape:
+            raise ValueError("sample_mask and cellids must have the same shape")
+        flat_id = np.where(sample_mask.ravel(), flat_id, 0)
     order = np.argsort(flat_id, kind="stable")
     sorted_id = flat_id[order]
     starts = np.searchsorted(sorted_id, np.arange(1, ncells + 1))
@@ -101,6 +110,8 @@ def grain_mean_orientations(qgrid, cellids, ncells, sym, chunk=50_000):
     means = np.zeros((ncells, 4))
     for k in range(ncells):
         members = order[starts[k] : ends[k]]
+        if members.size == 0:
+            raise ValueError(f"grain {k + 1} has no pixels usable for orientation")
         qs = flat_q[members]
         ref = qs[0]
         acc = np.zeros(4)

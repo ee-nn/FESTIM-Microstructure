@@ -1,8 +1,12 @@
 """Orientation conventions, checked against values Neper publishes."""
 
 import numpy as np
+import pytest
 
 from festim_microstructure.ebsd import orientation as ori
+from festim_microstructure.ebsd.convert import CtfConversion
+from festim_microstructure.ebsd.segmentation import grain_mean_orientations
+from festim_microstructure.ebsd.settings import Settings
 
 
 def test_bunge_0_30_0_matches_neper_table():
@@ -67,3 +71,50 @@ def test_disorientation_never_exceeds_cubic_bound():
     theta = ori.cubic_disorientation_angle(q)
     assert theta.min() >= 0.0
     assert theta.max() <= 62.8 + 1e-6
+
+
+def test_filled_pixel_does_not_bias_representative_orientation():
+    identity = np.array([1.0, 0.0, 0.0, 0.0])
+    angle = np.radians(40.0) / 2
+    rejected = np.array([np.cos(angle), np.sin(angle), 0.0, 0.0])
+    qgrid = np.array([[identity, identity, rejected]])
+    cellids = np.ones((1, 3), dtype=int)
+    sample_mask = np.array([[True, True, False]])
+    sym = ori.cubic_symmetry_quaternions()
+
+    filtered = grain_mean_orientations(qgrid, cellids, 1, sym, sample_mask=sample_mask)
+    unfiltered = grain_mean_orientations(qgrid, cellids, 1, sym)
+
+    assert ori.cubic_disorientation_angle(filtered)[0] < 1e-6
+    assert ori.cubic_disorientation_angle(unfiltered)[0] > 10.0
+
+
+def test_conversion_uses_only_originally_assigned_pixels_for_grain_mean():
+    identity = np.array([1.0, 0.0, 0.0, 0.0])
+    angle = np.radians(40.0) / 2
+    rejected = np.array([np.cos(angle), np.sin(angle), 0.0, 0.0])
+    conversion = CtfConversion(Settings(ctf="unused"), log=None)
+    absorbed_angle = np.radians(30.0) / 2
+    absorbed = np.array([np.cos(absorbed_angle), 0.0, np.sin(absorbed_angle), 0.0])
+    conversion.qgrid = np.array([[identity, identity, rejected, absorbed]])
+    conversion.segmented_cellids = np.array([[1, 1, 0, 2]])
+    conversion.cellids = np.ones((1, 4), dtype=int)
+    conversion.unassigned = conversion.segmented_cellids == 0
+    conversion.ncells = 1
+    conversion.shape = (1, 4)
+    conversion.ctf = type("Ctf", (), {"header": {"XStep": 1.0, "YStep": 1.0}})()
+
+    conversion.orient()
+
+    assert ori.cubic_disorientation_angle(conversion.qcell)[0] < 1e-6
+
+
+def test_orientation_mean_rejects_grain_without_a_sample():
+    with pytest.raises(ValueError, match="grain 1 has no pixels"):
+        grain_mean_orientations(
+            np.array([[[1.0, 0.0, 0.0, 0.0]]]),
+            np.ones((1, 1), dtype=int),
+            1,
+            ori.cubic_symmetry_quaternions(),
+            sample_mask=np.zeros((1, 1), dtype=bool),
+        )

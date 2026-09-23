@@ -115,6 +115,28 @@ class MeasureOptions:
         return self.settings or Settings(ctf=str(ctf_path))
 
 
+def _orientation_sample_mask(segmented_cellids, final_cellids, ncells):
+    """Reliable pixels from the dominant original segment of each final grain.
+
+    Filling and topology repair may assign rejected, pruned, or absorbed pixels
+    to a surviving grain. Those pixels remain part of its geometry but do not
+    determine its representative orientation.
+    """
+    segmented = np.asarray(segmented_cellids)
+    final = np.asarray(final_cellids)
+    if segmented.shape != final.shape:
+        raise ValueError("segmented and final cell maps must have the same shape")
+
+    source = np.zeros(ncells + 1, dtype=segmented.dtype)
+    for grain in range(1, ncells + 1):
+        original = segmented[(final == grain) & (segmented > 0)]
+        if original.size == 0:
+            raise ValueError(f"grain {grain} has no original segmented pixels")
+        ids, counts = np.unique(original, return_counts=True)
+        source[grain] = ids[np.argmax(counts)]
+    return (final > 0) & (segmented == source[final])
+
+
 class CtfConversion:
     """One ``.ctf`` on its way to a ``.tesr``.
 
@@ -211,7 +233,11 @@ class CtfConversion:
         here, not there.
         """
         opt, log = self.settings, self.log
-        self.unassigned = self.cellids == 0
+        # Keep the segmented membership separate from the filled/repaired map.
+        # The latter defines geometry; the former identifies which reliable
+        # pixels may determine each grain's representative orientation.
+        self.segmented_cellids = self.cellids.copy()
+        self.unassigned = self.segmented_cellids == 0
         empty_before = int(self.unassigned.sum())
         log(
             f"  unassigned voxels: {empty_before} of {self.cellids.size} "
@@ -261,8 +287,15 @@ class CtfConversion:
         self.qfz = to_fundamental_zone(self.qgrid.reshape(-1, 4), self.sym).reshape(
             ny, nx, 4
         )
+        sample_mask = _orientation_sample_mask(
+            self.segmented_cellids, self.cellids, self.ncells
+        )
         self.qcell = grain_mean_orientations(
-            self.qgrid, self.cellids, self.ncells, self.sym
+            self.qgrid,
+            self.cellids,
+            self.ncells,
+            self.sym,
+            sample_mask=sample_mask,
         )
         self.ori_cell = quat_to_rodrigues(self.qcell)
         self.ori_vox = None if not opt.voxel_ori else quat_to_rodrigues(self.qfz)
