@@ -219,9 +219,7 @@ FESTIM-Microstructure/
 │       ├── measures.py         # submesh measures and network topology checks
 │       └── averages.py         # grain+network averages, inventory, fields, VTX output
 ├── examples/                   # runnable workflows; not part of the library API
-│   ├── gb_homogenisation.py    # RVE identification study
-│   ├── gb_validation.py        # validation of the RVE result
-│   ├── gb_figures.py           # bespoke figures for the study
+│   ├── gb_homogenisation.py    # RVE identification, validation and figures
 │   ├── li2022_fig4*.py         # Li et al. (2022) reproduction scripts
 │   └── ...                     # usage examples and data/
 └── test/                       # pytest; the FEniCS-dependent tests skip without it
@@ -358,8 +356,6 @@ python examples/ebsd_ctf_to_tesr.py             # stage 1 of the EBSD pipeline
 python examples/ebsd_gb_diffusion.py            # stages 2-3 + the transport model
 python examples/fisher_grain_boundary.py        # single boundary vs Le Claire
 python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6
-python examples/gb_validation.py
-python examples/gb_figures.py
 python examples/li2022_fig4.py                 # volumetric-band reproduction
 python examples/li2022_fig4_codim.py           # codim-1 reproduction
 ```

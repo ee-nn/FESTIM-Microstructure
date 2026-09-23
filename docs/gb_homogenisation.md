@@ -11,8 +11,7 @@ A workflow in three steps:
    (`src/festim_microstructure/fem/subdomains.py`), the lattice tensor field
    (`materials.py`) and the averages (`exports/averages.py`).
 3. **Identify an anisotropic `D_eff`** for a homogeneous model, and then check
-   that it predicts things it was not fitted to (`examples/gb_homogenisation.py`,
-   `examples/gb_validation.py`).
+   that it predicts things it was not fitted to (`examples/gb_homogenisation.py`).
 
 Voronoi cells stand in for the Neper microstructure. Nothing above the mesh
 generator depends on that choice: `Microstructure` only has to supply a list of
@@ -102,11 +101,22 @@ print(micro.report())
 ```
 
 ```bash
-python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6 --out rve.json   # + RVE convergence
-python examples/gb_homogenisation.py --k-sweep 1e-6 1e-4 1e-2 3 --out rve.json  # the transition
-python examples/gb_validation.py --out validation.json      # predict, do not just fit
-python examples/gb_figures.py --rve rve.json --validation validation.json  # the figures above
+# One run: size convergence, exchange sweep, validation and all five figures
+python examples/gb_homogenisation.py --sizes 3e-6 2e-6 4e-6 \
+    --k-sweep 1e-6 1e-4 1e-2 3
+
+# Redraw the summary plots from saved JSON, without running simulations
+python examples/gb_homogenisation.py --plot-only
 ```
+
+Validation and field maps use the first size and seed (3 um in the command
+above), with the same temperature and crystal anisotropy as identification.
+The first identification is reused; field data are captured during its two
+solves. All JSON, PNG and optional VTX outputs live in
+`examples/results/gb_homogenisation/`. Use `--skip-validation`,
+`--skip-transient`, `--skip-figures`, or `--skip-fields` to omit stages.
+`--steps` sets the transient step count. `--plot-only` does not recreate field
+maps, and a validation figure requires both permeation and uptake results.
 
 Useful flags: `--aspect` (grain elongation — an equiaxed tessellation homogenises
 to a nearly isotropic tensor, so the anisotropy needs elongated grains or
@@ -146,7 +156,7 @@ On the strong axis the two estimators close from 24 % apart at 2 um to 0.6 % at
 has not reached an RVE there -- which is exactly why both estimates are reported
 rather than one.
 
-`gb_validation.py` on the 3 um cell, predicting what was never fitted:
+The validation stage on the 3 um cell, predicting what was never fitted:
 
 ![Validation against a transient and a different boundary condition](fig_validation.png)
 
