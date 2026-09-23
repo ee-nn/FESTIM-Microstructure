@@ -16,6 +16,7 @@ pytestmark = requires_fenics
 
 @pytest.mark.fenics
 def test_diffusivity_by_entity_follows_the_tags():
+    """Verify diffusivity by entity follows the tags."""
     import dolfinx
     import festim as F
     from scipy.spatial import KDTree

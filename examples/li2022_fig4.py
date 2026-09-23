@@ -70,6 +70,7 @@ PETSC_OPTIONS_3D = {
 
 
 def D_m(T):
+    """Evaluate the Arrhenius lattice diffusivity at temperature ``T``."""
     return D0_M * np.exp(-E_M / (F.k_B * T))
 
 
@@ -91,6 +92,7 @@ class Foam:
 
     @cached_property
     def seeds(self):
+        """Generate jittered lattice seeds for the periodic foam."""
         rng = np.random.default_rng(self.seed + self.dim)
         axes = np.arange(self.n_seeds)
         grid = np.stack(np.meshgrid(*[axes] * self.dim, indexing="ij"), -1).reshape(
@@ -102,6 +104,7 @@ class Foam:
 
     @cached_property
     def _tree(self) -> KDTree:
+        """Build a KD-tree of periodic seed images."""
         shifts = np.stack(
             np.meshgrid(*[[-1, 0, 1]] * self.dim, indexing="ij"), -1
         ).reshape(-1, self.dim)
@@ -126,34 +129,41 @@ class Foam:
         return dist.min(axis=1)
 
     def is_grain(self, points, w):
+        """Mark points farther than half the boundary width from a face."""
         return self.face_distance(points) > 0.5 * w
 
 
 # One simulation.
 @dataclass(frozen=True)
 class Case:
+    """Geometry and mesh resolution for one Li et al. transport case."""
     structure: str
     foam: Foam
     w: float
 
     @property
     def dim(self):
+        """Spatial dimension of the simulated structure."""
         return 2 if self.structure == "col_x" else 3
 
     @property
     def axis(self):
+        """Coordinate axis along which transport is measured."""
         return 0 if self.structure == "col_x" else 2
 
     @property
     def n(self):
+        """Number of mesh intervals along each full-length direction."""
         return ISO_N if self.structure == "iso" else COL_N
 
     @property
     def h(self):
+        """Mesh spacing along the full-length directions."""
         return self.foam.B / self.n
 
     @property
     def extent(self):
+        """Physical box lengths along the simulated axes."""
         b = self.foam.B
         return {"col_x": (b, b), "col_z": (b, b, 2 * self.h), "iso": (b, b, b)}[
             self.structure
@@ -161,15 +171,18 @@ class Case:
 
     @property
     def n_cells(self):
+        """Number of mesh intervals along each simulated axis."""
         n = self.n
         return {"col_x": (n, n), "col_z": (n, n, 2), "iso": (n, n, n)}[self.structure]
 
     @property
     def length(self):
+        """Domain length along the transport direction."""
         return self.extent[self.axis]
 
     @property
     def cross_section(self):
+        """Domain measure perpendicular to transport."""
         ext = list(self.extent)
         del ext[self.axis]
         return float(np.prod(ext))
@@ -186,14 +199,17 @@ class PhaseRegion(F.VolumeSubdomain):
     midpoint), instead of FESTIM's all-vertices predicate."""
 
     def __init__(self, id, material, cells):
+        """Initialize a material region from explicit mesh cell indices."""
         super().__init__(id=id, material=material)
         self._cells = np.asarray(cells, dtype=np.int32)
 
     def locate_subdomain_entities(self, mesh):
+        """Return the cells classified into this material region."""
         return self._cells
 
 
 def make_mesh(case, comm):
+    """Create a rectangular or box mesh for the selected case."""
     lo = np.zeros(case.dim)
     hi = np.array(case.extent)
     if case.dim == 2:
@@ -223,6 +239,7 @@ def classify_cells(mesh, case):
 
 
 def _face_measure(mesh, axis, value, tol):
+    """Construct a boundary measure on a coordinate-aligned end face."""
     fdim = mesh.topology.dim - 1
     facets = dolfinx.mesh.locate_entities_boundary(
         mesh, fdim, lambda x: np.abs(x[axis] - value) < tol
@@ -243,6 +260,7 @@ def _dg0_dofs(V0, cells):
 
 
 def _assemble(form, comm):
+    """Assemble a scalar form and sum its value over MPI ranks."""
     return comm.allreduce(
         dolfinx.fem.assemble_scalar(cast(dolfinx.fem.Form, dolfinx.fem.form(form))),
         op=MPI.SUM,
@@ -375,6 +393,7 @@ def draw_isometric(ax, foam, w, n=220, title=""):
 
 
 def draw_fig4ab(iso_case, col_case, f_iso=None, f_col=None):
+    """Plot the reference structures for panels A and B."""
     fig = plt.figure(figsize=(9, 4.5))
     for i, (case, name, f) in enumerate(
         [(iso_case, "Iso", f_iso), (col_case, "Col-I", f_col)], start=1
@@ -393,6 +412,7 @@ def draw_fig4ab(iso_case, col_case, f_iso=None, f_col=None):
 
 
 def draw_fig4(rows):
+    """Plot the Li et al. Fig. 4 comparison from computed rows."""
     fig, axes = plt.subplots(1, 2, figsize=(10, 6))
     f = np.geomspace(0.002, 0.8, 200)
     style = {
@@ -492,6 +512,7 @@ def write_csv(rows, fname):
 
 
 def main():
+    """Run the volumetric Li et al. Fig. 4 study and write its figures."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     mpl.use("Agg")
     comm = MPI.COMM_WORLD

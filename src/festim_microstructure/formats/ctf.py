@@ -13,12 +13,18 @@ class CtfMap:
     """A parsed Channel Text File: header fields plus the pixel table."""
 
     def __init__(self, path):
+        """Parse a Channel Text File into header, phase, and pixel data.
+
+        Args:
+            path: Path to the ``.ctf`` file.
+        """
         self.path = Path(path)
         self.header = {}
         self.phases = []
         self._parse()
 
     def _parse(self):
+        """Read required CTF fields and pixel columns from the file."""
         with open(self.path, errors="replace") as fh:
             lines = fh.read().splitlines()
 
@@ -67,16 +73,28 @@ class CtfMap:
         self.npoints = data.shape[0]
 
     def __getitem__(self, key):
+        """Return the pixel column named by ``key``."""
         return self.table[key]
 
     def has(self, key):
+        """Report whether a named pixel column is available."""
         return key in self.table
 
     @property
     def shape(self):
+        """Return the pixel grid shape as ``(rows, columns)``."""
         return self.header["YCells"], self.header["XCells"]
 
     def crysym(self, phase_index=1):
+        """Look up a phase's Neper crystal-symmetry label.
+
+        Args:
+            phase_index: One-based index in the CTF phase table.
+
+        Returns:
+            The symmetry label and phase metadata, or ``(None, None)`` when
+            the CTF has no phase table.
+        """
         if not self.phases:
             return None, None
         ph = self.phases[phase_index - 1]

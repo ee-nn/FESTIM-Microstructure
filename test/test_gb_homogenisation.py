@@ -14,6 +14,7 @@ pytestmark = requires_fenics
 
 @pytest.fixture
 def study(monkeypatch, tmp_path):
+    """Load the example study with an isolated output directory."""
     path = Path(__file__).parents[1] / "examples" / "gb_homogenisation.py"
     spec = importlib.util.spec_from_file_location("gb_study", path)
     module = importlib.util.module_from_spec(spec)
@@ -25,10 +26,12 @@ def study(monkeypatch, tmp_path):
 
 @pytest.mark.fenics
 def test_complete_study_reuses_identification(study, monkeypatch, tmp_path):
+    """Verify complete study reuses identification."""
     solves = []
     original = study.CellProblem.solve
 
     def tracked_solve(cp):
+        """Record each cell-problem solve before delegating to the real solver."""
         solves.append(cp.transport)
         return original(cp)
 
@@ -75,6 +78,7 @@ def test_complete_study_reuses_identification(study, monkeypatch, tmp_path):
         assert (tmp_path / f"fig_{name}.png").stat().st_size > 1000
 
     def unexpected_mesh(*args, **kwargs):
+        """Fail if the test unexpectedly rebuilds a mesh."""
         pytest.fail("plot-only must not create a mesh or run a simulation")
 
     monkeypatch.setattr(study, "make_microstructure", unexpected_mesh)
@@ -93,5 +97,6 @@ def test_complete_study_reuses_identification(study, monkeypatch, tmp_path):
     ],
 )
 def test_invalid_options_fail_before_solving(study, arguments):
+    """Verify invalid options fail before solving."""
     with pytest.raises(SystemExit, match="2"):
         study.main(arguments)

@@ -171,6 +171,7 @@ def parent_field(grains, species, name="c"):
     field = cast(dolfinx.fem.Function, dolfinx.fem.Function(V, name=name))
 
     def update():
+        """Interpolate current grain solutions into the parent DG1 field."""
         for c, grain in zip(solutions(species, grains), grains, strict=True):
             parent_cells = grain.cell_tags.find(grain.id)
             sub_cells = grain.cell_map.sub_topology_to_topology(

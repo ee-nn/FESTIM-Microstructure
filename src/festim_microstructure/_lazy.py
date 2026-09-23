@@ -52,6 +52,7 @@ def lazy_namespace(
     public = sorted({*submodules, *names, *eager})
 
     def __getattr__(name: str):
+        """Resolve an advertised package attribute on first access."""
         if name in submodules:
             return importlib.import_module(f".{name}", package)
         target = names.get(name)
@@ -69,6 +70,7 @@ def lazy_namespace(
             ) from exc
 
     def __dir__() -> list[str]:
+        """List the public names exposed by the lazy package module."""
         return public
 
     return __getattr__, __dir__, list(public)

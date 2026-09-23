@@ -13,6 +13,7 @@ import festim_microstructure
 
 
 def _all_modules():
+    """List every importable submodule in the package."""
     pkg = festim_microstructure
     return sorted(
         m.name for m in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + ".")
@@ -21,6 +22,7 @@ def _all_modules():
 
 @pytest.mark.parametrize("name", _all_modules())
 def test_submodule_imports(stubbed_heavy_deps, name):
+    """Verify each advertised submodule can be imported."""
     importlib.import_module(name)
 
 
@@ -31,6 +33,7 @@ def test_submodule_imports(stubbed_heavy_deps, name):
     ],
 )
 def test_console_script_targets_exist(stubbed_heavy_deps, target):
+    """Verify each declared console entry point resolves to a callable."""
     module, attr = target.split(":")
     assert callable(getattr(importlib.import_module(module), attr))
 

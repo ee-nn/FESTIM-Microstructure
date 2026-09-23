@@ -174,6 +174,7 @@ class NeperSettings(_Outputs):
     ver_keys: tuple = VER_KEYS
 
     def validate(self):
+        """Reject incompatible Neper regularization and periodicity settings."""
         if self.regularize and self.periodicity:
             raise ValueError(
                 "Neper does not allow -regularization on a periodic tessellation. "
@@ -312,6 +313,14 @@ class NeperMesh:
     """
 
     def __init__(self, n_cells=None, seed=1, settings=None, *, base=None):
+        """Generate or load a Neper tessellation and its statistics.
+
+        Args:
+            n_cells: Number of cells to generate; omitted when loading ``base``.
+            seed: Random seed used for generation.
+            settings: Neper options and statistic column names.
+            base: Existing extension-free output path to load instead.
+        """
         self.settings = settings or NeperSettings()
         self.n_cells = n_cells
         self.seed = seed
@@ -355,6 +364,7 @@ class NeperMesh:
     # read, so that touching any of them does not re-read the other two.
     @cached_property
     def _read(self):
+        """Read and cache the 3D mesh and its cell and facet tags."""
         return read_mesh(self.base, gdim=3)
 
     @property
@@ -383,10 +393,12 @@ class NeperMesh:
     # boundary rather than a piece of free surface.
     @property
     def interior_mask(self):
+        """Mark faces lying inside the domain rather than on its surface."""
         return self.faces["domface"] < 0
 
     @property
     def network_mask(self):
+        """Mark interior faces above the disorientation threshold."""
         return self.interior_mask & (self.faces["theta"] > self.theta_min)
 
     @property
@@ -428,15 +440,18 @@ class NeperMesh:
     # quadruple point is an interior vertex meeting four or more edges.
     @property
     def triple_lines(self):
+        """Return the count and total length of interior triple lines."""
         m = (self.edges["domtype"] < 0) & (self.edges["facenb"] >= 3)
         return int(m.sum()), float(self.edges["length"][m].sum())
 
     @property
     def quadruple_points(self):
+        """Count interior vertices meeting at least four edges."""
         m = (self.vertices["domtype"] < 0) & (self.vertices["edgenb"] >= 4)
         return int(m.sum())
 
     def report(self):
+        """Summarize the 3D tessellation and selected boundary network."""
         n_tl, len_tl = self.triple_lines
         kept, total = int(self.network_mask.sum()), int(self.interior_mask.sum())
         theta = self.faces["theta"][self.network_mask]
@@ -489,6 +504,7 @@ class TesrMeshOptions(_Outputs):
 
 
 def _need(path, force):
+    """Return whether an output must be regenerated instead of reused."""
     if force or not Path(path).is_file():
         return True
     print(f"  reusing {Path(path).name}")

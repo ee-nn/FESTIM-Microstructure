@@ -70,9 +70,11 @@ class Transport:
 
     @property
     def contrast(self):
+        """Ratio of boundary to bulk diffusivity."""
         return self.D_gb / self.D_bulk
 
     def report(self, grain_size=None):
+        """Summarize transport properties and optional interface resistance."""
         length = fm.materials.equilibration_length(self.delta, self.D_gb, self.k)
         lines = [
             f"transport at T = {self.T:g} K",
@@ -120,11 +122,13 @@ class CellProblem:
         )
 
     def inventory(self):
+        """Compute total grain and boundary hydrogen inventory."""
         return fm.exports.averages.inventory(
             self.grains, self.species, self.network, self.c_gb, self.transport.delta
         )
 
     def solve(self):
+        """Initialize and run the cell problem, then return it."""
         self.model.initialise()
         fm.fem.solvers.tune_direct_solver(self.model)  # MUMPS workspace
         self.model.run()
@@ -254,12 +258,14 @@ class Identification:
 
     @staticmethod
     def _principal(D):
+        """Return ordered eigenvalues and eigenvectors of a symmetric tensor."""
         sym = 0.5 * (np.asarray(D) + np.asarray(D).T)
         evals, evecs = np.linalg.eigh(sym)
         order = np.argsort(evals)[::-1]
         return evals[order], evecs[:, order]
 
     def report(self, name="D_eff"):
+        """Format effective diffusivity tensors and anisotropy metrics."""
         lines = []
         for label, D in (("whole cell", self.D_cell), ("window", self.D_window)):
             D = np.asarray(D)
@@ -585,6 +591,7 @@ def place_labels(ax, x, items, dx=8, min_gap_px=13):
 
 
 def title(ax, headline, sub=None):
+    """Add a headline and subtitle to a plot axis."""
     ax.set_title(headline, loc="left", color=INK, pad=22 if sub else 6)
     if sub:
         ax.annotate(
@@ -601,6 +608,7 @@ def title(ax, headline, sub=None):
 
 # --- figure 1: the microstructure and the corrector fields ---------------
 def draw_network(ax, segments, color=INK, lw=0.9, alpha=1.0):
+    """Draw the boundary segments on a plot axis."""
     for p, q in segments:
         ax.plot([p[0], q[0]], [p[1], q[1]], color=color, lw=lw, alpha=alpha, zorder=3)
 
@@ -628,6 +636,7 @@ def network_flux_segments(cp, scale):
 
 
 def colourbar(fig, mappable, ax):
+    """Attach a compact color bar to a figure axis."""
     bar = fig.colorbar(mappable, ax=ax, fraction=0.046, pad=0.03)
     bar.outline.set_visible(False)
     bar.ax.tick_params(labelsize=7.5, color=AXIS)
@@ -720,6 +729,7 @@ def directional(D, theta):
 
 
 def figure_anisotropy(ident, path):
+    """Plot the identified effective diffusivity anisotropy."""
     import matplotlib.pyplot as plt
 
     theta = np.linspace(0, 2 * np.pi, 721)
@@ -791,6 +801,7 @@ def figure_anisotropy(ident, path):
 
 # --- figure 3: does the cell contain enough grains? ----------------------
 def figure_rve(identifications, path):
+    """Plot representative-volume convergence across cell sizes."""
     import matplotlib.pyplot as plt
 
     sizes = np.array([1e6 * i["size"] for i in identifications])
@@ -800,6 +811,7 @@ def figure_rve(identifications, path):
     grains = [identifications[k]["n_grains"] for k in order]
 
     def component(key, i, j):
+        """Select a named effective tensor component."""
         return np.array(
             [np.asarray(identifications[k][key])[i, j] / D_b for k in order]
         )
@@ -855,6 +867,7 @@ def figure_rve(identifications, path):
 
 # --- figure 4: where a single effective diffusivity stops existing -------
 def figure_sweep(sweep, path, threshold=0.05):
+    """Plot effective diffusivity across the parameter sweep."""
     import matplotlib.pyplot as plt
 
     k = np.array([s["k_exchange"] for s in sweep])
@@ -929,6 +942,7 @@ def figure_sweep(sweep, path, threshold=0.05):
 
 # --- figure 5: does the tensor predict what it was not fitted to? --------
 def figure_validation(validation, path):
+    """Plot identification against validation measurements."""
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.2))
@@ -1103,6 +1117,7 @@ def render_figures(record, validation=None, field_case=None):
 
 
 def main(argv=None):
+    """Parse study options and run identification, validation, and plotting."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--grain-size", type=float, default=0.6e-6)
     parser.add_argument("--sizes", type=float, nargs="+", default=[3e-6, 5e-6, 8e-6])

@@ -8,6 +8,7 @@ from festim_microstructure.meshing.neper import NeperMesh, NeperSettings
 
 
 def _write(tmp_path):
+    """Write a minimal Neper statistics fixture for reader tests."""
     base = tmp_path / "poly"
     # domface theta area zmin zmax
     np.savetxt(
@@ -22,12 +23,14 @@ def _write(tmp_path):
 
 
 def test_statfile_rejects_drifted_keys(tmp_path):
+    """Verify statfile rejects drifted keys."""
     base = _write(tmp_path)
     with pytest.raises(ValueError):
         StatFile(str(base) + ".stface", ("a", "b"))
 
 
 def test_network_mask_and_junction_depth(tmp_path):
+    """Verify network mask and junction depth."""
     micro = NeperMesh.from_base(_write(tmp_path), NeperSettings(theta_min=10.0))
     assert list(micro.network_ids) == [2]  # face 1 is low-angle, face 3 on the wall
     assert np.isclose(micro.network_measure, 0.3)

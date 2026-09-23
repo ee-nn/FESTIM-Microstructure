@@ -117,6 +117,7 @@ def _unpinch(cellids):
             continue
 
         def neighbours(pixel):
+            """Return in-bounds four-connected neighbors of a pixel."""
             y, x = pixel
             return [
                 (y + dy, x + dx)

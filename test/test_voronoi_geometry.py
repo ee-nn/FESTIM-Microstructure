@@ -8,19 +8,23 @@ from festim_microstructure import voronoi as V
 
 @pytest.fixture
 def segments():
+    """Generate deterministic periodic Voronoi segments for geometry tests."""
     _, boundaries = V.tessellate(24, 1.0, np.random.default_rng(3), dim=2, aspect=1.0)
     return boundaries
 
 
 def test_segments_lie_inside_the_box(segments):
+    """Verify segments lie inside the box."""
     pts = np.array([p for seg in segments for p in seg])
     assert pts.min() >= -1e-12 and pts.max() <= 1.0 + 1e-12
 
 
 def _component_lengths(segments, size):
+    """Compute the lengths of disconnected segment components."""
     parent = {}
 
     def find(a):
+        """Find a segment endpoint representative with path compression."""
         parent.setdefault(a, a)
         while parent[a] != a:
             parent[a] = parent[parent[a]]
@@ -48,6 +52,7 @@ def test_main_component_carries_the_network(segments):
 
 
 def test_network_tensor_trace_is_ridge_length(segments):
+    """Verify network tensor trace is ridge length."""
     tensor = V.network_tensor(segments, dim=2)
     length = sum(np.linalg.norm(q - p) for p, q in segments)
     assert np.isclose(np.trace(tensor), length)
@@ -55,6 +60,7 @@ def test_network_tensor_trace_is_ridge_length(segments):
 
 
 def test_elongated_grains_give_an_anisotropic_tensor():
+    """Verify elongated grains give an anisotropic tensor."""
     rng = np.random.default_rng(3)
     _, boundaries = V.tessellate(24, 1.0, rng, dim=2, aspect=4.0)
     evals = np.linalg.eigvalsh(V.network_tensor(boundaries, dim=2))
@@ -63,6 +69,7 @@ def test_elongated_grains_give_an_anisotropic_tensor():
 
 
 def test_snap_puts_edge_endpoints_back_on_the_box(segments):
+    """Verify snap puts edge endpoints back on the box."""
     tol = 0.0137  # deliberately not a divisor of the box side
     snapped = V.snap(segments, tol, 1.0, dim=2)
     pts = np.array([p for seg in snapped for p in seg])
@@ -73,6 +80,7 @@ def test_snap_puts_edge_endpoints_back_on_the_box(segments):
 
 
 def test_near_marks_midpoints_but_not_far_points(segments):
+    """Verify near marks midpoints but not far points."""
     mids = np.array([(p + q) / 2 for p, q in segments]).T
     mids = np.vstack([mids, np.zeros(mids.shape[1])])
     assert V.near(mids, segments, 1e-9, dim=2).all()
@@ -81,6 +89,7 @@ def test_near_marks_midpoints_but_not_far_points(segments):
 
 
 def test_3d_faces_are_planar_rings_inside_the_cube():
+    """Verify 3d faces are planar rings inside the cube."""
     _, faces = V.tessellate(8, 1.0, np.random.default_rng(1), dim=3)
     assert len(faces) > 0
     for poly in faces:
@@ -97,6 +106,7 @@ def test_3d_faces_are_planar_rings_inside_the_cube():
 
 
 def test_3d_topology_is_independent_of_physical_scale():
+    """Verify 3d topology is independent of physical scale."""
     size = 1e-6
     _, boundaries = V.tessellate(8, size, np.random.default_rng(1), dim=3)
     assert V.connected_components(boundaries, dim=3, size=size) == 1
@@ -105,5 +115,6 @@ def test_3d_topology_is_independent_of_physical_scale():
 
 @pytest.mark.parametrize("dim", [1, 4])
 def test_dimension_must_be_two_or_three(dim):
+    """Verify dimension must be two or three."""
     with pytest.raises(ValueError, match="dim must be 2 or 3"):
         V.tessellate(8, 1.0, np.random.default_rng(1), dim=dim)

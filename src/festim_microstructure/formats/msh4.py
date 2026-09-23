@@ -15,6 +15,7 @@ class StatFile:
     """
 
     def __init__(self, path, keys):
+        """Read a Neper statistics file and label its columns."""
         raw = np.loadtxt(path, ndmin=2)
         if raw.shape[1] != len(keys):
             raise ValueError(
@@ -26,10 +27,12 @@ class StatFile:
         self.n = raw.shape[0]
 
     def __getitem__(self, key):
+        """Return the statistics column with the requested key."""
         return self.values[key]
 
     @staticmethod
     def ids(mask):
+        """Convert an entity mask in ID order to one-based IDs."""
         return np.flatnonzero(mask).astype(np.int32) + 1
 
 

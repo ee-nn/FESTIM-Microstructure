@@ -104,6 +104,7 @@ class TesrData:
 
     @property
     def ncells(self) -> int:
+        """Return the number of grain IDs represented by the TESR data."""
         return int(self.cellids.max())
 
 

@@ -69,11 +69,13 @@ def _meshed(**overrides):
 
 
 def test_a_complete_stub_satisfies_the_meshed_contract():
+    """Verify a complete stub satisfies the meshed contract."""
     assert missing_members(_meshed(), MeshedMicrostructure) == []
     assert isinstance(_meshed(), MeshedMicrostructure)
 
 
 def test_missing_members_are_named_rather_than_just_rejected():
+    """Verify missing members are named rather than just rejected."""
     stub = _meshed()
     del type(stub).facet_tags
     del type(stub).locator
@@ -87,6 +89,7 @@ def test_voronoi_class_declares_the_whole_meshed_contract():
 
 
 def test_dimension_agnostic_voronoi_fields():
+    """Verify dimension agnostic voronoi fields."""
     fields = {f.name for f in VoronoiMicrostructure.__dataclass_fields__.values()}
     assert "grain_ids" in fields
     assert "n_grains" not in fields  # derived from grain_ids
@@ -110,6 +113,7 @@ def test_boundary_network_implementations_are_found_dimension_agnostically(
 
 
 def test_tagged_polycrystal_satisfies_the_meshed_contract():
+    """Verify tagged polycrystal satisfies the meshed contract."""
     assert missing_members(TaggedPolycrystal, MeshedMicrostructure) == []
 
 
@@ -126,6 +130,7 @@ def test_tagged_polycrystal_fills_in_the_ids_and_the_orientations():
 
 
 def test_tagged_polycrystal_says_so_when_it_has_no_geometric_locator():
+    """Verify tagged polycrystal says so when it has no geometric locator."""
     poly = TaggedPolycrystal(
         mesh=object(), cell_tags=object(), grain_ids=np.array([1]), gb_tag=[3, 4]
     )
@@ -134,6 +139,7 @@ def test_tagged_polycrystal_says_so_when_it_has_no_geometric_locator():
 
 
 def test_tagged_polycrystal_uses_the_locator_it_was_given():
+    """Verify tagged polycrystal uses the locator it was given."""
     poly = TaggedPolycrystal(
         mesh=object(),
         cell_tags=object(),

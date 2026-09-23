@@ -21,6 +21,7 @@ from festim_microstructure.meshing.diagnostics import area_change, overlay
 
 @pytest.mark.parametrize("voxel_ori", [False, True])
 def test_tesr_roundtrip(tmp_path, voxel_ori):
+    """Verify tesr roundtrip."""
     cells = np.array([[1, 1, 2], [1, 2, 2]])
     orientations = np.array([[0.0, 0.0, 0.0], [0.1, 0.2, 0.3]])
     voxel = orientations[cells - 1] if voxel_ori else None
@@ -41,6 +42,7 @@ def test_tesr_roundtrip(tmp_path, voxel_ori):
 
 
 def test_ctf_conversion_provenance_and_readback(tmp_path):
+    """Verify ctf conversion provenance and readback."""
     path = tmp_path / "map.ctf"
     header = (
         "Channel Text File\nXCells\t4\nYCells\t3\nXStep\t1\nYStep\t1\n"
@@ -72,6 +74,7 @@ def test_ctf_conversion_provenance_and_readback(tmp_path):
 
 
 def test_mesh_area_and_overlay_use_shared_readers(tmp_path):
+    """Verify mesh area and overlay use shared readers."""
     tesr = tmp_path / "map.tesr"
     write_tesr(
         tesr,

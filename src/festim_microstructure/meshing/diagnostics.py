@@ -46,6 +46,7 @@ class ChangeStats:
     area_weighted_mean: float | None = None
 
     def __bool__(self) -> bool:
+        """Return whether the change distribution contains any grains."""
         return self.n > 0
 
 
@@ -229,6 +230,14 @@ def area_change(tesr_path, msh4_path, allow_mismatch=False) -> AreaChange:
 
 
 def format_report(res: AreaChange):
+    """Format grain area, diameter, and displacement diagnostics.
+
+    Args:
+        res: Comparison of the raster cells with the final mesh faces.
+
+    Returns:
+        Report lines, including mapping warnings when faces do not match cells.
+    """
     lines = []
     if res.nface != res.ncell:
         lines.append(
@@ -290,6 +299,16 @@ def format_report(res: AreaChange):
 
 
 def write_csv(path, res: AreaChange, log=print):
+    """Write per-grain raster and mesh area changes to a CSV file.
+
+    Args:
+        path: Destination CSV path.
+        res: Comparable per-grain area results.
+        log: Optional callable for reporting the written path.
+
+    Returns:
+        The destination path.
+    """
     with open(path, "w") as fh:
         fh.write(
             "cell_id,n_voxels,area_raster,area_mesh,delta_area_pct,delta_ecd_pct\n"

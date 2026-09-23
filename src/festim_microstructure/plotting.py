@@ -32,6 +32,7 @@ def nice_length(width, fraction=0.25):
 
 
 def format_length(value, unit):
+    """Format a length with a compact value and display unit."""
     return f"{value:g} {'um' if unit in ('micron', 'microns') else unit}"
 
 

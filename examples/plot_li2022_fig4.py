@@ -64,6 +64,7 @@ def hashin_shtrikman(f, r):
 
 
 def draw_volumetric(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
+    """Plot volumetric Fig. 4 results and reference bounds."""
     fig, axes = plt.subplots(1, 2, figsize=(11, 7), layout="constrained")
     f = np.geomspace(f_lo, f_hi, 200) if logx else np.linspace(f_lo, f_hi, 200)
     style = {
@@ -116,6 +117,7 @@ def codim_parallel(f, r):
 
 
 def draw_codim(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
+    """Plot codimension-one Fig. 4 results and reference bounds."""
     fig, axes = plt.subplots(1, 2, figsize=(11, 7), layout="constrained")
     f = np.geomspace(f_lo, f_hi, 200) if logx else np.linspace(f_lo, f_hi, 200)
     style = {
@@ -183,6 +185,7 @@ def draw_codim(rows, fname, f_lo=0.002, f_hi=0.8, logx=True):
 
 
 def main():
+    """Read saved study results and regenerate the comparison plots."""
     datasets = (
         (RESULTS_DIR / "li2022_fig4" / "li2022-fig4.csv", draw_volumetric),
         (RESULTS_DIR / "li2022_fig4_codim" / "li2022-fig4-codim-thin.csv", draw_codim),

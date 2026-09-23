@@ -58,6 +58,7 @@ K_B = 8.617333e-5  # eV/K
 
 
 def D_m(T):
+    """Evaluate the Arrhenius lattice diffusivity at temperature ``T``."""
     return D0_M * np.exp(-E_M / (K_B * T))
 
 
@@ -72,6 +73,7 @@ def boundary_conditions(axis, length, tol):
 
 
 def make(structure, comm):
+    """Build the mesh and codimension-one model for a structure."""
     if structure == "iso":
         return fm.VoronoiMicrostructure.create(
             size=B,
@@ -202,6 +204,7 @@ def area_density(cp, micro):
 
 
 def run(cp, axis, S_v, ratio, f_gb) -> dict[str, float | str]:
+    """Solve one boundary transport case and return its metrics."""
     delta = f_gb / S_v
     k = 2.0 * cp.D_gb / delta
     cp.solve(delta, k)
@@ -305,6 +308,7 @@ def draw_fig4ab(iso, columns, f_gb):
 
 
 def draw(rows, fname, f_lo, f_hi, logx):
+    """Plot the codimension-one results against reference bounds."""
     fig, axes = plt.subplots(1, 2, figsize=(10, 6))
     f = np.geomspace(f_lo, f_hi, 200) if logx else np.linspace(f_lo, f_hi, 200)
     style = {
@@ -396,6 +400,7 @@ def write_csv(rows, fname):
 
 
 def main():
+    """Run the codimension-one Li et al. Fig. 4 study."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     mpl.use("Agg")
     comm = MPI.COMM_WORLD

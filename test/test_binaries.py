@@ -9,6 +9,7 @@ from festim_microstructure import _binaries as B
 
 
 def _fake(dirpath, name):
+    """Create an executable stub at the requested path."""
     p = dirpath / name
     p.write_text("#!/bin/sh\necho fake\n")
     p.chmod(p.stat().st_mode | stat.S_IXUSR)
@@ -16,6 +17,7 @@ def _fake(dirpath, name):
 
 
 def test_explicit_path_wins(tmp_path, monkeypatch):
+    """Verify explicit path wins."""
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     a = _fake(tmp_path / "a", "neper")
@@ -25,6 +27,7 @@ def test_explicit_path_wins(tmp_path, monkeypatch):
 
 
 def test_env_var_beats_path(tmp_path, monkeypatch):
+    """Verify env var beats path."""
     (tmp_path / "env").mkdir()
     (tmp_path / "path").mkdir()
     e = _fake(tmp_path / "env", "neper")
@@ -35,6 +38,7 @@ def test_env_var_beats_path(tmp_path, monkeypatch):
 
 
 def test_env_var_name_defaults_from_table(tmp_path, monkeypatch):
+    """Verify env var name defaults from table."""
     g = _fake(tmp_path, "gmsh")
     monkeypatch.setenv("PATH", "")
     monkeypatch.setenv("FM_GMSH_BIN", str(g))
@@ -42,6 +46,7 @@ def test_env_var_name_defaults_from_table(tmp_path, monkeypatch):
 
 
 def test_missing_required_raises_with_install_hint(tmp_path, monkeypatch):
+    """Verify missing required raises with install hint."""
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.delenv("FM_NEPER_BIN", raising=False)
     with pytest.raises(FileNotFoundError, match="environment-neper.yml"):  # noqa: RUF043
@@ -50,6 +55,7 @@ def test_missing_required_raises_with_install_hint(tmp_path, monkeypatch):
 
 
 def test_whitespace_in_path_is_rejected(tmp_path, monkeypatch):
+    """Verify whitespace in path is rejected."""
     d = tmp_path / "my envs"
     d.mkdir()
     n = _fake(d, "neper")
@@ -58,6 +64,7 @@ def test_whitespace_in_path_is_rejected(tmp_path, monkeypatch):
 
 
 def test_subprocess_env_prepends_unique_dirs(tmp_path):
+    """Verify subprocess env prepends unique dirs."""
     env = B.subprocess_env(
         str(tmp_path / "x" / "neper"),
         str(tmp_path / "x" / "gmsh"),
@@ -71,6 +78,7 @@ def test_subprocess_env_prepends_unique_dirs(tmp_path):
 
 
 def test_resolve_all_never_raises(tmp_path, monkeypatch):
+    """Verify resolve all never raises."""
     d = tmp_path / "bad dir"
     d.mkdir()
     monkeypatch.setenv("PATH", "")

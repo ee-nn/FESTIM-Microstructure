@@ -32,7 +32,10 @@ HEAVY = (
 
 
 class _Stub(types.ModuleType):
+    """Stand in for an unavailable solver or meshing module."""
+
     def __getattr__(self, name):
+        """Return a stub for an unavailable heavy dependency."""
         if name.startswith("__"):
             raise AttributeError(name)
         cls = type(name, (), {"__init__": lambda self, *a, **k: None})
@@ -41,6 +44,7 @@ class _Stub(types.ModuleType):
 
 @pytest.fixture(scope="module")
 def stubbed_heavy_deps():
+    """Temporarily stub unavailable solver imports for module-level tests."""
     if HAVE_FENICS:
         yield
         return

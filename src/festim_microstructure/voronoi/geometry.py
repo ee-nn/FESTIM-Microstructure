@@ -26,15 +26,20 @@ __all__ = [
 
 
 def _check_dim(dim):
+    """Require a supported spatial dimension of two or three."""
     if dim not in (2, 3):
         raise ValueError(f"dim must be 2 or 3, got {dim!r}")
 
 
 class _UnionFind:
+    """Track connected components using disjoint-set union."""
+
     def __init__(self):
+        """Initialize an empty parent map."""
         self._parent = {}
 
     def find(self, item):
+        """Return the representative of an item with path compression."""
         self._parent.setdefault(item, item)
         while self._parent[item] != item:
             self._parent[item] = self._parent[self._parent[item]]
@@ -42,16 +47,20 @@ class _UnionFind:
         return item
 
     def union(self, a, b):
+        """Merge the components containing two items."""
         self._parent[self.find(a)] = self.find(b)
 
     def add(self, item):
+        """Register an item in its own component if it is new."""
         self.find(item)
 
     def n_components(self, keys):
+        """Count distinct components represented by the given keys."""
         return len({self.find(key) for key in keys})
 
 
 def _quantise(point, scale):
+    """Round a point to integer coordinates at the given scale."""
     return tuple(np.round(np.asarray(point) / scale).astype(np.int64))
 
 
@@ -74,6 +83,7 @@ def _clip_segment_to_box(p, q, box):
 
 
 def _order_ring(poly, normal):
+    """Order coplanar polygon vertices around their center."""
     centre = poly.mean(axis=0)
     u = poly[0] - centre
     u /= np.linalg.norm(u)
@@ -83,6 +93,7 @@ def _order_ring(poly, normal):
 
 
 def _clip_polygon_to_box(poly, size):
+    """Clip a 3D polygon to the positive box of the given size."""
     planes = []
     for axis in range(3):
         normal = np.zeros(3)
@@ -115,6 +126,7 @@ def _clip_polygon_to_box(poly, size):
 
 
 def _polygon_area(poly):
+    """Compute the area of a planar polygon by center-based triangles."""
     centre = poly.mean(axis=0)
     return 0.5 * sum(
         float(
@@ -127,6 +139,7 @@ def _polygon_area(poly):
 
 
 def _face_edges(poly, scale):
+    """Yield quantized, direction-independent polygon edges."""
     for i in range(len(poly)):
         a = _quantise(poly[i], scale)
         b = _quantise(poly[(i + 1) % len(poly)], scale)
@@ -134,6 +147,7 @@ def _face_edges(poly, scale):
 
 
 def _network_scale(boundaries, size=None):
+    """Choose a coordinate tolerance relative to network extent."""
     if size is None:
         if not boundaries:
             return 1.0
@@ -159,6 +173,17 @@ def tessellate(n_seeds, size, rng, dim, aspect=1.0, min_boundary_measure=1e-8):
 
 
 def _tessellate_2d(n_seeds, size, rng, aspect):
+    """Construct periodic 2D Voronoi ridges clipped to the square.
+
+    Args:
+        n_seeds: Number of random seeds.
+        size: Side length of the output square.
+        rng: NumPy random generator.
+        aspect: Stretch factor applied to the seed pattern along x.
+
+    Returns:
+        Seed coordinates and clipped boundary endpoint pairs.
+    """
     box = np.array([size / aspect, size])
     raw = np.column_stack(
         [rng.uniform(0, box[0], n_seeds), rng.uniform(0, box[1], n_seeds)]
@@ -182,6 +207,17 @@ def _tessellate_2d(n_seeds, size, rng, aspect):
 
 
 def _tessellate_3d(n_seeds, size, rng, min_boundary_measure):
+    """Construct periodic 3D Voronoi faces clipped to the cube.
+
+    Args:
+        n_seeds: Number of random seeds.
+        size: Side length of the output cube.
+        rng: NumPy random generator.
+        min_boundary_measure: Minimum face area in the unit cube.
+
+    Returns:
+        Seed coordinates and clipped planar boundary polygons.
+    """
     # Work in a unit cube so clipping tolerances do not depend on physical scale.
     seeds = rng.uniform(0.0, 1.0, (n_seeds, 3))
     tiled = np.vstack(
@@ -227,6 +263,7 @@ def snap(boundaries, tol, size, dim):
 
 
 def _clamp_to_box(point, tol, size):
+    """Snap coordinates close to the box walls onto the walls."""
     point = point.copy()
     for axis in range(len(point)):
         if abs(point[axis]) < tol:
@@ -247,6 +284,7 @@ def near(points, boundaries, tol, dim):
 
 
 def _near_segments(points, boundaries, tol):
+    """Mark points closer than ``tol`` to any 2D segment."""
     p = np.asarray(points)[:2]
     hit = np.zeros(p.shape[1], dtype=bool)
     for a, b in boundaries:
@@ -258,6 +296,7 @@ def _near_segments(points, boundaries, tol):
 
 
 def _near_polygons(points, boundaries, tol):
+    """Mark points closer than ``tol`` to any 3D polygon."""
     points = np.asarray(points)
     hit = np.zeros(points.shape[1], dtype=bool)
     for poly in boundaries:

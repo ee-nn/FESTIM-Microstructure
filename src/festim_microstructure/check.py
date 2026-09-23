@@ -12,6 +12,7 @@ __all__ = ["main"]
 
 
 def _version(module):
+    """Return the installed version of an importable module, if available."""
     try:
         m = importlib.import_module(module)
     except Exception as e:
@@ -39,6 +40,7 @@ def _program_version(path, flag):
 
 
 def main(argv=None):
+    """Print dependency and executable availability for this installation."""
     ok = True
     print("python-side stack")
     for module in ("festim_microstructure", "numpy", "scipy", "matplotlib", "PIL"):

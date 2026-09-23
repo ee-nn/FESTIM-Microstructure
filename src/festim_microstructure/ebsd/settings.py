@@ -52,4 +52,5 @@ class Settings:
 
     @property
     def unit(self):
+        """Return the display unit implied by the spatial scale."""
         return "um" if np.isclose(self.scale, 1.0) else f"x{self.scale:g} um"

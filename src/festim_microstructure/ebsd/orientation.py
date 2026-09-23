@@ -49,6 +49,7 @@ def qmul(a, b):
 
 
 def qconj(q):
+    """Return the conjugate of each quaternion."""
     out = q.copy()
     out[..., 1:] *= -1.0
     return out

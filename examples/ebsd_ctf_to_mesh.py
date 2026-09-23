@@ -29,7 +29,9 @@ ebsd = fm.EbsdOptions(
     tesr=str(OUTPUT_DIR / "d7.tesr"),
     unit=1e-6,
     theta_min=10.0,
-    mesh=fm.TesrMeshOptions(rcl=0.25, mesh_qual_min=0.7),
+    mesh=fm.TesrMeshOptions(
+        rcl=0.25, mesh_qual_min=0.7, tesr_smooth_fact=0.25, tesr_smooth_iter=5
+    ),
 )
 base = fm.meshing.ebsd.run_ebsd_pipeline(ebsd, workdir=OUTPUT_DIR, force=True)
 mesh, cell_tags, facet_tags = fm.formats.msh4.read_mesh(base, gdim=2)

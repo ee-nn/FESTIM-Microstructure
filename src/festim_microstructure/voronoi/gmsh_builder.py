@@ -140,6 +140,7 @@ def _build_mesh_2d(segments, size, sizing, comm=None, msh_path=None):
     def point(xy):
         # one gmsh point per ridge endpoint, so that segments meeting at a
         # junction share it and fragment has nothing to reconcile
+        """Reuse one Gmsh point for each rounded ridge endpoint."""
         key = tuple(np.round(xy / size, 9))
         if key not in points:
             points[key] = occ.addPoint(key[0], key[1], 0)

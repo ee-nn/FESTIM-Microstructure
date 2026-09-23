@@ -108,6 +108,7 @@ class VoronoiMicrostructure:
 
     @property
     def n_grains(self):
+        """Number of tagged grains in this Voronoi mesh."""
         return len(self.grain_ids)
 
     @property
@@ -117,6 +118,7 @@ class VoronoiMicrostructure:
 
     @property
     def tolerance(self):
+        """Distance used to locate the geometric boundary network."""
         return 0.05 * self.h_gb
 
     @property
@@ -125,6 +127,7 @@ class VoronoiMicrostructure:
         return network_measure(self.boundaries, self.dim)
 
     def locator(self, points):
+        """Mark points lying near a Voronoi boundary."""
         return near(points, self.boundaries, self.tolerance, self.dim)
 
     def misorientation(self, grain_a, grain_b):
@@ -154,6 +157,7 @@ class VoronoiMicrostructure:
         return fractions[fractions > factor / self.n_seeds]
 
     def report(self):
+        """Summarize grain sizes, boundary geometry, and topology."""
         measure = self.network_measure
         tensor = network_tensor(self.boundaries, self.dim)
         eigenvalues, eigenvectors = np.linalg.eigh(tensor)

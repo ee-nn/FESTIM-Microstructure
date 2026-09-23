@@ -11,6 +11,7 @@ import pytest
 
 @pytest.fixture
 def network(stubbed_heavy_deps):
+    """Import the grain-boundary network with optional dependencies stubbed."""
     from festim_microstructure.fem.subdomains import GrainBoundaryNetwork
 
     return GrainBoundaryNetwork
@@ -24,6 +25,7 @@ def tags(values):
 
 
 def test_a_locator_and_facet_tags_are_alternatives_not_a_pair(network):
+    """Verify a locator and facet tags are alternatives not a pair."""
     with pytest.raises(TypeError, match="both"):
         network(
             1,
@@ -36,11 +38,13 @@ def test_a_locator_and_facet_tags_are_alternatives_not_a_pair(network):
 
 
 def test_a_network_has_to_be_located_somehow(network):
+    """Verify a network has to be located somehow."""
     with pytest.raises(TypeError, match="neither"):
         network(1, object(), 1)
 
 
 def test_facet_tags_without_ids_name_no_boundaries(network):
+    """Verify facet tags without ids name no boundaries."""
     with pytest.raises(TypeError, match="entity_ids"):
         network(1, object(), 1, facet_tags=tags([1, 2]))
 

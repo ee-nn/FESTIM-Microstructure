@@ -55,10 +55,18 @@ class Grain(F.VolumeSubdomain):
     """One grain, located from its Gmsh cell tag."""
 
     def __init__(self, id, material, cell_tags):
+        """Initialize a grain with its material and parent cell tags.
+
+        Args:
+            id: Grain ID matching a parent cell tag.
+            material: FESTIM material assigned to this grain.
+            cell_tags: Parent mesh cell tags containing the grain IDs.
+        """
         super().__init__(id=id, material=material)
         self.cell_tags = cell_tags
 
     def locate_subdomain_entities(self, mesh):
+        """Return the parent mesh cells tagged with this grain ID."""
         return self.cell_tags.find(self.id).astype(np.int32)
 
 
@@ -109,6 +117,19 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
         drop_exterior=None,
         diffusivity_by_entity=None,
     ):
+        """Configure tagged or geometric location of one boundary network.
+
+        Args:
+            id: FESTIM subdomain ID.
+            material: Network material; may be ``None`` when diffusivity is
+                supplied by tessellation entity.
+            dim: Dimension of the boundary subdomain.
+            facet_tags: Parent facet tags for the tagged route.
+            entity_ids: Tagged boundary IDs to retain.
+            locator: Pointwise predicate for the geometric route.
+            drop_exterior: Whether to exclude facets on the specimen surface.
+            diffusivity_by_entity: Diffusivities in one-based entity ID order.
+        """
         super().__init__(id=id, material=material, dim=dim)
         tagged = facet_tags is not None
         if diffusivity_by_entity is not None and not tagged:
@@ -153,6 +174,14 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
         self.entity_ids_of_facets = None
 
     def locate_subdomain_entities(self, mesh):
+        """Locate network facets and optionally remove exterior facets.
+
+        Args:
+            mesh: Parent DOLFINx mesh whose facets are selected.
+
+        Returns:
+            Local facet indices retained for the network submesh.
+        """
         facets, ids = (
             self._from_tags()
             if self.facet_tags is not None
@@ -168,6 +197,12 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
         return self.located_facets
 
     def create_subdomain(self, mesh, marker):
+        """Create the manifold submesh and its per-entity diffusivity field.
+
+        Args:
+            mesh: Parent DOLFINx mesh.
+            marker: FESTIM marker passed to the parent implementation.
+        """
         super().create_subdomain(mesh, marker)
         if self.diffusivity_by_entity is not None:
             self.material = F.Material(
@@ -211,6 +246,7 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
         return field
 
     def _from_tags(self):
+        """Select facets whose entity tags belong to this network."""
         assert self.facet_tags is not None
         assert self.entity_ids is not None
         keep = np.isin(self.facet_tags.values, self.entity_ids)
@@ -219,6 +255,7 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
         )
 
     def _from_locator(self, mesh):
+        """Select facets whose midpoints satisfy the network locator."""
         assert self.network_locator is not None
         tdim = mesh.topology.dim
         candidates = dolfinx.mesh.locate_entities(mesh, tdim - 1, self.network_locator)
@@ -231,6 +268,7 @@ class GrainSurface(F.SurfaceSubdomain):
     """The part of an outer surface belonging to one grain."""
 
     def __init__(self, id, grain_id, cell_tags, locator):
+        """Initialize a surface patch attached to one grain."""
         super().__init__(id=id, locator=locator)
         self.grain_id = grain_id
         self.cell_tags = cell_tags
@@ -238,6 +276,7 @@ class GrainSurface(F.SurfaceSubdomain):
 
     def locate_boundary_facet_indices(self, mesh):
         # FESTIM locates each patch twice; cache by mesh identity.
+        """Return cached exterior facets belonging to this grain patch."""
         key = id(mesh)
         if key in self._cache:
             return self._cache[key]
@@ -245,6 +284,7 @@ class GrainSurface(F.SurfaceSubdomain):
         return self._cache[key]
 
     def _locate(self, mesh):
+        """Find exterior facets whose adjacent cell has this grain ID."""
         tdim = mesh.topology.dim
         mesh.topology.create_connectivity(tdim - 1, tdim)
         facet_to_cell = mesh.topology.connectivity(tdim - 1, tdim)

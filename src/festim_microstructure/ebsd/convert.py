@@ -110,6 +110,14 @@ class MeasureOptions:
     csv: str | None = None
 
     def resolve(self, ctf_path) -> Settings:
+        """Choose settings from provenance, explicit options, or the CTF path.
+
+        Args:
+            ctf_path: Source CTF path used when no other settings were supplied.
+
+        Returns:
+            The settings used for conversion.
+        """
         if self.provenance is not None:
             return settings_from_provenance(self.provenance)
         return self.settings or Settings(ctf=str(ctf_path))
@@ -146,6 +154,12 @@ class CtfConversion:
     """
 
     def __init__(self, settings: Settings, log=print):
+        """Initialize conversion state and cubic symmetry operators.
+
+        Args:
+            settings: EBSD input, filtering, and output settings.
+            log: Callable receiving progress messages; ``None`` silences them.
+        """
         self.settings = settings
         self.log = log or (lambda *a, **k: None)
         self.sym = cubic_symmetry_quaternions()
@@ -410,10 +424,12 @@ class CtfConversion:
 
     @property
     def extent(self):
+        """Return the raster width and height in its TESR units."""
         ny, nx = self.shape
         return nx * self.vox[0], ny * self.vox[1]
 
     def result(self) -> ConversionResult:
+        """Collect conversion artifacts and diagnostics into a result object."""
         return ConversionResult(
             tesr=self.tesr_path,
             provenance=self.provenance_path,
@@ -432,11 +448,20 @@ class CtfConversion:
         )
 
     def run(self, output=None) -> ConversionResult:
+        """Execute all conversion stages and collect their outputs.
+
+        Args:
+            output: Optional TESR output path; defaults to the CTF stem.
+
+        Returns:
+            Paths, grain data, and segmentation diagnostics.
+        """
         self.read().segment().clean().orient().measure().write(output).diagnose()
         self._summarise()
         return self.result()
 
     def _summarise(self):
+        """Log the output size, grain scale, and diagnostic hints."""
         opt, log = self.settings, self.log
         lx, ly = self.extent
         grain_size = np.sqrt(self.npx.mean()) * self.vox[0]

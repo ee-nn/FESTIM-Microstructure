@@ -170,6 +170,7 @@ class TaggedPolycrystal:
     name: str = "tagged mesh"
 
     def __post_init__(self):
+        """Populate grain IDs and orientation slots from the mesh when omitted."""
         if self.grain_ids is None:
             self.grain_ids = _global_tag_values(self.mesh, self.cell_tags)
         self.grain_ids = np.asarray(self.grain_ids, dtype=np.int32)
@@ -180,9 +181,11 @@ class TaggedPolycrystal:
 
     @property
     def n_grains(self) -> int:
+        """Number of tagged grains in the mesh."""
         return len(self.grain_ids)
 
     def locator(self, points: np.ndarray) -> np.ndarray:
+        """Classify points using the configured geometric network locator."""
         if self.network_locator is None:
             raise TypeError(
                 f"{type(self).__name__} {self.name!r} was built without a "
@@ -192,6 +195,7 @@ class TaggedPolycrystal:
         return self.network_locator(points)
 
     def report(self) -> str:
+        """Summarize the grain count and network location method."""
         where = "facet tags" if self.facet_tags is not None else "geometric"
         return "\n".join(
             [

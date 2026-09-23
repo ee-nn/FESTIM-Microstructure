@@ -58,11 +58,13 @@ def test_lazy_exports_have_matching_static_declarations(package):
 
 
 def test_installed_package_declares_inline_types():
+    """Verify installed package declares inline types."""
     assert (SRC / "py.typed").is_file()
 
 
 @pytest.mark.parametrize("package", PACKAGES)
 def test_every_advertised_name_resolves(stubbed_heavy_deps, package):
+    """Verify every advertised name resolves."""
     module = importlib.import_module(package)
     unresolved = []
     for name in module.__all__:
@@ -75,12 +77,14 @@ def test_every_advertised_name_resolves(stubbed_heavy_deps, package):
 
 @pytest.mark.parametrize("package", PACKAGES)
 def test_dir_advertises_exactly_all(stubbed_heavy_deps, package):
+    """Verify dir advertises exactly all."""
     module = importlib.import_module(package)
     assert dir(module) == sorted(module.__all__)
 
 
 @pytest.mark.parametrize("package", PACKAGES)
 def test_unknown_attributes_raise_attribute_error(package):
+    """Verify unknown attributes raise attribute error."""
     module = importlib.import_module(package)
     with pytest.raises(AttributeError, match="no attribute"):
         module.definitely_not_a_real_name
@@ -111,6 +115,7 @@ def test_importing_the_package_pulls_in_nothing_heavy():
 
 
 def test_touching_a_pure_name_does_not_import_fenics():
+    """Verify touching a pure name does not import fenics."""
     probe = (
         "import sys, festim_microstructure as fm; fm.VoronoiMicrostructure; "
         "print('dolfinx' in sys.modules or 'festim' in sys.modules)"
@@ -150,6 +155,7 @@ def test_top_level_modules_carry_no_fenics_dependency(path):
 
 
 def test_fem_is_where_the_fenics_glue_lives():
+    """Verify fem is where the fenics glue lives."""
     fem = SRC / "fem"
     assert fem.is_dir()
     heavy = {

@@ -96,6 +96,7 @@ def grain_network_problem(micro, D_bulk, D_gb, delta, k_exchange, bcs, settings)
 
 @pytest.fixture(scope="module")
 def micro():
+    """Build a small Voronoi mesh shared by transport tests."""
     from festim_microstructure.voronoi import VoronoiMicrostructure
 
     return VoronoiMicrostructure.create(
@@ -105,6 +106,7 @@ def micro():
 
 @pytest.mark.fenics
 def test_fast_boundaries_increase_inventory(micro):
+    """Verify fast boundaries increase inventory."""
     import festim as F
 
     from festim_microstructure.exports.averages import inventory
@@ -114,6 +116,7 @@ def test_fast_boundaries_increase_inventory(micro):
     bcs = [(lambda x: np.isclose(x[1], micro.size), 1.0)]
 
     def uptake(D_gb):
+        """Solve transient uptake for a specified boundary diffusivity."""
         settings = F.Settings(
             atol=1e-25, rtol=1e-10, transient=True, final_time=0.2, stepsize=0.02
         )
@@ -168,6 +171,7 @@ def test_cell_problem_flux_and_local_equilibrium(micro):
 
 @pytest.mark.fenics
 def test_geometric_network_covers_all_grain_boundaries():
+    """Verify geometric network covers all grain boundaries."""
     from festim_microstructure.fem.subdomains import facet_midpoints
     from festim_microstructure.voronoi import (
         MeshSizing,
@@ -184,6 +188,7 @@ def test_geometric_network_covers_all_grain_boundaries():
     mesh, cell_tags = mesh_data.mesh, mesh_data.cell_tags
 
     def locator(x):
+        """Mark points close to the Voronoi grain-boundary network."""
         return near(x, boundaries, 0.05 * h_gb, dim=2)
 
     tdim = mesh.topology.dim

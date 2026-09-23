@@ -51,6 +51,14 @@ UNIT_NAMES = {1e-9: "nm", 1e-6: "um", 1e-3: "mm", 1.0: "m"}
 
 
 def unit_name(unit):
+    """Return a display label for a metres-per-TESR-unit scale.
+
+    Args:
+        unit: Number of metres represented by one TESR coordinate unit.
+
+    Returns:
+        A recognized metric unit, or ``"tesr units"`` for another scale.
+    """
     return UNIT_NAMES.get(unit, "tesr units")
 
 
@@ -70,6 +78,7 @@ class EbsdOptions:
     check_images: bool = True
 
     def __post_init__(self):
+        """Supply default TESR meshing options when none were provided."""
         if self.mesh is None:
             self.mesh = TesrMeshOptions()
 
@@ -180,6 +189,7 @@ def _ids(mask):
 
 
 def _allreduce(comm, arr, op):
+    """Reduce an array over MPI ranks into a new array."""
     out = np.empty_like(arr)
     comm.Allreduce(np.ascontiguousarray(arr), out, op=op)
     return out
@@ -189,10 +199,12 @@ class EdgeTable:
     """Per-edge scalars in id order: ``values[k]`` belongs to edge ``k + 1``."""
 
     def __init__(self, values):
+        """Store per-edge columns and their common row count."""
         self.values = values
         self.n = len(next(iter(values.values())))
 
     def __getitem__(self, key):
+        """Return the per-edge column named by ``key``."""
         return self.values[key]
 
 
@@ -374,10 +386,12 @@ class EbsdMicrostructure:
 
     @property
     def interior_mask(self):
+        """Mark edges shared by two grains rather than the exterior."""
         return self.edges["domtype"] < 0
 
     @property
     def network_mask(self):
+        """Mark interior edges above the disorientation threshold."""
         return self.interior_mask & (self.edges["theta"] > self.theta_min)
 
     @property
@@ -441,6 +455,7 @@ class EbsdMicrostructure:
         return self.n_grains
 
     def report(self):
+        """Summarize the EBSD mesh geometry and selected boundary network."""
         kept, total = int(self.network_mask.sum()), int(self.interior_mask.sum())
         theta = self.edges["theta"][self.network_mask]
         lx, ly = self.extent

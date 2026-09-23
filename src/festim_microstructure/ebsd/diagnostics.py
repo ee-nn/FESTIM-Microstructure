@@ -70,6 +70,7 @@ class L2Stats:
     frac_over: float | None = None
 
     def __bool__(self) -> bool:
+        """Return whether this error distribution has sampled pixels."""
         return self.n > 0
 
 
@@ -180,6 +181,7 @@ def segmentation_error(
 
 
 def format_report(res: SegmentationError, label="segmentation"):
+    """Format segmentation and readback error statistics."""
     lines = []
     a = res.indexed
     if not a:
@@ -306,6 +308,7 @@ def write_png(path, res: SegmentationError, cellids, unit="um", dpi=150, log=pri
 
 
 def write_csv(path, res: SegmentationError, log=print):
+    """Write the per-grain segmentation error table."""
     rms, cnt = res.grain_rms, res.grain_npx
     with open(path, "w") as fh:
         fh.write("cell_id,n_voxels,rms_theta_deg\n")
@@ -556,6 +559,7 @@ def write_quality_png(path, panels: QualityPanels, log=print):
     from matplotlib.colors import ListedColormap
 
     def orient(a):
+        """Restore CTF row order when the output raster was flipped."""
         return a[::-1] if flip_y else a
 
     ny, nx = ok.shape

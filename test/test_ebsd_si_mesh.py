@@ -10,6 +10,7 @@ from conftest import requires_fenics
 
 @requires_fenics
 def test_pipeline_exports_si_mesh(tmp_path, monkeypatch):
+    """Verify pipeline exports si mesh."""
     import gmsh
 
     from festim_microstructure.formats.msh4 import read_mesh
@@ -35,6 +36,7 @@ def test_pipeline_exports_si_mesh(tmp_path, monkeypatch):
     np.savetxt(str(raw) + "-grainori.txt", [[0.1, 0.2, 0.3]])
 
     def mesh_tesr(tesr, options):
+        """Return the prepared raster-unit mesh without invoking Neper."""
         assert options.base == raw
         return raw
 
