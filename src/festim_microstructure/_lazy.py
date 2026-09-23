@@ -1,9 +1,9 @@
 """PEP 562 lazy attribute access for the package ``__init__`` modules.
 
 The package has a split personality: ``voronoi.geometry`` and the
-whole EBSD converter are pure NumPy/SciPy, while ``model``, ``fem`` and
+whole EBSD converter are pure NumPy/SciPy, while ``materials``, ``fem`` and
 ``meshing.ebsd`` need DOLFINx and FESTIM. A top-level namespace built
-the usual way -- ``from .model import build`` in ``__init__.py`` --
+the usual way -- ``from .fem.subdomains import Grain`` in ``__init__.py`` --
 would drag FEniCS into ``import festim_microstructure``, so a user who only
 wants to convert an EBSD map could not import the package at all without it.
 
@@ -40,7 +40,7 @@ def lazy_namespace(
             a bare ``import festim_microstructure``, which plain ``__all__``
             entries never did.
         names: attribute name -> the relative module that defines it, e.g.
-            ``{"build": ".model"}``.
+            ``{"Grain": ".fem.subdomains"}``.
         eager: names the caller has already bound itself (``__version__``), so
             they belong in ``__all__`` but must not be looked up lazily.
 

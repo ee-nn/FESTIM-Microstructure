@@ -1,108 +1,12 @@
-"""Reproduce Li et al. (2022), Front. Mater. 9:935129, Fig. 4: the effective diffusion
-coefficient of H in polycrystalline W with a *volumetric* grain-boundary
-phase, on Voronoi microstructures.
+"""Reproduce Li et al. (2022), Front. Mater. 9:935129, Fig. 4 (A, B, E, H).
 
-Their model (Sect. 2.2, Eqs. 16-17, 34) is the steady diffusion equation with
-a piecewise-constant diffusivity: D_m in the grains, D_GB in a grain-boundary
-band of finite width, one continuous concentration field, no trapping and no
-interface kinetics. The effective diffusivity is the ratio of the average flux
-to the average gradient (Eq. 21). In FESTIM that is a HydrogenTransportProblem
-with two volume subdomains carrying two materials, solved with
-transient=False. This file reproduces their Fig. 4 panels A, B (the two
-microstructures, drawn as isometric cubes) and E, H (D_eff/D_m against
-grain-boundary density for D_GB/D_m = 10 and 0.1).
+Solve steady diffusion through Voronoi grains and finite-width grain-boundary
+bands using FESTIM. Compare equiaxed and columnar microstructures for
+D_GB/D_m = 10 and 0.1, sweeping band width to vary the GB volume fraction.
+Extract effective diffusivity from the outlet flux and compare with Hart and
+Hashin-Shtrikman bounds. All simulation quantities use SI units.
 
-WHY THE BOUNDARY IS A VOLUME AND NOT A MANIFOLD
------------------------------------------------
-Panels G and H put D_eff/D_m well below 1 and falling with boundary density.
-A codim-1 (zero-thickness) boundary cannot do that: it adds conductance in
-parallel with the lattice and removes no lattice volume, so at D_GB/D_m = 0.1
-it would give Col_I(Z) = 1 + 0.1 f, not the 1 - 0.9 f of their Hart line
-(Eq. 28), which is exact for phases in parallel. The reduction is a volumetric
-effect of a slow band occupying 30-70 % of the volume. The boundary here is
-therefore a band of width w around every Voronoi face, assigned D_GB, on a
-structured voxel mesh whose cells are classified by their midpoint's distance
-to the nearest face. For D_GB/D_m > 1 a codim-1 network on the same Voronoi
-skeleton is the w -> 0 limit of this and would agree with panels D and E.
-
-THE MICROSTRUCTURES
--------------------
-  "iso":  a 3D Voronoi foam from seeds placed uniformly at random within the
-          cells of a cubic lattice (stratified: a narrower size distribution
-          than Poisson seeds, like phase-field grain growth), periodic through
-          seed images, in a cube of side B. Their Fig. 4A. The jitter must be
-          the full half-cell: with less, the Voronoi faces stay near the
-          lattice mid-planes, which are also the box faces, and those faces
-          (the no-flux sides and the rendered ones) carry far more band than
-          the volume fraction -- 47 % against 28 % at a quarter-cell jitter.
-          At the full half-cell the face fractions match the volume fraction,
-          as Delesse's principle requires of a representative section.
-  "col":  a 2D Voronoi tessellation in the x-y plane from a jittered square
-          lattice, extruded along z into prismatic columns. Their Fig. 4B.
-          Col_I(Z) is the flux along the columns, where the phases are in
-          parallel and Hart's Eq. 28 is exact whatever the cross-section --
-          it is solved on a two-cell-thick slab and serves as the code check.
-          Col_I(X) is the flux across the columns, a 2D problem.
-
-The box is their 96 nm cube on their 1 nm grid (Sect. 2.3), with about six
-grains per edge as in their Fig. 4A and five columns per edge as in Fig. 4B.
-The Dirichlet faces carry the paper's 0.4 and 0.1 (here in m^-3 x 1e24) and
-the lateral faces are no-flux, as a representative volume; the Voronoi is
-periodic, the lateral condition is not, and 216 grains are enough for the
-edge to be forgotten.
-
-HOW THICK THE BANDS ARE
------------------------
-The band-to-grain ratio is fixed by the volume fraction: f_GB ~ S_v w with
-S_v ~ 2.8/g for a 3D foam and 2.0/g for columns (g the seed spacing), so
-f_GB = 0.3 means w/g ~ 0.11 and f_GB = 0.5 means w/g ~ 0.18. Their Fig. 4A
-shows bands ~0.12-0.15 of the grain size, i.e. f_GB ~ 0.35-0.4, and the
-same ratio here looks thin only when the box holds as many grains as theirs.
-The renders (panels A-B) carry nm axes so the sizes can be read off; the
-band drawn is the one of index RENDER_INDEX in the sweep, with its f_GB in
-the title. Their blue is the diffuse phase-field interface (a 4 nm tanh
-profile, green halo included); the sharp band here is the eta <= 0.9 phase
-that their diffusion calculation actually uses.
-
-THE X-AXIS, AND THE nm^-1
--------------------------
-Their "grain boundary density" is the boundary area per unit volume, S_v,
-which has units of 1/length, and in their phase-field grid the boundary band
-(eta <= 0.9) is one grid spacing wide, dx = 1 nm. The band's volume fraction
-is f_GB = S_v x dx, so the number on their axis IS the volume fraction when
-dx = 1 nm. Check: their HS curve (Eq. 33) at "0.3 nm^-1" with D_GB/D_m = 100
-reads ~23, and Eq. 33 with f_GB = 0.3 gives 23.1. D_eff/D_m depends on the
-morphology only through f_GB (the problem is scale-free), so this file keeps
-the seeds fixed and sweeps the band width w, which is the same family of
-structures as sweeping the grain size at fixed w = 1 nm. The measured f_GB is
-plotted; S_v = f_GB/w is reported alongside.
-
-DIMENSIONS
-----------
-Everything is SI. D_m = 5.13e-8 exp(-0.21 eV/kT) m^2/s is the bulk value
-they cite (Liu et al. 2014, Sect. 2.3); the band carries the same activation
-energy scaled by the ratio, so D_GB/D_m is temperature-independent as in
-their sweep. T = 1073 K (their Sect. 3.4) affects nothing plotted.
-
-Coordinates are of order 1e-9 m. Every locator therefore uses an explicit
-tolerance scaled to the mesh: numpy's isclose default atol = 1e-8 is larger
-than the whole domain and marks every boundary point as "on the inlet".
-
-MESH, SOLVER AND EXTRACTION
----------------------------
-Structured tetrahedral meshes, N cells per side; each cell is grain or band
-by its midpoint. D_eff is taken from the outlet flux, J_out L/(A dC), and
-cross-checked against the volume average of their Eq. 21 and the inlet flux.
-The 3D foam has ~5e6 tetrahedra and ~9e5 unknowns at their resolution and is
-solved with CG + GAMG (PETSC_OPTIONS_3D); the 2D and slab problems use
-FESTIM's default direct solver. ISO_N can be lowered for a quick look, but
-below ~64 the thinnest band is under two cells wide.
-
-OUTPUTS
--------
-li2022-fig4ab.png   isometric cubes of the two microstructures, panels A-B
-li2022-fig4.png     D_eff/D_m against f_GB for the two ratios, panels E,H,
-                    with Hart (Eq. 28) and HS (Eq. 33)
+Outputs: li2022-fig4ab.png (microstructures) and li2022-fig4.png (diffusivity).
 """
 
 import csv

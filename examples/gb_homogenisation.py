@@ -2,6 +2,12 @@
 
 Whole-cell Taylor estimates are upper bounds; interior-window estimates reduce
 boundary clamping. A large grain/GB mismatch means no single-field ``D_eff``.
+
+The cell problem is FESTIM's ``HydrogenTransportProblemDiscontinuous``, declared
+in :func:`cell_problem` the way FESTIM's manifold documentation shows; this
+package supplies the tagged grains, the network, the per-grain surface patches,
+the lattice tensor field and the averages. ``gb_validation.py`` and
+``gb_figures.py`` import that declaration rather than repeat it.
 """
 
 import argparse
@@ -9,13 +15,205 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import dolfinx
+import festim as F
 import numpy as np
 
 import festim_microstructure as fm
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
-__all__ = ["Identification", "hart_bound", "identify", "make_microstructure"]
+__all__ = [
+    "ATOL",
+    "RTOL",
+    "CellProblem",
+    "Identification",
+    "Transport",
+    "cell_averages",
+    "cell_inventory",
+    "cell_problem",
+    "hart_bound",
+    "identify",
+    "make_microstructure",
+]
+
+NETWORK_ID = 1_000_000  # above every grain id; a manifold shares the surface ids
+SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
+
+# The problem is unscaled (D ~ 1e-11 m2/s, cell area ~ 1e-11 m2), so the Newton
+# residual of a converged step is itself ~1e-12 and FESTIM's default atol stalls
+# silently; see docs/gb_homogenisation.md. Nondimensionalising is the better fix.
+ATOL = 1e-25
+RTOL = 1e-10
+
+
+@dataclass(frozen=True)
+class Transport:
+    """The coefficients of one run, evaluated at its temperature.
+
+    FESTIM would evaluate an Arrhenius law itself from
+    ``Material(D_0=..., E_D=...)``, but the numbers are needed here anyway: the
+    lattice tensor field is built from ``D_bulk`` and the network flux
+    ``delta * D_gb * grad(c_gb)`` is summed into every average.
+    """
+
+    T: float  # K
+    D_bulk: float  # m2/s, the (isotropic) lattice diffusivity
+    D_gb: float  # m2/s, the boundary diffusivity
+    delta: float  # m, boundary width
+    k: float  # m/s, grain <-> boundary transfer coefficient
+    crystal_anisotropy: float = 1.0  # set by the lattice; 1 for cubic metals
+
+    @classmethod
+    def tungsten(cls, T=500.0, k=3.0, crystal_anisotropy=1.0):
+        """Tungsten-like, GB-dominated: lattice ``D_0 = 1.9e-7 m2/s``,
+        ``E_D = 0.39 eV``; boundaries ``D_0 = 2.85e-7`` (1.5x, a 2D against a
+        3D random walk), ``E_D = 0.12 eV``; ``delta = 1 nm``."""
+        return cls(
+            T=T,
+            D_bulk=1.9e-7 * np.exp(-0.39 / (F.k_B * T)),
+            D_gb=2.85e-7 * np.exp(-0.12 / (F.k_B * T)),
+            delta=1e-9,
+            k=k,
+            crystal_anisotropy=crystal_anisotropy,
+        )
+
+    @property
+    def contrast(self):
+        return self.D_gb / self.D_bulk
+
+    def report(self, grain_size=None):
+        length = fm.materials.equilibration_length(self.delta, self.D_gb, self.k)
+        lines = [
+            f"transport at T = {self.T:g} K",
+            f"  D_bulk (orientation average)   : {self.D_bulk:.3e} m2/s",
+            f"  D_gb                           : {self.D_gb:.3e} m2/s",
+            f"  D_gb / D_bulk                  : {self.contrast:.4g}",
+            f"  crystal anisotropy             : {self.crystal_anisotropy:g}",
+            f"  boundary width, delta          : {1e9 * self.delta:g} nm",
+            f"  exchange rate, k               : {self.k:.3e} m/s",
+            f"  equilibration length           : {1e9 * length:.3g} nm",
+        ]
+        if grain_size is not None:
+            ratio = fm.materials.interface_resistance_ratio(
+                self.k, grain_size, self.D_bulk
+            )
+            lines.append(f"  interface / lattice resistance : {ratio:.3e}")
+        return "\n".join(lines)
+
+
+@dataclass
+class CellProblem:
+    """A declared cell problem and the handles its post-processing reads."""
+
+    model: F.HydrogenTransportProblemDiscontinuous
+    micro: fm.VoronoiMicrostructure
+    transport: Transport
+    grains: list
+    species: list  # one per grain, aligned
+    tensors: dict  # grain id -> lattice tensor
+    network: fm.GrainBoundaryNetwork
+    c_gb: F.Species
+
+    def solve(self):
+        self.model.initialise()
+        fm.fem.solvers.tune_direct_solver(self.model)  # MUMPS workspace
+        self.model.run()
+        return self
+
+
+def cell_problem(micro, transport, bcs, settings=None):
+    """Declare the grain/network problem for ``micro`` under ``bcs``.
+
+    ``bcs`` is a list of ``(locator, value)`` pairs; each is applied to every
+    grain touching that surface and to the network's mouths on it. Every grain
+    is a ``VolumeSubdomain`` with a ``Species`` of its own, the network is one
+    codim-1 subdomain with one species, and each grain exchanges
+    ``k (c_grain - c_gb)`` with the boundary slab: a ``ParticleFluxBC`` on the
+    grain and, since the network equation is written per unit slab width, a
+    ``ParticleSource`` of ``k / delta`` times the same jump on the network.
+    Steady by default; pass ``settings`` for a transient.
+    """
+    mesh = micro.mesh
+    D_lattice, tensors = fm.materials.crystal_diffusivity_field(
+        micro, transport.D_bulk, transport.crystal_anisotropy
+    )
+    grains = fm.fem.subdomains.grain_subdomains(micro, F.Material(D=D_lattice))
+    network = fm.fem.subdomains.grain_boundary_network(
+        NETWORK_ID, micro, F.Material(D_0=transport.D_gb, E_D=0.0)
+    )
+    grain_species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
+    c_gb = F.Species("c_gb", subdomains=[network])
+    species_of = dict(zip((g.id for g in grains), grain_species, strict=True))
+
+    k = dolfinx.fem.Constant(mesh, transport.k)
+    width = dolfinx.fem.Constant(mesh, transport.delta)
+    sources, boundary_conditions = [], []
+    for c_grain in grain_species:
+        exchange = {"c_g": c_grain, "c_n": c_gb}
+        sources.append(
+            F.ParticleSource(
+                value=lambda c_g, c_n: (k / width) * (c_g - c_n),
+                species=c_gb,
+                volume=network,
+                species_dependent_value=exchange,
+            )
+        )
+        boundary_conditions.append(
+            F.ParticleFluxBC(
+                subdomain=network,
+                species=c_grain,
+                value=lambda c_g, c_n: k * (c_n - c_g),
+                species_dependent_value=exchange,
+            )
+        )
+
+    subdomains = [*grains, network]
+    next_id = SURFACE_ID_0
+    for locator, value in bcs:
+        patches, mouths = fm.fem.subdomains.grain_surfaces(
+            mesh, grains, locator, next_id
+        )
+        next_id = mouths.id + 1
+        subdomains += [*patches, mouths]
+        boundary_conditions += [
+            F.FixedConcentrationBC(
+                subdomain=p, value=value, species=species_of[p.grain_id]
+            )
+            for p in patches
+        ]
+        boundary_conditions.append(
+            F.FixedConcentrationBC(subdomain=mouths, value=value, species=c_gb)
+        )
+
+    model = F.HydrogenTransportProblemDiscontinuous(
+        mesh=F.Mesh(mesh),
+        subdomains=subdomains,
+        species=[*grain_species, c_gb],
+        sources=sources,
+        boundary_conditions=boundary_conditions,
+        temperature=transport.T,
+        settings=settings or F.Settings(atol=ATOL, rtol=RTOL, transient=False),
+    )
+    model.show_progress_bar = False
+    return CellProblem(
+        model, micro, transport, grains, grain_species, tensors, network, c_gb
+    )
+
+
+def cell_averages(cp, window=None):
+    """``(flux, gradient, measure)`` of a solved cell problem; see
+    :func:`festim_microstructure.exports.averages.averages`."""
+    t = cp.transport
+    return fm.exports.averages.averages(
+        cp.grains, cp.species, cp.tensors, cp.network, cp.c_gb, t.delta, t.D_gb, window
+    )
+
+
+def cell_inventory(cp, window=None):
+    return fm.exports.averages.inventory(
+        cp.grains, cp.species, cp.network, cp.c_gb, cp.transport.delta, window
+    )
 
 
 def make_microstructure(size, grain_size, aspect=1.0, seed=0, cells_per_grain=10):
@@ -30,15 +228,15 @@ def make_microstructure(size, grain_size, aspect=1.0, seed=0, cells_per_grain=10
     )
 
 
-def hart_bound(model: fm.MicroModel):
+def hart_bound(cp: CellProblem):
     """Return the parallel Hart/Voigt bound for the modelled microstructure."""
-    micro, physics = model.micro, model.physics
+    micro, transport = cp.micro, cp.transport
     if not isinstance(micro, fm.VoronoiMicrostructure) or micro.dim != 2:
         raise TypeError("this Hart bound requires a 2D VoronoiMicrostructure")
     tensor = fm.voronoi.network_tensor(micro.boundaries, micro.dim)
     return (
-        fm.exports.averages.mean_lattice_tensor(model)
-        + physics.delta * physics.D_gb / micro.domain_measure * tensor
+        fm.exports.averages.mean_lattice_tensor(micro, cp.tensors)
+        + transport.delta * transport.D_gb / micro.domain_measure * tensor
     )
 
 
@@ -97,7 +295,7 @@ class Identification:
         return "\n".join(lines)
 
 
-def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=True):
+def identify(micro, transport, window_fraction=0.5, export_prefix=None, verbose=True):
     """Solve the two cell problems and assemble the effective tensor."""
     half = 0.5 * (1.0 - window_fraction) * micro.size
     window = ((half, half), (micro.size - half, micro.size - half))
@@ -105,30 +303,36 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
     eq_error = 0.0
     hart = None
     for j, G in enumerate((np.array([1.0, 0.0]), np.array([0.0, 1.0]))):
-        model = fm.build(
+        # the uniform-gradient (Taylor) condition c = G.x on the whole boundary
+        cp = cell_problem(
             micro,
-            physics,
+            transport,
             bcs=[
                 (
-                    "outer",
                     lambda x: np.full_like(x[0], True, dtype=bool),
                     (lambda x, G=G: G[0] * x[0] + G[1] * x[1]),
                 )
             ],
-        )
-        model.run()
+        ).solve()
 
-        q, g, _ = fm.exports.averages.averages(model)
+        q, g, _ = cell_averages(cp)
         Q_cell[:, j], H_cell[:, j] = q, g
-        q_w, g_w, _ = fm.exports.averages.averages(model, window=window)
+        q_w, g_w, _ = cell_averages(cp, window=window)
         Q_win[:, j], H_win[:, j] = q_w, g_w
-        eq_error = max(eq_error, fm.exports.averages.equilibrium_error(model))
-        hart = hart_bound(model)
+        eq_error = max(
+            eq_error,
+            fm.exports.averages.equilibrium_error(
+                cp.grains, cp.species, cp.network, cp.c_gb, micro.tolerance
+            ),
+        )
+        hart = hart_bound(cp)
 
         if export_prefix is not None:
             # the grains as one discontinuous parent field (so the jumps show),
             # and the network as a line dataset
-            fm.exports.averages.write_vtx(model, f"{export_prefix}_{'xy'[j]}")
+            fm.exports.averages.write_vtx(
+                cp.grains, cp.species, cp.network, cp.c_gb, f"{export_prefix}_{'xy'[j]}"
+            )
         if verbose:
             print(f"    solved cell problem G = e_{'xy'[j]}", flush=True)
 
@@ -137,7 +341,7 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
         D_cell=(-Q_cell @ np.linalg.inv(H_cell)).tolist(),
         D_window=(-Q_win @ np.linalg.inv(H_win)).tolist(),
         D_hart=hart.tolist(),
-        D_bulk=physics.D_bulk,
+        D_bulk=transport.D_bulk,
         size=micro.size,
         grain_size=np.sqrt(micro.domain_measure / micro.n_grains),
         aspect=micro.aspect,
@@ -145,7 +349,7 @@ def identify(micro, physics, window_fraction=0.5, export_prefix=None, verbose=Tr
         n_seeds=micro.n_seeds,
         n_grains=micro.n_grains,
         n_cells=micro.mesh.topology.index_map(2).size_global,
-        k_exchange=physics.k_exchange,
+        k_exchange=transport.k,
         equilibrium_error=eq_error,
     )
 
@@ -201,14 +405,14 @@ def main(argv=None):
                 size, args.grain_size, args.aspect, seed, args.cells_per_grain
             )
             grain_size = np.sqrt(micro.domain_measure / micro.n_grains)
-            physics = fm.Physics(
+            transport = Transport.tungsten(
                 T=args.temperature, crystal_anisotropy=args.crystal_anisotropy
             )
-            print(physics.report(grain_size=grain_size))
+            print(transport.report(grain_size=grain_size))
             print(micro.report())
             ident = identify(
                 micro,
-                physics,
+                transport,
                 window_fraction=args.window_fraction,
                 export_prefix=(
                     OUTPUT_DIR / f"corrector_size_{size}_seed_{seed}"
@@ -232,20 +436,18 @@ def main(argv=None):
         grain_size = np.sqrt(micro.domain_measure / micro.n_grains)
         print(f"exchange-rate sweep on the {1e6 * args.sizes[0]:.1f} um cell")
         for k in args.k_sweep:
-            physics = fm.Physics(
-                T=args.temperature,
-                crystal_anisotropy=args.crystal_anisotropy,
-                k_exchange=k,
+            transport = Transport.tungsten(
+                T=args.temperature, k=k, crystal_anisotropy=args.crystal_anisotropy
             )
             ident = identify(
-                micro, physics, window_fraction=args.window_fraction, verbose=False
+                micro, transport, window_fraction=args.window_fraction, verbose=False
             )
             D = np.asarray(ident.D_window)
             # A large mismatch signals dual-porosity, not a usable ``D_eff``.
             verdict = "ok" if ident.equilibrium_error < 0.05 else "NO SINGLE D_eff"
             print(
                 f"  k = {k:9.3e} m/s  R_int/R_grain = "
-                f"{physics.interface_resistance_ratio(grain_size):9.3e}  "
+                f"{fm.materials.interface_resistance_ratio(k, grain_size, transport.D_bulk):9.3e}  "  # noqa: E501
                 f"Dxx/D_b = {D[0, 0] / ident.D_bulk:8.3f}  "
                 f"Dyy/D_b = {D[1, 1] / ident.D_bulk:8.3f}  "
                 f"eq.err = {ident.equilibrium_error:.2e}  {verdict}",

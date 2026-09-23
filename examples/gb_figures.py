@@ -25,12 +25,11 @@ from pathlib import Path
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from gb_homogenisation import Transport, cell_problem, make_microstructure
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 from matplotlib.projections.polar import PolarAxes
-
-import festim_microstructure as fm
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
 
@@ -137,7 +136,7 @@ def draw_network(ax, segments, color=INK, lw=0.9, alpha=1.0):
         ax.plot([p[0], q[0]], [p[1], q[1]], color=color, lw=lw, alpha=alpha, zorder=3)
 
 
-def network_flux_segments(model, scale):
+def network_flux_segments(cp, scale):
     """Each boundary segment, and the tangential flux it carries.
 
     The flux is reported as the *width of lattice carrying the same flux*,
@@ -146,7 +145,7 @@ def network_flux_segments(model, scale):
     number exceeds the grain width is moving more hydrogen than a whole grain of
     lattice beside it.
     """
-    c = model.network_solution
+    c = cp.c_gb.subdomain_to_post_processing_solution[cp.network]
     V = c.function_space
     coords = V.tabulate_dof_coordinates()
     cells = V.dofmap.list
@@ -154,8 +153,8 @@ def network_flux_segments(model, scale):
     length = np.linalg.norm(p1 - p0, axis=1)
     keep = length > 0
     slope = np.abs(c.x.array[cells[:, 1]] - c.x.array[cells[:, 0]])[keep] / length[keep]
-    physics = model.physics
-    width = physics.delta * physics.D_gb * slope / physics.D_bulk
+    t = cp.transport
+    width = t.delta * t.D_gb * slope / t.D_bulk
     return np.stack([p0[keep] * scale, p1[keep] * scale], axis=1), width * scale
 
 
@@ -166,7 +165,7 @@ def colourbar(fig, mappable, ax):
     return bar
 
 
-def figure_microstructure(micro, physics, path, size_um):
+def figure_microstructure(micro, transport, path, size_um):
     """The polycrystal, and the flux its boundaries carry under each gradient.
 
     The two flux panels share one colour scale, which is the point: driven along
@@ -203,19 +202,17 @@ def figure_microstructure(micro, physics, path, size_um):
         (np.array([1.0, 0.0]), "along x"),
         (np.array([0.0, 1.0]), "across x"),
     ):
-        model = fm.build(
+        cp = cell_problem(
             micro,
-            physics,
+            transport,
             bcs=[
                 (
-                    "outer",
                     lambda x: np.full_like(x[0], True, dtype=bool),
                     (lambda x, G=G: G[0] * x[0] + G[1] * x[1]),
                 )
             ],
-        )
-        model.run()
-        cases.append((name, *network_flux_segments(model, scale)))
+        ).solve()
+        cases.append((name, *network_flux_segments(cp, scale)))
 
     ceiling = max(width.max() for _, _, width in cases)
     for ax, (name, lines, width) in zip(axes[1:], cases, strict=True):
@@ -599,15 +596,13 @@ def main(argv=None):
         written.append(figure_validation(validation, OUTPUT_DIR / "fig_validation.png"))
 
     if not args.skip_fields:
-        from gb_homogenisation import make_microstructure
-
         micro = make_microstructure(
             args.field_size, args.grain_size, args.aspect, 0, args.cells_per_grain
         )
         written.append(
             figure_microstructure(
                 micro,
-                fm.Physics(),
+                Transport.tungsten(),
                 OUTPUT_DIR / "fig_microstructure.png",
                 1e6 * args.field_size,
             )

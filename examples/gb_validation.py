@@ -27,8 +27,9 @@ Test B -- a transient, against an actual homogeneous model
     percent for a 1 nm boundary and micron grains, which is why the homogeneous
     model can be a plain diffusion equation.
 
-Run ``python validate.py`` after ``homogenise.py``, or on its own -- it does the
-identification itself.
+Run ``python gb_validation.py`` after ``gb_homogenisation.py``, or on its own --
+it does the identification itself, and takes the cell problem's FESTIM
+declaration from there.
 """
 
 import argparse
@@ -43,7 +44,16 @@ import dolfinx
 import festim as F
 import numpy as np
 import ufl
-from gb_homogenisation import identify, make_microstructure
+from gb_homogenisation import (
+    ATOL,
+    RTOL,
+    Transport,
+    cell_averages,
+    cell_inventory,
+    cell_problem,
+    identify,
+    make_microstructure,
+)
 
 import festim_microstructure as fm
 
@@ -56,19 +66,19 @@ def permeation_bcs(size, direction, c_in=1.0, c_out=0.0):
     """Fix concentration on opposite faces normal to ``direction``."""
     axis = "xy".index(direction)
     return [
-        ("inlet", lambda x, a=axis: np.isclose(x[a], 0.0), c_in),
-        ("outlet", lambda x, a=axis: np.isclose(x[a], size), c_out),
+        (lambda x, a=axis: np.isclose(x[a], 0.0), c_in),
+        (lambda x, a=axis: np.isclose(x[a], size), c_out),
     ]
 
 
-def steady_consistency(micro, physics, candidates, verbose=True):
+def steady_consistency(micro, transport, candidates, verbose=True):
     """Score candidate tensors against a permeation boundary condition."""
     rows = {}
     for direction in ("x", "y"):
-        model = fm.build(
-            micro, physics, bcs=permeation_bcs(micro.size, direction)
-        ).run()
-        q, grad_c, _ = fm.exports.averages.averages(model)
+        cp = cell_problem(
+            micro, transport, bcs=permeation_bcs(micro.size, direction)
+        ).solve()
+        q, grad_c, _ = cell_averages(cp)
         # Relative transverse errors are meaningless near zero flux.
         i = "xy".index(direction)
         if verbose:
@@ -89,13 +99,13 @@ def steady_consistency(micro, physics, candidates, verbose=True):
 def homogeneous_model(
     size,
     D_eff,
-    physics,
+    transport,
     bcs,
     n=48,
     transient=False,
     final_time=None,
     stepsize=None,
-    atol=fm.fem.solvers.ATOL,
+    atol=ATOL,
 ):
     """Build a homogeneous rectangle carrying the anisotropic tensor."""
     mesh = dolfinx.mesh.create_rectangle(
@@ -119,7 +129,7 @@ def homogeneous_model(
     c = F.Species("c", subdomains=[volume])
     subdomains: list[F.VolumeSubdomain | F.SurfaceSubdomain] = [volume]
     boundary_conditions = []
-    for i, (name, locator, value) in enumerate(bcs):
+    for i, (locator, value) in enumerate(bcs):
         surface = F.SurfaceSubdomain(id=10 + i, locator=locator)
         subdomains.append(surface)
         boundary_conditions.append(
@@ -130,10 +140,10 @@ def homogeneous_model(
         species=[c],
         subdomains=subdomains,
         boundary_conditions=boundary_conditions,
-        temperature=physics.T,
+        temperature=transport.T,
         settings=F.Settings(
             atol=atol,
-            rtol=1e-10,
+            rtol=RTOL,
             transient=transient,
             final_time=final_time,
             stepsize=stepsize,
@@ -143,31 +153,33 @@ def homogeneous_model(
     return model, c, volume, mesh
 
 
-def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
+def uptake(micro, transport, D_eff, n_steps=60, verbose=True):
     """Compare microstructure and homogeneous uptake over one crossing time."""
     size = micro.size
     slow = min(np.linalg.eigvalsh(0.5 * (D_eff + D_eff.T)))
     final_time = 0.35 * size**2 / slow
     dt = final_time / n_steps
-    bcs = [("top", lambda x: np.isclose(x[1], size), 1.0)]
+    bcs = [(lambda x: np.isclose(x[1], size), 1.0)]
 
-    micro_model = fm.build(
+    cp = cell_problem(
         micro,
-        physics,
+        transport,
         bcs=bcs,
-        solve=fm.SolveOptions(
+        settings=F.Settings(
+            atol=ATOL,
+            rtol=RTOL,
             transient=True,
             final_time=final_time,
             stepsize=F.Stepsize(initial_value=dt),
         ),
     )
-    micro_model.model.show_progress_bar = False  # the stepping is driven here
-    micro_model.initialise()
+    cp.model.initialise()  # the stepping is driven here rather than by run()
+    fm.fem.solvers.tune_direct_solver(cp.model)
 
     homogeneous, c, _, mesh_h = homogeneous_model(
         size,
         D_eff,
-        physics,
+        transport,
         bcs,
         transient=True,
         final_time=final_time,
@@ -184,11 +196,11 @@ def uptake(micro, physics, D_eff, n_steps=60, verbose=True):
         return mesh_h.comm.allreduce(dolfinx.fem.assemble_scalar(form), op=MPI.SUM)
 
     times, micro_inventory, model_inventory = [0.0], [0.0], [0.0]
-    while micro_model.model.t.value < final_time - 0.5 * dt:
-        micro_model.model.iterate()
+    while cp.model.t.value < final_time - 0.5 * dt:
+        cp.model.iterate()
         homogeneous.iterate()
-        times.append(float(micro_model.model.t))
-        micro_inventory.append(fm.exports.averages.inventory(micro_model))
+        times.append(float(cp.model.t))
+        micro_inventory.append(cell_inventory(cp))
         model_inventory.append(homogeneous_inventory())
         if verbose and len(times) % 10 == 0:
             print(
@@ -235,14 +247,14 @@ def main(argv=None):
     micro = make_microstructure(
         args.size, args.grain_size, args.aspect, args.seed, args.cells_per_grain
     )
-    physics = fm.Physics(T=args.temperature)
+    transport = Transport.tungsten(T=args.temperature)
     print(micro.report())
     print()
 
-    ident = identify(micro, physics)
+    ident = identify(micro, transport)
     print(ident.report())
     D_eff = np.asarray(ident.D_window)
-    capacity = 1.0 + physics.delta * micro.network_measure / micro.domain_measure
+    capacity = 1.0 + transport.delta * micro.network_measure / micro.domain_measure
     print(f"  effective capacity 1 + delta|Gamma|/A : {capacity:.5f}")
     print()
 
@@ -253,7 +265,7 @@ def main(argv=None):
     print("test A -- permeation, a boundary condition the tensor was not fitted to")
     errors = steady_consistency(
         micro,
-        physics,
+        transport,
         {
             "whole cell": np.asarray(ident.D_cell),
             "window": np.asarray(ident.D_window),
@@ -270,7 +282,7 @@ def main(argv=None):
         return
     print("test B -- uptake transient, microstructure vs homogeneous model")
     times, microstructure, homogeneous, final_time = uptake(
-        micro, physics, D_eff, n_steps=args.steps
+        micro, transport, D_eff, n_steps=args.steps
     )
     record["uptake"] = {
         "times": times.tolist(),

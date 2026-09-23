@@ -3,13 +3,22 @@
 The model gives a GB tangential conductance ``delta * D_gb`` and uses
 ``k = 2 * D_gb / delta`` to match transverse slab resistance. It compares the
 thin-boundary result with volumetric Hart and Hashin-Shtrikman references.
+
+The sweep over the boundary volume fraction changes only ``delta`` and ``k``,
+which are DOLFINx constants of the declared FESTIM problem, so one problem per
+(microstructure, ``D_gb/D_m``) is assembled and re-solved from a cold start at
+every point; the boundary material itself is an ordinary ``festim.Material``
+and needs a fresh problem when ``D_gb`` changes.
 """
 
 import csv
+from dataclasses import dataclass
 from pathlib import Path
 
 from mpi4py import MPI
 
+import dolfinx
+import festim as F
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,6 +27,9 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import festim_microstructure as fm
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "results" / Path(__file__).stem
+
+NETWORK_ID = 1_000_000  # above every grain id; a manifold shares the surface ids
+SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
 
 # Physics (SI).
 T = 1073.0  # K
@@ -49,30 +61,13 @@ def D_m(T):
     return D0_M * np.exp(-E_M / (K_B * T))
 
 
-def physics_for(ratio, f_gb, S_v):
-    """The coefficients of one run: D_gb/D_m = ratio at every T, delta from the
-    target volume fraction, k from the slab."""
-    delta = f_gb / S_v
-    D_gb = ratio * D_m(T)
-    return fm.Physics(
-        T=T,
-        D_0_bulk=D0_M,
-        E_D_bulk=E_M,
-        D_0_gb=ratio * D0_M,
-        E_D_gb=E_M,
-        delta=delta,
-        k_exchange=2.0 * D_gb / delta,
-        crystal_anisotropy=1.0,
-    )
-
-
 def boundary_conditions(axis, length, tol):
     """Their 0.4 / 0.1 on the two faces normal to the flux; the other faces are
-    no-flux. ``build`` applies each to every grain touching the face and to the
+    no-flux. Each is applied to every grain touching the face and to the
     network's mouths on it."""
     return [
-        ("inlet", lambda x: np.abs(x[axis]) < tol, C_IN),
-        ("outlet", lambda x: np.abs(x[axis] - length) < tol, C_OUT),
+        (lambda x: np.abs(x[axis]) < tol, C_IN),
+        (lambda x: np.abs(x[axis] - length) < tol, C_OUT),
     ]
 
 
@@ -97,29 +92,136 @@ def make(structure, comm):
     )
 
 
-def prepare(micro, bcs):
-    """Build once and return the model plus its network area density ``S_v``."""
-    mm = fm.build(micro, physics_for(1.0, 0.01, 1.0 / B), bcs).initialise()
+@dataclass
+class CellProblem:
+    """One declared problem and the two constants the sweep changes."""
+
+    model: F.HydrogenTransportProblemDiscontinuous
+    grains: list
+    species: list
+    tensors: dict
+    network: fm.GrainBoundaryNetwork
+    c_gb: F.Species
+    D_gb: float
+    k: dolfinx.fem.Constant
+    width: dolfinx.fem.Constant
+
+    def solve(self, delta, k):
+        """Solve for a new slab width and exchange rate, from a cold start.
+
+        A warm start is unsafe for this unscaled problem: FESTIM's relative
+        residual test compares against the first residual, which a warm start
+        makes a round-off floor.
+        """
+        self.width.value = delta
+        self.k.value = k
+        for subdomain in self.model.volume_subdomains:
+            subdomain.u.x.array[:] = 0.0
+            subdomain.u.x.scatter_forward()
+        self.model.run()
+        return self
+
+
+def cell_problem(micro, D_gb, bcs):
+    """The grain/network problem as FESTIM declarations; see the Voronoi
+    examples. ``delta`` and ``k`` start at placeholders and are set per point."""
+    mesh = micro.mesh
+    scalar = dolfinx.default_scalar_type
+    D_lattice, tensors = fm.materials.crystal_diffusivity_field(micro, D_m(T))
+    grains = fm.fem.subdomains.grain_subdomains(micro, F.Material(D=D_lattice))
+    network = fm.fem.subdomains.grain_boundary_network(
+        NETWORK_ID, micro, F.Material(D_0=D_gb, E_D=0.0)
+    )
+    grain_species = [F.Species(f"c_{g.id}", subdomains=[g]) for g in grains]
+    c_gb = F.Species("c_gb", subdomains=[network])
+    species_of = dict(zip((g.id for g in grains), grain_species, strict=True))
+
+    # Keeping these as DOLFINx constants allows the sweep to change them without
+    # re-assembling (it's only needed for efficiency)
+    k = dolfinx.fem.Constant(mesh, scalar(1.0))
+    width = dolfinx.fem.Constant(mesh, scalar(1.0))
+    sources, boundary_conditions = [], []
+    for c_grain in grain_species:
+        exchange = {"c_g": c_grain, "c_n": c_gb}
+        sources.append(
+            F.ParticleSource(
+                value=lambda c_g, c_n: (k / width) * (c_g - c_n),
+                species=c_gb,
+                volume=network,
+                species_dependent_value=exchange,
+            )
+        )
+        boundary_conditions.append(
+            F.ParticleFluxBC(
+                subdomain=network,
+                species=c_grain,
+                value=lambda c_g, c_n: k * (c_n - c_g),
+                species_dependent_value=exchange,
+            )
+        )
+
+    subdomains = [*grains, network]
+    next_id = SURFACE_ID_0
+    for locator, value in bcs:
+        patches, mouths = fm.fem.subdomains.grain_surfaces(
+            mesh, grains, locator, next_id
+        )
+        next_id = mouths.id + 1
+        subdomains += [*patches, mouths]
+        boundary_conditions += [
+            F.FixedConcentrationBC(
+                subdomain=p, value=value, species=species_of[p.grain_id]
+            )
+            for p in patches
+        ]
+        boundary_conditions.append(
+            F.FixedConcentrationBC(subdomain=mouths, value=value, species=c_gb)
+        )
+
+    model = F.HydrogenTransportProblemDiscontinuous(
+        mesh=F.Mesh(mesh),
+        subdomains=subdomains,
+        species=[*grain_species, c_gb],
+        sources=sources,
+        boundary_conditions=boundary_conditions,
+        temperature=T,
+        settings=F.Settings(atol=1e-25, rtol=1e-10, transient=False),
+    )
+    model.show_progress_bar = False
+    model.initialise()
+    fm.fem.solvers.tune_direct_solver(model)
+    return CellProblem(
+        model, grains, grain_species, tensors, network, c_gb, D_gb, k, width
+    )
+
+
+def area_density(cp, micro):
+    """The network area per unit volume ``S_v`` of the meshed network."""
     dim = micro.mesh.geometry.dim
-    return mm, fm.exports.measures.submesh_measure(mm.network) / B**dim
+    return fm.exports.measures.submesh_measure(cp.network) / B**dim
 
 
-def run(mm, axis, S_v, ratio, f_gb) -> dict[str, float | str]:
-    physics = physics_for(ratio, f_gb, S_v)
-    mm.set_physics(physics).solve()
-    q, _, _ = fm.exports.averages.averages(mm)  # their Eq. 21: volume-averaged flux
+def run(cp, axis, S_v, ratio, f_gb) -> dict[str, float | str]:
+    delta = f_gb / S_v
+    k = 2.0 * cp.D_gb / delta
+    cp.solve(delta, k)
+    # their Eq. 21: volume-averaged flux
+    q, _, _ = fm.exports.averages.averages(
+        cp.grains, cp.species, cp.tensors, cp.network, cp.c_gb, delta, cp.D_gb
+    )
     D_eff = q[axis] * B / (C_IN - C_OUT)
     return dict(
         f_gb=f_gb,
-        delta_nm=physics.delta * 1e9,
+        delta_nm=delta * 1e9,
         S_v_per_nm=S_v * 1e-9,
-        k_m_per_s=physics.k_exchange,
-        equilibration_length_nm=physics.equilibration_length * 1e9,
-        n_grains=len(mm.grains),
+        k_m_per_s=k,
+        equilibration_length_nm=fm.materials.equilibration_length(delta, cp.D_gb, k)
+        * 1e9,
+        n_grains=len(cp.grains),
         ratio=ratio,
-        D_m=physics.D_bulk,
+        D_m=D_m(T),
         D_eff=D_eff,
-        D_eff_over_D_m=D_eff / physics.D_bulk,
+        D_eff_over_D_m=D_eff / D_m(T),
     )
 
 
@@ -303,15 +405,19 @@ def main():
         micro = make(structure, comm)
         micros[structure] = micro
         bcs = boundary_conditions(axis, B, 1e-6 * B)
-        mm, S_v = prepare(micro, bcs)
-        if comm.rank == 0:
-            print(
-                f"{LABEL[structure]}: {micro.n_grains} grains, S_v = {S_v * 1e-9:.4f} /nm; "  # noqa: E501
-                f"delta = {0.3 / S_v * 1e9:.2f} nm at f_GB = 0.3, {0.01 / S_v * 1e9:.3f} nm at 0.01"  # noqa: E501
-            )
-        for f_gb in [*F_GB_THIN, *F_GB_THEIRS]:
-            for ratio in RATIOS:
-                r = run(mm, axis, S_v, ratio, f_gb)
+        S_v = None
+        for ratio in RATIOS:
+            # one problem per D_gb; the f_GB sweep below only moves constants
+            cp = cell_problem(micro, ratio * D_m(T), bcs)
+            if S_v is None:
+                S_v = area_density(cp, micro)
+                if comm.rank == 0:
+                    print(
+                        f"{LABEL[structure]}: {micro.n_grains} grains, S_v = {S_v * 1e-9:.4f} /nm; "  # noqa: E501
+                        f"delta = {0.3 / S_v * 1e9:.2f} nm at f_GB = 0.3, {0.01 / S_v * 1e9:.3f} nm at 0.01"  # noqa: E501
+                    )
+            for f_gb in [*F_GB_THIN, *F_GB_THEIRS]:
+                r = run(cp, axis, S_v, ratio, f_gb)
                 r["structure"] = structure
                 rows.append(r)
                 if comm.rank == 0:

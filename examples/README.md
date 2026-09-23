@@ -6,9 +6,15 @@ reproductions. They are intentionally not included in the installed
 belong to a particular study rather than being stable library contracts.
 
 Import the package as `import festim_microstructure as fm`. Use curated names
-such as `fm.Physics`, `fm.build`, and `fm.VoronoiMicrostructure`, and access
-specialised helpers through namespaces such as `fm.voronoi`, `fm.meshing`,
-`fm.formats`, and `fm.exports`.
+such as `fm.VoronoiMicrostructure`, `fm.TaggedPolycrystal` and
+`fm.GrainBoundaryNetwork`, and access specialised helpers through namespaces
+such as `fm.voronoi`, `fm.meshing`, `fm.fem`, `fm.materials`, `fm.formats`, and
+`fm.exports`. The transport model in every script is declared with FESTIM
+directly -- species, exchange terms, boundary conditions, settings, the
+`HydrogenTransportProblemDiscontinuous` -- following FESTIM's manifold
+documentation; the package supplies the subdomains, the coefficient fields and
+the post-processing. `gb_validation.py` and `gb_figures.py` import that
+declaration from `gb_homogenisation.py` rather than repeat it.
 
 - `voronoi_polycrystal_2d.py`, `voronoi_polycrystal_3d.py`, and
   `neper_voronoi_network.py` demonstrate short-circuit diffusion.
