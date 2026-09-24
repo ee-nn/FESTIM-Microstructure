@@ -12,6 +12,7 @@ import numpy as np
 
 from festim_microstructure._binaries import find_binary, subprocess_env
 from festim_microstructure.ebsd.orientation import (
+    ROT_X_180,
     cubic_disorientation_angle,
     qconj,
     qmul,
@@ -224,7 +225,7 @@ def format_report(res: SegmentationError, label="segmentation"):
         verdict = "" if v.max < 1e-3 else "  <-- NOT a round trip"
         lines.append(
             f"transcription L2: RMS {v.rms:.2e} deg, max {v.max:.2e} deg "
-            f"(**oridata vs the raw Euler angles){verdict}"
+            f"(**oridata vs the measured orientations){verdict}"
         )
     return lines
 
@@ -511,15 +512,18 @@ def verify_readback(path, qgrid, ok, cellids, flip_y):
     """Re-read the written tesr, compare with what was meant, return a report.
 
     Three checks: the cell map is identical, `**oridef` is the quality mask,
-    and every voxel orientation read back is the same rotation as the raw Euler
-    triple. The file holds a fundamental-zone representative, so equality is
+    and every voxel orientation read back is the same rotation as the measured
+    one. The file holds a fundamental-zone representative, so equality is
     only expected up to the symmetry group -- which is what a disorientation
     measures, hence ~0 rather than exactly 0.
+
+    ``qgrid``, ``ok`` and ``cellids`` are in the .ctf's row order and frame;
+    the ``flip_y`` frame change is applied here to form the expected file.
     """
     back = read_tesr_full(path)
     exp_cells = cellids[::-1] if flip_y else cellids
     exp_ok = ok[::-1] if flip_y else ok
-    exp_q = qgrid[::-1] if flip_y else qgrid
+    exp_q = qmul(ROT_X_180, qgrid[::-1]) if flip_y else qgrid
     same_cells = np.array_equal(back["cells"], exp_cells)
     report = [
         f"read-back: cell ids {'identical' if same_cells else 'DIFFER'} "
@@ -535,7 +539,7 @@ def verify_readback(path, qgrid, ok, cellids, flip_y):
             qmul(qconj(exp_q.reshape(-1, 4)), rodrigues_to_quat(back["vox_ori"]))
         )
         report.append(
-            f"read-back: voxel orientations vs raw Euler angles: max "
+            f"read-back: voxel orientations vs measured: max "
             f"{dis.max():.2e} deg, mean {dis.mean():.2e} deg over {dis.size} voxels"
             + ("" if dis.max() < 1e-3 else "  <-- NOT a round trip")
         )

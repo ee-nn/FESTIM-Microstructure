@@ -17,7 +17,7 @@ from festim_microstructure.ebsd.orientation import (
 __all__ = ["grain_mean_orientations", "relabel_and_prune", "segment_grains"]
 
 
-def segment_grains(qgrid, ok, threshold, sym):
+def segment_grains(qgrid, ok, threshold):
     """Flood-fill across neighbours whose disorientation is below `threshold`.
 
     Four-connected: a pixel is joined to the one on its right and the one below
@@ -84,9 +84,7 @@ def relabel_and_prune(labels, ok, min_pixels):
     return out, int(keep.sum()), dropped, lost
 
 
-def grain_mean_orientations(
-    qgrid, cellids, ncells, sym, chunk=50_000, sample_mask=None
-):
+def grain_mean_orientations(qgrid, cellids, ncells, chunk=50_000, sample_mask=None):
     """One orientation per grain: the symmetry-aligned quaternion mean.
 
     Each pixel is first mapped to the symmetry equivalent closest to its grain's
@@ -117,7 +115,7 @@ def grain_mean_orientations(
         acc = np.zeros(4)
         for lo in range(0, len(qs), chunk):
             blk = qs[lo : lo + chunk]
-            cand = crystal_equivalents(blk, sym)
+            cand = crystal_equivalents(blk)
             dots = cand @ ref
             best = np.argmax(np.abs(dots), axis=1)
             picked = cand[np.arange(len(blk)), best]
@@ -125,4 +123,4 @@ def grain_mean_orientations(
             sign[sign == 0] = 1.0
             acc += (picked * sign[:, None]).sum(axis=0)
         means[k] = acc / np.linalg.norm(acc)
-    return to_fundamental_zone(means, sym)
+    return to_fundamental_zone(means)

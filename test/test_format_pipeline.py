@@ -1,14 +1,26 @@
 """Exercise the relocated readers through conversion and mesh diagnostics."""
 
+import json
+
 import numpy as np
 import pytest
 
 from festim_microstructure.ebsd.convert import (
+    CtfConversion,
     MeasureOptions,
     convert,
     measure_tesr_against_ctf,
 )
-from festim_microstructure.ebsd.settings import settings_from_provenance
+from festim_microstructure.ebsd.diagnostics import verify_readback
+from festim_microstructure.ebsd.orientation import (
+    ROT_X_180,
+    cubic_disorientation_angle,
+    euler_bunge_to_quat,
+    qconj,
+    qmul,
+    rodrigues_to_quat,
+)
+from festim_microstructure.ebsd.settings import Settings, settings_from_provenance
 from festim_microstructure.formats.provenance import read_provenance
 from festim_microstructure.formats.tesr import (
     TesrData,
@@ -133,3 +145,94 @@ def test_neper_render_has_explicit_camera_vectors(tmp_path):
     colorful = rgb.max(axis=2).astype(int) - rgb.min(axis=2).astype(int) > 40
     assert colorful.mean() > 0.1
     assert not (tmp_path / "map.pov").exists()
+
+
+GENERIC_EULER = (37.0, 52.0, 131.0)
+
+
+def _write_ctf(path, euler=GENERIC_EULER, laue=11, nx=4, ny=3):
+    """A single-grain map whose orientation is not a cubic symmetry operator."""
+    header = (
+        f"Channel Text File\nXCells\t{nx}\nYCells\t{ny}\nXStep\t1\nYStep\t1\n"
+        f"Phases\t1\n1;1;1\t90;90;90\tPhase\t{laue}\t229\n"
+        "Phase\tX\tY\tEuler1\tEuler2\tEuler3\tMAD\tError\tBands\n"
+    )
+    e1, e2, e3 = euler
+    rows = [
+        f"1\t{x}\t{y}\t{e1}\t{e2}\t{e3}\t0.1\t0\t8\n"
+        for y in range(ny)
+        for x in range(nx)
+    ]
+    path.write_text(header + "".join(rows))
+    return path
+
+
+def _file_vs(result, q):
+    """Disorientation (deg) between the written cell orientation and ``q``."""
+    back = rodrigues_to_quat(read_tesr_full(result.tesr)["cell_ori"])[0]
+    return float(cubic_disorientation_angle(qmul(qconj(q), back)))
+
+
+def test_flip_y_rotates_orientations_and_reads_back_clean(tmp_path):
+    """flip_y is a proper frame change: rows mirrored, orientations rotated."""
+    ctf = _write_ctf(tmp_path / "map.ctf")
+    conv = CtfConversion(
+        Settings(ctf=str(ctf), min_pixels=1, flip_y=True, neper=None), log=None
+    )
+    conv.read().segment().clean().orient().measure().write(tmp_path / "map.tesr")
+    result = conv.result()
+    q = euler_bunge_to_quat(*GENERIC_EULER)
+    assert _file_vs(result, qmul(ROT_X_180, q)) < 1e-5
+    assert _file_vs(result, q) > 1.0  # the unrotated orientation is wrong
+    report = verify_readback(result.tesr, conv.qgrid, conv.ok, conv.cellids, True)
+    assert not any("DIFFER" in line or "NOT" in line for line in report), report
+    measured = measure_tesr_against_ctf(
+        ctf,
+        result.tesr,
+        MeasureOptions(provenance=str(result.provenance), against="both"),
+        log=None,
+    )
+    assert measured.indexed.rms < 1e-5
+    assert measured.voxel.rms < 1e-5
+
+
+def test_euler_correction_left_multiplies_and_round_trips(tmp_path):
+    """euler_correction maps the Euler frame onto the map frame, as MTEX does."""
+    ctf = _write_ctf(tmp_path / "map.ctf")
+    result = convert(
+        ctf,
+        tmp_path / "map.tesr",
+        min_pixels=1,
+        euler_correction=(180.0, 0.0, 0.0),
+        neper=None,
+        log=None,
+    )
+    q = euler_bunge_to_quat(*GENERIC_EULER)
+    assert _file_vs(result, qmul(euler_bunge_to_quat(180.0, 0.0, 0.0), q)) < 1e-5
+    assert _file_vs(result, q) > 1.0
+    assert settings_from_provenance(result.provenance).euler_correction == [
+        180.0,
+        0.0,
+        0.0,
+    ]
+    measured = measure_tesr_against_ctf(
+        ctf, result.tesr, MeasureOptions(provenance=str(result.provenance)), log=None
+    )
+    assert measured.indexed.rms < 1e-5
+
+
+def test_laue_m3_is_rejected(tmp_path):
+    """Laue 10 (m-3) has 12 proper rotations; the 24-operator math must refuse it."""
+    ctf = _write_ctf(tmp_path / "map.ctf", laue=10)
+    with pytest.raises(ValueError, match="Laue group 10"):
+        convert(ctf, tmp_path / "map.tesr", min_pixels=1, neper=None, log=None)
+
+
+def test_active_option_is_gone(tmp_path):
+    """The removed option is refused, including from an old provenance file."""
+    with pytest.raises(TypeError):
+        Settings(ctf="x.ctf", active=True)
+    old = tmp_path / "old-provenance.json"
+    old.write_text(json.dumps({"ctf": "x.ctf", "active": True}))
+    with pytest.raises(ValueError, match="active=True"):
+        settings_from_provenance(old)

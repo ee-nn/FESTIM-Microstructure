@@ -13,9 +13,7 @@ def test_bunge_0_30_0_matches_neper_table():
     """Verify bunge 0 30 0 matches neper table."""
     q = ori.euler_bunge_to_quat(np.array([0.0]), np.array([30.0]), np.array([0.0]))
     assert np.allclose(q[0], [0.965925826, 0.258819045, 0, 0], atol=1e-8)
-    r = ori.quat_to_rodrigues(
-        ori.to_fundamental_zone(q, ori.cubic_symmetry_quaternions())
-    )
+    r = ori.quat_to_rodrigues(ori.to_fundamental_zone(q))
     assert np.allclose(r[0], [0.267949192, 0, 0], atol=1e-8)
 
 
@@ -37,14 +35,13 @@ def test_cubic_symmetry_quaternions_are_unit():
 
 def test_crystal_symmetry_acts_on_the_right():
     """Verify crystal symmetry acts on the right."""
-    sym = ori.cubic_symmetry_quaternions()
     q = ori.euler_bunge_to_quat(np.array([37.0]), np.array([52.0]), np.array([131.0]))
-    equiv = ori.crystal_equivalents(q, sym)[0]
+    equiv = ori.crystal_equivalents(q)[0]
     d = ori.cubic_disorientation_angle(ori.qmul(ori.qconj(np.repeat(q, 24, 0)), equiv))
     assert d.max() < 1e-4
     assert (
         ori.cubic_disorientation_angle(
-            ori.qmul(ori.qconj(q), ori.to_fundamental_zone(q, sym))
+            ori.qmul(ori.qconj(q), ori.to_fundamental_zone(q))
         )[0]
         < 1e-4
     )
@@ -52,9 +49,8 @@ def test_crystal_symmetry_acts_on_the_right():
 
 def test_left_multiplication_is_not_crystal_equivalence():
     """Verify left multiplication is not crystal equivalence."""
-    sym = ori.cubic_symmetry_quaternions()
     q = ori.euler_bunge_to_quat(np.array([37.0]), np.array([52.0]), np.array([131.0]))
-    wrong = ori.qmul(sym[13][None], q)
+    wrong = ori.qmul(ori.CUBIC_SYMMETRY[13][None], q)
     assert ori.cubic_disorientation_angle(ori.qmul(ori.qconj(q), wrong))[0] > 10.0
 
 
@@ -89,10 +85,9 @@ def test_filled_pixel_does_not_bias_representative_orientation():
     qgrid = np.array([[identity, identity, rejected]])
     cellids = np.ones((1, 3), dtype=int)
     sample_mask = np.array([[True, True, False]])
-    sym = ori.cubic_symmetry_quaternions()
 
-    filtered = grain_mean_orientations(qgrid, cellids, 1, sym, sample_mask=sample_mask)
-    unfiltered = grain_mean_orientations(qgrid, cellids, 1, sym)
+    filtered = grain_mean_orientations(qgrid, cellids, 1, sample_mask=sample_mask)
+    unfiltered = grain_mean_orientations(qgrid, cellids, 1)
 
     assert ori.cubic_disorientation_angle(filtered)[0] < 1e-6
     assert ori.cubic_disorientation_angle(unfiltered)[0] > 10.0
@@ -126,6 +121,5 @@ def test_orientation_mean_rejects_grain_without_a_sample():
             np.array([[[1.0, 0.0, 0.0, 0.0]]]),
             np.ones((1, 1), dtype=int),
             1,
-            ori.cubic_symmetry_quaternions(),
             sample_mask=np.zeros((1, 1), dtype=bool),
         )

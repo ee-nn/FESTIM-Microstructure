@@ -1,7 +1,8 @@
 """Quaternion and cubic-symmetry utilities for EBSD orientation data.
 
 Quaternions use ``(w, x, y, z)`` and Bunge's passive convention; crystal
-symmetry acts on the right.
+symmetry acts on the right. The only crystal symmetry supported is the proper
+rotation group of Laue class m-3m (24 operators), held in `CUBIC_SYMMETRY`.
 """
 
 import numpy as np
@@ -31,6 +32,14 @@ def cubic_symmetry_quaternions():
     out = np.array(q, dtype=float)
     assert out.shape == (24, 4), out.shape
     return out
+
+
+CUBIC_SYMMETRY = cubic_symmetry_quaternions()
+CUBIC_SYMMETRY.setflags(write=False)
+
+#: 180 deg about sample x: the proper frame change (x, y, z) -> (x, -y, -z).
+ROT_X_180 = np.array([0.0, 1.0, 0.0, 0.0])
+ROT_X_180.setflags(write=False)
 
 
 def qmul(a, b):
@@ -70,21 +79,30 @@ def euler_bunge_to_quat(phi1, Phi, phi2, degrees=True):
     return np.where(q[..., :1] < 0, -q, q)
 
 
-def crystal_equivalents(q, sym):
+def crystal_equivalents(q):
     """Return right-multiplied cubic equivalents with shape ``(n, 24, 4)``."""
-    return qmul(q[:, None, :], sym[None, :, :])
+    return qmul(q[:, None, :], CUBIC_SYMMETRY[None, :, :])
 
 
-def to_fundamental_zone(q, sym, chunk=50_000):
+def to_fundamental_zone(q, chunk=50_000):
     """Choose the cubic equivalent closest to identity for each orientation."""
     out = np.empty_like(q)
     for lo in range(0, len(q), chunk):
         blk = q[lo : lo + chunk]
-        cand = crystal_equivalents(blk, sym)  # (n, 24, 4)
+        cand = crystal_equivalents(blk)  # (n, 24, 4)
         best = np.argmax(np.abs(cand[..., 0]), axis=1)
         picked = cand[np.arange(len(blk)), best]
         out[lo : lo + chunk] = np.where(picked[..., :1] < 0, -picked, picked)
     return out
+
+
+def rotate_sample_frame(q, rot):
+    """Re-express orientations in a sample frame rotated by ``rot``.
+
+    Orientations map crystal to sample coordinates, so a change of sample frame
+    multiplies on the left; the result is reduced back to the fundamental zone.
+    """
+    return to_fundamental_zone(qmul(np.asarray(rot, dtype=float), q))
 
 
 def rodrigues_to_quat(r):

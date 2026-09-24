@@ -27,10 +27,13 @@ from festim_microstructure.ebsd.diagnostics import (
 from festim_microstructure.ebsd.diagnostics import write_png as write_segerr_png
 from festim_microstructure.ebsd.morphology import fill_holes, make_meshable
 from festim_microstructure.ebsd.orientation import (
-    cubic_symmetry_quaternions,
+    ROT_X_180,
     euler_bunge_to_quat,
+    qconj,
+    qmul,
     quat_to_rodrigues,
     rodrigues_to_quat,
+    rotate_sample_frame,
     to_fundamental_zone,
 )
 from festim_microstructure.ebsd.segmentation import (
@@ -62,10 +65,10 @@ __all__ = [
 class ConversionResult:
     """What one conversion produced.
 
-    ``cellids`` and ``ok`` are in the *written* row order, i.e. after
-    ``flip_y``; ``segmentation`` was measured before it, in the .ctf's own
-    frame, because neither the mirror nor the active/passive flip changes a
-    disorientation.
+    ``cellids``, ``ok`` and ``ori_cell`` are as *written*, i.e. after the
+    ``flip_y`` frame change; ``qcell`` and ``segmentation`` are in the .ctf's
+    own frame (after ``euler_correction``), because a common change of sample
+    frame does not change a disorientation.
     """
 
     tesr: Path
@@ -77,8 +80,8 @@ class ConversionResult:
     extent: tuple  #: (lx, ly) in the .ctf's own length unit, times settings.scale
     cellids: Any
     ok: Any
-    ori_cell: Any  #: (ncell, 3) Rodrigues
-    qcell: Any  #: (ncell, 4) quaternions
+    ori_cell: Any  #: (ncell, 3) Rodrigues, as written
+    qcell: Any  #: (ncell, 4) quaternions, .ctf frame
     npx: Any  #: voxels per grain, id order
     window: tuple  #: the crop applied to the .ctf grid
     segmentation: SegmentationError
@@ -93,8 +96,8 @@ class ConversionResult:
 class MeasureOptions:
     """Inputs for :func:`measure_tesr_against_ctf`.
 
-    Give ``settings`` or ``provenance``: the crop window, the mirror and the
-    orientation convention are choices recorded in one of the two and are not
+    Give ``settings`` or ``provenance``: the crop window, the frame change and
+    the Euler correction are choices recorded in one of the two and are not
     recoverable from the .tesr alone.
     """
 
@@ -154,7 +157,7 @@ class CtfConversion:
     """
 
     def __init__(self, settings: Settings, log=print):
-        """Initialize conversion state and cubic symmetry operators.
+        """Initialize conversion state.
 
         Args:
             settings: EBSD input, filtering, and output settings.
@@ -162,7 +165,6 @@ class CtfConversion:
         """
         self.settings = settings
         self.log = log or (lambda *a, **k: None)
-        self.sym = cubic_symmetry_quaternions()
         self.window: tuple = ()
 
     # -- stage 1: read and mask -------------------------------------------
@@ -186,7 +188,7 @@ class CtfConversion:
             raise ValueError(
                 f"phase '{phase['name']}' has Laue group {phase['laue']} -> "
                 f"{self.crysym}, which this script cannot segment. The "
-                "disorientation used here is specific to the cubic group. "
+                "disorientation used here is specific to Laue group m-3m. "
                 "Segment in MTEX and write the grain ids into the **data "
                 "section instead."
             )
@@ -195,8 +197,19 @@ class CtfConversion:
             f"{self.crysym}"
         )
 
+        if opt.euler_correction is None:
+            log(
+                "  note: no euler_correction given, so the Euler-angle and map "
+                "frames are assumed to coincide. MTEX assumes (180, 0, 0) for "
+                ".ctf files; GB disorientations do not depend on this"
+            )
         self.qgrid, self.ok, self.diag = build_grid(
-            ctf, opt.phase, opt.max_mad, not opt.allow_error, opt.min_bands
+            ctf,
+            opt.phase,
+            opt.max_mad,
+            not opt.allow_error,
+            opt.min_bands,
+            opt.euler_correction_quat,
         )
         self.window = (slice(0, ny), slice(0, nx))
         if opt.crop:
@@ -224,7 +237,7 @@ class CtfConversion:
     def segment(self):
         """Flood-fill the pixels into grains and prune the tiny ones."""
         opt, log = self.settings, self.log
-        labels = segment_grains(self.qgrid, self.ok, opt.threshold, self.sym)
+        labels = segment_grains(self.qgrid, self.ok, opt.threshold)
         self.cellids, self.ncells, dropped, lost = relabel_and_prune(
             labels, self.ok, opt.min_pixels
         )
@@ -295,12 +308,10 @@ class CtfConversion:
 
     # -- stage 4: orientations --------------------------------------------
     def orient(self):
-        """One orientation per grain, plus the per-voxel field if requested."""
+        """One orientation per grain and the per-voxel field, in the .ctf frame."""
         opt = self.settings
         ny, nx = self.shape
-        self.qfz = to_fundamental_zone(self.qgrid.reshape(-1, 4), self.sym).reshape(
-            ny, nx, 4
-        )
+        self.qfz = to_fundamental_zone(self.qgrid.reshape(-1, 4)).reshape(ny, nx, 4)
         sample_mask = _orientation_sample_mask(
             self.segmented_cellids, self.cellids, self.ncells
         )
@@ -308,11 +319,8 @@ class CtfConversion:
             self.qgrid,
             self.cellids,
             self.ncells,
-            self.sym,
             sample_mask=sample_mask,
         )
-        self.ori_cell = quat_to_rodrigues(self.qcell)
-        self.ori_vox = None if not opt.voxel_ori else quat_to_rodrigues(self.qfz)
         self.vox = (
             self.ctf.header["XStep"] * opt.scale,
             self.ctf.header["YStep"] * opt.scale,
@@ -323,8 +331,8 @@ class CtfConversion:
     def measure(self):
         """Measure the segmentation error, in the .ctf's own frame.
 
-        Computed before ``active`` flips the sign and ``flip_y`` mirrors the
-        arrays; neither transformation changes a disorientation. This is the
+        Computed in the .ctf frame, before ``flip_y`` changes the sample frame;
+        a common frame change does not change a disorientation. This is the
         headline quality number for stage 1 of the pipeline: the RMS angle
         between a pixel's measured orientation and the single orientation its
         grain will carry from here on.
@@ -344,31 +352,35 @@ class CtfConversion:
 
     # -- stage 6: write ----------------------------------------------------
     def write(self, output=None):
-        """Apply the orientation convention and the mirror, then write."""
+        """Apply the output frame change, then write.
+
+        The instance keeps the .ctf row order and frame; only the written
+        raster, kept as ``self.raster``, carries the ``flip_y`` frame change.
+        """
         opt, log = self.settings, self.log
-        if opt.active:  # active is the opposite rotation, i.e. -r
-            self.ori_cell = -self.ori_cell
-            if self.ori_vox is not None:
-                self.ori_vox = -self.ori_vox
-
+        cellids, ok, qcell = self.cellids, self.ok, self.qcell
+        qvox = self.qfz if opt.voxel_ori else None
         if opt.flip_y:
-            self.cellids = self.cellids[::-1]
-            self.ok = self.ok[::-1]
-            if self.ori_vox is not None:
-                self.ori_vox = self.ori_vox[::-1]
+            # (x, y, z) -> (x, -y, -z): mirror the rows and rotate every
+            # orientation by the same 180 deg about x, so that positions and
+            # orientations stay in one right-handed frame.
+            cellids, ok = cellids[::-1], ok[::-1]
+            qcell = rotate_sample_frame(qcell, ROT_X_180)
+            if qvox is not None:
+                qvox = rotate_sample_frame(
+                    qvox[::-1].reshape(-1, 4), ROT_X_180
+                ).reshape(qvox.shape)
 
-        self.tesr_path = Path(output or Path(opt.ctf).with_suffix(".tesr"))
-        write_tesr(
-            self.tesr_path,
-            TesrData(
-                cellids=self.cellids,
-                ori_cell=self.ori_cell,
-                voxsize=self.vox,
-                crysym=self.crysym,
-                ori_vox=self.ori_vox,
-                oridef=self.ok,
-            ),
+        self.raster = TesrData(
+            cellids=cellids,
+            ori_cell=quat_to_rodrigues(qcell),
+            voxsize=self.vox,
+            crysym=self.crysym,
+            ori_vox=None if qvox is None else quat_to_rodrigues(qvox),
+            oridef=ok,
         )
+        self.tesr_path = Path(output or Path(opt.ctf).with_suffix(".tesr"))
+        write_tesr(self.tesr_path, self.raster)
         self.provenance_path = self.tesr_path.with_name(
             self.tesr_path.stem + "-provenance.json"
         )
@@ -387,9 +399,7 @@ class CtfConversion:
         write_segerr_png(
             self.tesr_path.with_name(self.tesr_path.stem + "-segerror.png"),
             self.segmentation,
-            # back to the .ctf's row order: `cellids` was mirrored in place
-            # above, while the theta field was measured before that
-            self.cellids[::-1] if opt.flip_y else self.cellids,
+            self.cellids,
             unit=unit,
             log=log,
         )
@@ -438,9 +448,9 @@ class CtfConversion:
             ncells=self.ncells,
             voxsize=self.vox,
             extent=self.extent,
-            cellids=self.cellids,
-            ok=self.ok,
-            ori_cell=self.ori_cell,
+            cellids=self.raster.cellids,
+            ok=self.raster.oridef,
+            ori_cell=self.raster.ori_cell,
             qcell=self.qcell,
             npx=self.npx,
             window=self.window,
@@ -519,10 +529,16 @@ def measure_tesr_against_ctf(ctf_path, tesr_path, options=None, log=print):
     _crysym, phase = ctf.crysym(opt.phase)
     if phase is None or phase["laue"] not in CUBIC_LAUE:
         raise ValueError(
-            "cubic phases only: the disorientation used here is cubic-specific"
+            "m-3m (Laue 11) phases only: the disorientation used here is "
+            "specific to that group"
         )
     qgrid, ok, _diag = build_grid(
-        ctf, opt.phase, opt.max_mad, not opt.allow_error, opt.min_bands
+        ctf,
+        opt.phase,
+        opt.max_mad,
+        not opt.allow_error,
+        opt.min_bands,
+        opt.euler_correction_quat,
     )
     if opt.crop:
         qgrid, ok, _w = crop_grid(
@@ -536,15 +552,20 @@ def measure_tesr_against_ctf(ctf_path, tesr_path, options=None, log=print):
             f"is {ok.shape[1]} x {ok.shape[0]}. Pass the Settings (or the "
             "provenance json) of the conversion that wrote it."
         )
+    # Undo the flip_y frame change so everything is compared in the .ctf frame.
     cells = t["cells"][::-1] if opt.flip_y else t["cells"]
-    sign = -1.0 if opt.active else 1.0
-    qcell = rodrigues_to_quat(sign * t["cell_ori"])
+    undo = qconj(ROT_X_180)
+    qcell = rodrigues_to_quat(t["cell_ori"])
+    if opt.flip_y:
+        qcell = qmul(undo, qcell)
 
     qvox = None
     if mopt.against in ("voxel", "both"):
         if "vox_ori" in t:
             r = t["vox_ori"][::-1] if opt.flip_y else t["vox_ori"]
-            qvox = rodrigues_to_quat(sign * r).reshape((*ok.shape, 4))
+            qvox = rodrigues_to_quat(r).reshape((*ok.shape, 4))
+            if opt.flip_y:
+                qvox = qmul(undo, qvox)
         else:
             log("  note: no **oridata in the tesr (voxel_ori=False); check skipped")
 
@@ -581,12 +602,16 @@ def measure_tesr_against_ctf(ctf_path, tesr_path, options=None, log=print):
     return res
 
 
-def build_grid(ctf, phase, max_mad, require_zero_error, min_bands):
+def build_grid(
+    ctf, phase, max_mad, require_zero_error, min_bands, euler_correction=None
+):
     """Place the pixel table on the (ny, nx) grid and build the quality mask.
 
     Points are indexed from their X/Y coordinates rather than from row order,
     so a file that is not written in strict raster order still lands correctly
     and a truncated file leaves holes rather than shearing the map.
+    ``euler_correction`` is an optional quaternion taking the Euler-angle frame
+    onto the map frame, left-multiplied onto every orientation.
     """
     ny, nx = ctf.shape
     ix = np.rint(ctf["X"] / ctf.header["XStep"]).astype(int)
@@ -605,6 +630,8 @@ def build_grid(ctf, phase, max_mad, require_zero_error, min_bands):
 
     euler = np.stack((ctf["Euler1"], ctf["Euler2"], ctf["Euler3"]), axis=-1)
     quat = euler_bunge_to_quat(euler[:, 0], euler[:, 1], euler[:, 2])
+    if euler_correction is not None:
+        quat = qmul(np.asarray(euler_correction, dtype=float), quat)
 
     qgrid = np.zeros((ny, nx, 4))
     qgrid[..., 0] = 1.0
