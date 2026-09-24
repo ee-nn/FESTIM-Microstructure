@@ -35,7 +35,14 @@ def eval_on(fn, points):
     tree = dolfinx.geometry.bb_tree(fn_mesh, fn_mesh.topology.dim)
     candidates = dolfinx.geometry.compute_collisions_points(tree, points)
     colliding = dolfinx.geometry.compute_colliding_cells(fn_mesh, candidates, points)
-    cells = [colliding.links(i)[0] for i in range(len(points))]
+    cells = []
+    for i, point in enumerate(points):
+        hits = colliding.links(i)
+        if not len(hits):
+            raise ValueError(
+                f"sample point {i} at {point} lies outside the function mesh"
+            )
+        cells.append(hits[0])
     return fn.eval(points, cells).reshape(-1)
 
 
@@ -159,26 +166,35 @@ c_gb_vals = cg_fn.x.array[order]
 bulk_only = 2 * np.sqrt(D_B * t_end)
 print(f"lattice diffusion alone would reach ~{bulk_only:.3g}")
 print("grain boundary profile:")
-for y in (0.0, 0.25, 0.5, 0.75, 1.0):
-    print(f"   y = {y:.2f}   c_gb = {np.interp(y, y_gb, c_gb_vals):.4e}")
+for depth_1e4 in (0.0, 0.25, 0.5, 0.75, 1.0):
+    y = depth_1e4 / 1e4
+    print(
+        f"   y = {depth_1e4:.2f} x 10^-4 m   "
+        f"c_gb = {np.interp(y, y_gb, c_gb_vals):.4e}"
+    )
 
 # Check the local-equilibrium approximation.
 probe = np.linspace(0.05 / 1e4, 1.0 / 1e4, 20)
-pts = np.column_stack([np.zeros_like(probe), probe, np.zeros_like(probe)])
+# Evaluate just inside the right-grain submesh at x = 0 and x = LX.
+eps_x = 1e-6 * LX / NX
+pts = np.column_stack([np.full_like(probe, eps_x), probe, np.zeros_like(probe)])
 ratio = eval_on(cb_fn, pts) / np.interp(probe, y_gb, c_gb_vals)
 print(f"\nlocal equilibrium c_b(0,y)/c_gb(y): {ratio.min():.4f} .. {ratio.max():.4f}")
 
 # Whipple/Le Claire type-B fit: ln(cbar) vs. y**(6/5). One grain and half
 # the slab, which is the half-cell the closed form is written for.
-depths = np.linspace(0.15, 1.0, 25)
+depths = np.linspace(0.15, 1.0, 25) / 1e4  # metres, within [0, LY]
 xs = np.linspace(0.0, LX, 200)
+sample_xs = np.clip(xs, eps_x, LX - eps_x)
 cbar = np.array(
     [
         (
             np.trapezoid(
                 eval_on(
                     cb_fn,
-                    np.column_stack([xs, np.full_like(xs, y), np.zeros_like(xs)]),
+                    np.column_stack(
+                        [sample_xs, np.full_like(xs, y), np.zeros_like(xs)]
+                    ),
                 ),
                 xs,
             )
