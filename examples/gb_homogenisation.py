@@ -208,7 +208,6 @@ def cell_problem(micro, transport, bcs, settings=None):
         temperature=transport.T,
         settings=settings or F.Settings(atol=ATOL, rtol=RTOL, transient=False),
     )
-    model.show_progress_bar = False
     return CellProblem(
         model, micro, transport, grains, grain_species, tensors, network, c_gb
     )
@@ -449,7 +448,6 @@ def homogeneous_model(
             stepsize=stepsize,
         ),
     )
-    model.show_progress_bar = False
     return model, c, volume, mesh
 
 

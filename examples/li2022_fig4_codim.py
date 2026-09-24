@@ -189,7 +189,6 @@ def cell_problem(micro, D_gb, bcs):
         temperature=T,
         settings=F.Settings(atol=1e-25, rtol=1e-10, transient=False),
     )
-    model.show_progress_bar = False
     model.initialise()
     fm.fem.solvers.tune_direct_solver(model)
     return CellProblem(
