@@ -30,7 +30,7 @@ NETWORK_ID = 1_000_000  # above every grain id; a manifold shares the surface id
 SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
 
 # Simulation parameters
-base = HERE / "results" / "ebsd_ctf_to_tesr" / "poly"
+base = HERE / "results" / "ebsd_ctf_to_mesh" / "poly"
 theta_min = 10.0
 
 D_B = 1e-14  # lattice diffusivity     [m^2/s]
