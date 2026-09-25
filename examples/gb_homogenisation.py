@@ -471,6 +471,8 @@ def uptake(micro, transport, D_eff, n_steps=60, verbose=True):
             stepsize=F.Stepsize(initial_value=dt),
         ),
     )
+    # FESTIM creates progress_bar in run(), which this manual stepping skips.
+    cp.model.show_progress_bar = False
     cp.model.initialise()  # the stepping is driven here rather than by run()
     fm.fem.solvers.tune_direct_solver(cp.model)
 
@@ -485,6 +487,7 @@ def uptake(micro, transport, D_eff, n_steps=60, verbose=True):
     )
     total = F.TotalVolume(field=c, volume=volume)
     homogeneous.exports = [total]
+    homogeneous.show_progress_bar = False
     homogeneous.initialise()
     times, micro_inventory, model_inventory = [0.0], [0.0], [0.0]
     while cp.model.t.value < final_time - 0.5 * dt:
