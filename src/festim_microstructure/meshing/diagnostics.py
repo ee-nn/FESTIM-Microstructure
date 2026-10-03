@@ -7,8 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from festim_microstructure.formats.ebsd import read_ebsd
 from festim_microstructure.formats.msh4 import read_msh4
-from festim_microstructure.formats.tesr import read_tesr, tesr_origin
 from festim_microstructure.plotting import (
     draw_raster,
     scale_bar_ax,
@@ -95,6 +95,7 @@ class AreaReportOptions:
     unit: str = "um"
     dpi: int = 150
     allow_mismatch: bool = False
+    mesh_unit: float = 1.0
 
 
 def raster_areas(cells, vox, ncell=None):
@@ -173,13 +174,19 @@ def summarise(delta, weights=None) -> ChangeStats:
     )
 
 
-def area_change(tesr_path, msh4_path, allow_mismatch=False) -> AreaChange:
+def area_change(
+    archive_path, msh4_path, allow_mismatch=False, mesh_unit=1.0
+) -> AreaChange:
     """The whole diagnostic, as an :class:`AreaChange`."""
-    cells, vox = read_tesr(tesr_path)
-    origin = tesr_origin(tesr_path)
+    data = read_ebsd(archive_path)
+    cells, vox = data.labels, data.vox
+    origin = (0.0, 0.0)
     xyz, _seg, tri = read_msh4(msh4_path)
+    xyz = {tag: np.asarray(point) / mesh_unit for tag, point in xyz.items()}
     if not tri:
-        raise ValueError(f"{msh4_path}: no 2D elements. Mesh with -dim all.")
+        raise ValueError(
+            f"{msh4_path}: no 2D elements. The UPXO mesh must contain triangles."
+        )
 
     ncell = int(cells.max())
     a_ras, npx = raster_areas(cells, vox, ncell)
@@ -385,7 +392,7 @@ def write_png(path, res: AreaChange, unit="um", dpi=150, log=print):
     return path
 
 
-def measure(tesr, msh4, options: AreaReportOptions | None = None, log=print):
+def measure(archive, msh4, options: AreaReportOptions | None = None, log=print):
     """Measure, report, and optionally write the table and the picture.
 
     Returns the :class:`AreaChange`. Raises ValueError when a mesh face does not
@@ -395,7 +402,9 @@ def measure(tesr, msh4, options: AreaReportOptions | None = None, log=print):
     the wrong grains.
     """
     opt = options or AreaReportOptions()
-    res = area_change(tesr, msh4, allow_mismatch=opt.allow_mismatch)
+    res = area_change(
+        archive, msh4, allow_mismatch=opt.allow_mismatch, mesh_unit=opt.mesh_unit
+    )
     lines = format_report(res)
     if log:
         for line in lines:
@@ -421,16 +430,20 @@ def edge_sides(seg, tri):
     return sides
 
 
-def overlay(tesr, msh4, output="check-mesh.png", dpi=150, unit="um", log=print):
+def overlay(
+    archive, msh4, output="check-mesh.png", dpi=150, unit="um", log=print, mesh_unit=1.0
+):
     """Write the overlay PNG. Returns the output path.
 
-    `tesr` and `msh4` are paths; everything else is cosmetic. The counts are
+    `archive` and `msh4` are paths; everything else is cosmetic. The counts are
     printed through `log`, which can be set to None to silence them.
     """
     plt = use_agg()
 
-    cells, vox = read_tesr(tesr)
+    data = read_ebsd(archive)
+    cells, vox = data.labels, data.vox
     xyz, seg, tri = read_msh4(msh4)
+    xyz = {tag: np.asarray(point) / mesh_unit for tag, point in xyz.items()}
     sides = edge_sides(seg, tri)
     faces = {t for t, _ in tri}
     if log and len(faces) != int(cells.max()):

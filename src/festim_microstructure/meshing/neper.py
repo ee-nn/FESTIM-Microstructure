@@ -1,17 +1,14 @@
 """Run Neper tessellation/meshing workflows and read their topology data.
 
-Supports generated polycrystals and 2D EBSD rasters. :class:`NeperMesh` is the
+Supports generated polycrystals. :class:`NeperMesh` is the
 whole 3D path in one object: it generates the tessellation, meshes it, reads the
 mesh, and interprets the topology statistics read by formats.msh4.
 """
 
-import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-
-import numpy as np
 
 from .._binaries import find_binary, subprocess_env
 from ..formats.msh4 import StatFile, read_mesh
@@ -24,9 +21,7 @@ __all__ = [
     "VER_KEYS",
     "NeperMesh",
     "NeperSettings",
-    "TesrMeshOptions",
     "find_binary",
-    "mesh_tesr",
     "run_interruptible",
 ]
 
@@ -40,12 +35,7 @@ VER_KEYS = ("domtype", "edgenb")
 
 @dataclass
 class _Outputs:
-    """Where a Neper invocation writes, and which binaries it uses.
-
-    Inherited rather than composed, so the caller of :class:`NeperMesh` or
-    :func:`mesh_tesr` fills in one settings object instead of two. Both entry
-    points need the same five values and neither needs them to vary
-    independently of the rest.
+    """Where a generated Neper polycrystal writes, and which binaries it uses.
 
     Attributes:
         stem (str): Basename Neper is told to write, and so the name of every
@@ -472,221 +462,3 @@ class NeperMesh:
             f"  boundary area                   : {self.network_measure:.4f}",
         ]
         return "\n".join(lines)
-
-
-# 2D EBSD raster.
-
-
-@dataclass
-class TesrMeshOptions(_Outputs):
-    """Everything :func:`mesh_tesr` needs: what to compute, and where to put it."""
-
-    crysym: str = "cubic"
-    orides: str = "rodrigues:passive"
-    """Orientation descriptor; must match how the tesr stores them."""
-    tesr_transform: str | None = None
-    """Optional Neper transformation chain applied to the input raster. Empty by
-    default: the converter is expected to have done the cropping and cleanup,
-    and skipping this avoids Neper's tesr write path."""
-    tesr_smooth: str = "laplacian"
-    """Interface smoothing before meshing. The reconstructed boundaries are
-    pixel staircases; Laplacian smoothing rounds them off. ``"none"`` keeps the
-    staircase."""
-    tesr_smooth_fact: float = 0.5
-    tesr_smooth_iter: int = 5
-    rcl: float = 0.25
-    """Relative characteristic length. Only ``-rcl`` acts on a raster input:
-    Neper derives the edge and vertex lengths from the face value and never
-    consults ``-rcledge`` / ``-rclver``."""
-    mesh_qual_min: float | None = 0.7
-    mesh_max_time: float | None = None
-    extra_stat_keys: tuple = field(default_factory=tuple)
-
-
-def _need(path, force):
-    """Return whether an output must be regenerated instead of reused."""
-    if force or not Path(path).is_file():
-        return True
-    print(f"  reusing {Path(path).name}")
-    return False
-
-
-def mesh_tesr(tesr, options=None):
-    """A single EBSD map -> triangular mesh conforming to the raster's own
-    grain boundaries. Returns the base path (no extension).
-
-    ``neper -M map.tesr`` meshes the raster directly, which is supported in 2D
-    only. The msh4 carries the reconstructed topology as physical groups
-    ``ver#``, ``edge#``, ``face#``, and face k is raster cell k, so:
-
-    * grain boundary: 1D element set ``edge#``, touching two ``face#`` sets;
-    * specimen surface: 1D element set touching one face;
-    * theta: disorientation of the two grains' orientations
-      (``<stem>-grainori.txt``), computed by the Python side;
-    * triple junction: mesh vertex where 3+ distinct edge ids meet.
-
-    Outputs ``<stem>.msh4`` (Gmsh v4, linear triangles, all dimensions),
-    ``<stem>.sttesr`` (raster geometry: ``dim, rastersizex, rastersizey,
-    voxsizex, voxsizey``, in the raster's unit) and ``<stem>-grainori.txt``
-    (one orientation per grain). Everything runs in the raster's unit; the
-    EBSD pipeline exports a separate final mesh in metres.
-
-    This replaces the former ``ebsd_to_mesh.sh``; each stage is cached on its
-    output file unless ``options.force``.
-    """
-    opt = options or TesrMeshOptions()
-    stem, force = opt.stem, opt.force
-    base = opt.base
-    wd = base.parent
-    tesr = Path(tesr).resolve()
-    if not tesr.is_file():
-        raise FileNotFoundError(
-            f"no EBSD map .tesr file at {tesr}. The map must be written as a "
-            "raster tessellation first (festim_microstructure.ebsd.convert)."
-        )
-    if any(c.isspace() for c in str(tesr)):
-        raise ValueError(
-            f"the path {str(tesr)!r} contains whitespace. Neper's input-file "
-            "argument is a structured field, so a path with whitespace arrives "
-            "as several unusable fragments."
-        )
-    neper_bin, gmsh_bin, env = opt.binaries()
-    tmp = wd / "tmp"
-    tmp.mkdir(exist_ok=True)
-
-    # 0. stage the raster. By default nothing is done to it: the converter
-    #    already crops, fills holes and numbers cells from 1 with the origin at
-    #    (0,0), and its grains are connected components so `rmsat` has nothing
-    #    to remove.
-    raw = wd / f"{stem}-raw.tesr"
-    if _need(raw, force):
-        if opt.tesr_transform:
-            print(f"  transforming: {opt.tesr_transform}")
-            run_interruptible(
-                [
-                    neper_bin,
-                    "-T",
-                    "-loadtesr",
-                    str(tesr),
-                    "-transform",
-                    opt.tesr_transform,
-                    "-o",
-                    f"{stem}-raw",
-                ],
-                cwd=str(wd),
-                env=env,
-            )
-            if "**oridata" in raw.read_text(errors="replace"):
-                print(
-                    f"  WARNING: {raw.name} was written by neper -T and contains "
-                    "**oridata. Neper 5.0.0 may not be able to read it back; if "
-                    "the next command stalls, regenerate the input without "
-                    "per-voxel orientations."
-                )
-        else:
-            shutil.copyfile(tesr, raw)
-
-    # geometry of the cleaned raster, one line, columns in the order given
-    run_interruptible(
-        [
-            neper_bin,
-            "-T",
-            "-loadtesr",
-            raw.name,
-            "-stattesr",
-            "dim,rastersizex,rastersizey,voxsizex,voxsizey",
-            "-o",
-            stem,
-        ],
-        cwd=str(wd),
-        env=env,
-    )
-    dim, lx, ly, vsx, vsy = np.loadtxt(base.with_suffix(".sttesr"), ndmin=2)[0]
-    print(f"  raster: dim={int(dim)}  extent={lx:g} x {ly:g}  pixel={vsx:g} x {vsy:g}")
-    if int(dim) != 2:
-        raise RuntimeError(
-            f"this pipeline expects a 2D EBSD map, got a {int(dim)}D tesr. To take "
-            "a single slice out of a 3D map, crop it to one voxel along z and "
-            "apply the '2d' transform: neper -T -loadtesr map.tesr -transform "
-            "'crop(cube(...,zmin,zmin+voxsizez)),2d' -o slice"
-        )
-
-    # per-grain orientations. For a raster tessellation the orientation key is
-    # the descriptor itself (`rodrigues`, `euler-bunge`, ...) -- `ori` is a
-    # simulation result key and is not valid here.
-    ori = wd / f"{stem}-grainori.txt"
-    if _need(ori, force):
-        run_interruptible(
-            [
-                neper_bin,
-                "-T",
-                "-loadtesr",
-                raw.name,
-                "-oridescriptor",
-                opt.orides,
-                "-statcell",
-                opt.orides.split(":")[0],
-                "-o",
-                f"{stem}-grainori",
-            ],
-            cwd=str(wd),
-            env=env,
-        )
-        (wd / f"{stem}-grainori.stcell").replace(ori)
-    n_cells = sum(1 for _ in open(ori))
-    print(f"  grains: {n_cells}")
-
-    # mesh the raster. Gmsh v4 because FESTIM reads it with
-    # dolfinx.io.gmshio and needs the 1D element sets, which carry the
-    # reconstructed edge ids. -tmp must exist beforehand.
-    msh = base.with_suffix(".msh4")
-    if _need(msh, force):
-        run_interruptible(
-            [
-                neper_bin,
-                "-M",
-                raw.name,
-                "-gmsh",
-                gmsh_bin,
-                "-dim",
-                "all",
-                "-order",
-                "1",
-                "-elttype",
-                "tri",
-                "-rcl",
-                str(opt.rcl),
-                "-tesrsmooth",
-                opt.tesr_smooth,
-                "-tesrsmoothfact",
-                str(opt.tesr_smooth_fact),
-                "-tesrsmoothitermax",
-                str(opt.tesr_smooth_iter),
-                *(
-                    ["-meshqualmin", str(opt.mesh_qual_min)]
-                    if opt.mesh_qual_min
-                    else []
-                ),
-                *(
-                    ["-mesh2dmaxtime", str(opt.mesh_max_time)]
-                    if opt.mesh_max_time
-                    else []
-                ),
-                "-tmp",
-                str(tmp),
-                "-format",
-                "msh4",
-                "-statmesh",
-                "nodenb,eltnb",
-                "-o",
-                stem,
-            ],
-            cwd=str(wd),
-            env=env,
-        )
-    try:
-        tmp.rmdir()
-    except OSError:
-        print(f"  note: {tmp} is not empty (stale gmsh scratch)")
-    print(f"ok: {msh.name}  ({n_cells} grains, domain {lx:g} x {ly:g})")
-    return base

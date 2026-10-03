@@ -1,4 +1,4 @@
-"""Measured orientation maps to raster tessellations."""
+"""Measured orientation maps imported through UPXO/DefDAP."""
 
 from typing import TYPE_CHECKING
 
@@ -7,20 +7,16 @@ from .._lazy import lazy_namespace
 if TYPE_CHECKING:
     from . import convert as convert
     from . import diagnostics as diagnostics
-    from . import morphology as morphology
     from . import orientation as orientation
-    from . import segmentation as segmentation
     from . import settings as settings
     from .convert import ConversionResult as ConversionResult
     from .convert import CtfConversion as CtfConversion
     from .convert import MeasureOptions as MeasureOptions
-    from .convert import measure_tesr_against_ctf as measure_tesr_against_ctf
+    from .convert import measure_against_ctf as measure_against_ctf
     from .settings import Settings as Settings
 
 _SUBMODULES = (
     "orientation",
-    "segmentation",
-    "morphology",
     "settings",
     "convert",
     "diagnostics",
@@ -29,7 +25,7 @@ _NAMES = {
     "ConversionResult": ".convert",
     "CtfConversion": ".convert",
     "MeasureOptions": ".convert",
-    "measure_tesr_against_ctf": ".convert",
+    "measure_against_ctf": ".convert",
     "Settings": ".settings",
 }
 

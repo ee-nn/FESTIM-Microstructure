@@ -27,7 +27,9 @@ classifiers = [
 ]
 
 # Only pure-Python, pip-installable requirements belong here.
-# dolfinx, gmsh (Python API) and neper come from conda -- see environment.yml.
+# dolfinx and gmsh (Python API) come from conda -- see environment.yml.
+# FESTIM and UPXO share environment-festim-microstructure-upxo.yml.
+# Optional Neper uses environment-neper.yml.
 # This mirrors FESTIM's own pyproject, which likewise does not declare dolfinx.
 dependencies = [
     "festim>=2.2rc2",

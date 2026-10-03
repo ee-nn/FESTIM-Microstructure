@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from ._binaries import ENV_VARS, resolve_all
+from .meshing.upxo import resolve_python
 
 __all__ = ["main"]
 
@@ -54,6 +55,14 @@ def main(argv=None):
         ok &= err is None
     print(f"  prefix                 {sys.prefix}")
 
+    upxo_python = resolve_python(required=False)
+    print(f"  UPXO interpreter       {upxo_python or 'not configured'}")
+    if upxo_python is None:
+        print(
+            "  EBSD meshing: create and activate "
+            "environment-festim-microstructure-upxo.yml"
+        )
+
     print("\nexternal programs (explicit path > FM_*_BIN > PATH)")
     found = resolve_all()
     for name, var in ENV_VARS.items():
@@ -76,9 +85,9 @@ def main(argv=None):
             print(f"  {name:8s} {path}  [{source}]  {_program_version(path, flag)}")
     if found["neper"] is None:
         print(
-            "\nNeper is not available: Neper-backed tessellations and EBSD meshing "
-            "will not run.\nThe Voronoi (Gmsh) route and the EBSD .ctf converter do "
-            "not need it. To add it:\n"
+            "\nNeper is not available: Neper-backed generated tessellations will not "
+            "run.\nEBSD meshing uses UPXO; the Voronoi route and EBSD converter "
+            "also work without Neper. To add it:\n"
             "  conda env create -f environment-neper.yml && tools/link-neper-env.sh"
         )
     elif found["gmsh"] is None:

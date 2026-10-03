@@ -1,4 +1,4 @@
-"""The json sidecar that lets a .tesr be lined back up with its .ctf."""
+"""Source provenance for an imported EBSD archive."""
 
 from __future__ import annotations
 
@@ -10,16 +10,7 @@ __all__ = ["read_provenance", "write_provenance"]
 
 
 def write_provenance(path, opt, seg, vox, log=print):
-    """Everything needed to line the .tesr back up with the .ctf, plus the
-    segmentation error, as json.
-
-    The window, the frame change and the Euler correction are choices made in
-    `Settings` and are not recoverable from the .tesr itself, so
-    `measure_tesr_against_ctf` cannot re-measure the conversion without them.
-    The statistics are copied in so that a later stage can quote stage 1's
-    error without re-reading the .ctf. Dumping the whole dataclass means a
-    field added to `Settings` reaches the file without a second edit here.
-    """
+    """Save source settings and quantitative orientation diagnostics."""
     rec = asdict(opt)
     rec.update(
         {
@@ -41,5 +32,5 @@ def write_provenance(path, opt, seg, vox, log=print):
 
 
 def read_provenance(path):
-    """Read the conversion metadata stored alongside a TESR file."""
+    """Read the conversion metadata stored alongside an EBSD archive."""
     return json.loads(Path(path).read_text())

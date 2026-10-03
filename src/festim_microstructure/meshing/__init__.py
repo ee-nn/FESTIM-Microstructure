@@ -8,20 +8,21 @@ if TYPE_CHECKING:
     from . import diagnostics as diagnostics
     from . import ebsd as ebsd
     from . import neper as neper
+    from . import upxo as upxo
     from .ebsd import EbsdMicrostructure as EbsdMicrostructure
     from .ebsd import EbsdOptions as EbsdOptions
     from .ebsd import run_ebsd_pipeline as run_ebsd_pipeline
     from .neper import NeperMesh as NeperMesh
     from .neper import NeperSettings as NeperSettings
-    from .neper import TesrMeshOptions as TesrMeshOptions
-    from .neper import mesh_tesr as mesh_tesr
+    from .upxo import UpxoMeshOptions as UpxoMeshOptions
+    from .upxo import mesh_ebsd as mesh_ebsd
 
-_SUBMODULES = ("neper", "ebsd", "diagnostics")
+_SUBMODULES = ("neper", "ebsd", "diagnostics", "upxo")
 _NAMES = {
     "NeperMesh": ".neper",
     "NeperSettings": ".neper",
-    "TesrMeshOptions": ".neper",
-    "mesh_tesr": ".neper",
+    "UpxoMeshOptions": ".upxo",
+    "mesh_ebsd": ".upxo",
     "EbsdMicrostructure": ".ebsd",
     "EbsdOptions": ".ebsd",
     "run_ebsd_pipeline": ".ebsd",

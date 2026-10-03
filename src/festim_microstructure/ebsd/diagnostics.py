@@ -2,27 +2,21 @@
 
 from __future__ import annotations
 
-import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from festim_microstructure._binaries import find_binary, subprocess_env
 from festim_microstructure.ebsd.orientation import (
     ROT_X_180,
     cubic_disorientation_angle,
     qconj,
     qmul,
-    rodrigues_to_quat,
 )
 from festim_microstructure.ebsd.settings import Settings
-from festim_microstructure.formats.tesr import read_tesr_full
+from festim_microstructure.formats.ebsd import read_ebsd
 from festim_microstructure.plotting import (
-    annotate_png,
-    append_key,
     scale_bar_ax,
     use_agg,
 )
@@ -34,11 +28,11 @@ __all__ = [
     "format_report",
     "l2_stats",
     "per_grain_rms",
-    "render_checks",
     "segmentation_error",
     "theta_field",
     "verify_readback",
     "write_csv",
+    "write_orientation_png",
     "write_png",
     "write_quality_png",
 ]
@@ -95,7 +89,7 @@ class SegmentationError:
     backfilled: L2Stats
     grain_rms: Any = None  #: per-grain RMS theta, id order
     grain_npx: Any = None  #: per-grain voxel count, id order
-    voxel: L2Stats | None = None  #: **oridata transcription check, if available
+    voxel: L2Stats | None = None  #: pixel orientation transcription check, if available
 
 
 def l2_stats(theta, mask, vox, threshold=None):
@@ -140,18 +134,11 @@ def segmentation_error(
 ):
     """Return segmentation and optional transcription-error diagnostics.
 
-    qgrid   (ny, nx, 4) per-pixel quaternions straight from the .ctf
-    cellids (ny, nx)    grain id per pixel, 0 = unassigned, as in the tesr
-    qcell   (ncell, 4)  one quaternion per grain, as in the tesr's **cell/*ori
-    ok      (ny, nx)    quality mask, i.e. the tesr's **oridef; failed voxels
-                        carry a meaningless orientation and are reported apart
-    qvox    (ny, nx, 4) the tesr's **oridata, for the transcription check
-    backfilled (ny, nx) voxels fill_holes gave to their nearest cell rather
-                        than to a grain of their own -- quality rejections
-                        *and* grains the min_pixels prune removed. Their theta
-                        is the price of filling, not a segmentation error, so
-                        they are counted apart. Defaults to ~ok, which catches
-                        only the first kind.
+    ``qgrid`` and ``qvox`` are source and imported pixel quaternions;
+    ``qcell`` contains the symmetry-aware mean per grain. Zero labels are
+    unassigned. ``ok`` is the quality mask. ``backfilled`` marks pixels
+    without original DefDAP membership, including rejected and pruned pixels;
+    these contribute only to the filled population, never indexed error.
     """
     ncells = int(cellids.max())
     assigned = cellids > 0
@@ -225,22 +212,26 @@ def format_report(res: SegmentationError, label="segmentation"):
         verdict = "" if v.max < 1e-3 else "  <-- NOT a round trip"
         lines.append(
             f"transcription L2: RMS {v.rms:.2e} deg, max {v.max:.2e} deg "
-            f"(**oridata vs the measured orientations){verdict}"
+            f"(imported pixels vs source CTF){verdict}"
         )
     return lines
 
 
-def write_png(path, res: SegmentationError, cellids, unit="um", dpi=150, log=print):
+def write_png(
+    path, res: SegmentationError, cellids, unit="um", dpi=150, log=print, flip_y=False
+):
     """theta map, its distribution, and the per-grain RMS on the same map.
 
     The segmentation threshold is read off ``res``; it was already recorded
     there when the statistics were taken.
     """
     threshold = res.indexed.threshold
+    if flip_y:
+        cellids = cellids[::-1]
     plt = use_agg()
     plt.rcParams.update({"font.size": 15, "axes.titlesize": 15})
 
-    theta = res.theta
+    theta = res.theta[::-1] if flip_y else res.theta
     ny, nx = theta.shape
     vx, vy = res.vox
     kw = dict(interpolation="nearest", origin="lower", extent=(0, nx * vx, 0, ny * vy))
@@ -262,8 +253,8 @@ def write_png(path, res: SegmentationError, cellids, unit="um", dpi=150, log=pri
     scale_bar_ax(ax, nx * vx, unit)
 
     ax = axes[1]
-    good = theta[res.good]
-    filled = theta[res.filled]
+    good = res.theta[res.good]
+    filled = res.theta[res.filled]
     hi = max(np.percentile(good, 99.9) * 1.5, threshold or 0, 1e-3)
     bins = np.linspace(0, hi, 80)
     ax.hist(good, bins=bins, color="0.35", label=f"indexed ({good.size})")
@@ -339,222 +330,117 @@ class QualityPanels:
     flip_y: bool = False
 
 
-def _run(cmd, cwd, log):
-    """Run a Neper command, returning True on success and reporting on failure.
-
-    The directories of ``cmd[0]`` (neper) and of any ``-povray`` argument are
-    put on the child's PATH, since Neper may look the renderer up by name.
-    """
-    extra = [cmd[cmd.index("-povray") + 1]] if "-povray" in cmd else []
-    env = subprocess_env(cmd[0], *extra)
-    out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
-    if out.returncode:
-        tail = (out.stderr or out.stdout).strip().splitlines()[-3:]
-        log(f"  WARNING: {Path(cmd[0]).name} {cmd[1]} failed: {' / '.join(tail)}")
-    return out.returncode == 0
-
-
-def _render_neper_png(cmd, work, log):
-    """Render Neper's scene with explicit POV-Ray camera basis vectors.
-
-    Some POV-Ray builds render an empty scene with implicit camera defaults.
-    Supply the standard direction/up before Neper's camera transformations.
-    """
-    povray = cmd[cmd.index("-povray") + 1]
-    stem = cmd[cmd.index("-print") + 1]
-    scene = Path(work) / f"{stem}.pov"
-    print_index = cmd.index("-print")
-    scene_cmd = [*cmd[:print_index], "-imageformat", "pov", *cmd[print_index:]]
-    if not _run(scene_cmd, work, log):
-        return False
-    try:
-        source = scene.read_text()
-        source = re.sub(
-            r"(camera\s*\{\s*(?:orthographic|perspective)\s*)",
-            r"\1direction <0, 0, 1>\nup <0, 1, 0>\n",
-            source,
-            count=1,
-        )
-        scene.write_text(source)
-        size = cmd[cmd.index("-imagesize") + 1] if "-imagesize" in cmd else "1200:900"
-        width, height = size.split(":")
-        return _run(
-            [
-                povray,
-                f"+I{scene.name}",
-                f"+O{stem}.png",
-                f"+W{width}",
-                f"+H{height}",
-                "-D",
-                "+A0.2",
-                "+FN",
-            ],
-            work,
-            log,
-        )
-    finally:
-        scene.unlink(missing_ok=True)
-
-
-def render_checks(tesr, width, unit="um", neper="neper", povray="povray", log=print):
-    """Render the written raster with neper -V. Returns the paths written.
-
-    Two images, both of the .tesr this module just wrote and of nothing else,
-    which is why they belong here rather than in the meshing stage:
-
-      <stem>-ori.png     per-voxel orientation, IPF-Z, with the colour key
-      <stem>-grains.png  cell ids in Neper's integer palette
-
-    Look at these before trusting anything downstream: an inverted orientation
-    convention shows up as IPF colours that disagree with AZtec or MTEX, and a
-    bad segmentation as speckle or as obviously back-filled grains.
-
-    -V colours by orientation but does not print the key
-    (neper.info/tutorials/orientation_color_key.html), so the key is built the
-    way that page documents -- tessellate the standard stereographic triangle,
-    mesh it, read the node colours out with `-statnode col_stdtriangle` -- then
-    pasted beside the map and deleted.
-
-    Needs the neper binary and POV-Ray. A missing one is reported and skipped,
-    since everything else the conversion produces is pure Python.
-    """
-    tesr = Path(tesr)
-    work, stem = tesr.parent, tesr.stem
-    neper = (
-        find_binary("neper", neper, "FM_NEPER_BIN", required=False) if neper else None
-    )
-    if neper is None:
-        log("  note: neper not found, skipping the rendered check images")
-        return []
-    povray = find_binary("povray", povray, "FM_POVRAY_BIN", required=False) or povray
-
-    written = []
-    for name, opts in (
-        ("ori", ["-datavoxcol", "ori", "-datavoxcolscheme", "ipf"]),
-        ("grains", []),
-    ):
-        png = work / f"{stem}-{name}.png"
-        cmd = [neper, "-V", tesr.name, "-povray", povray, *opts, "-print", png.stem]
-        if not _render_neper_png(cmd, work, log):
-            continue
-        # neper -V frames the flat map in the middle of a 3D canvas, so the
-        # border comes off first; after that the image width *is* `width`
-        annotate_png(png, width, unit, trim_border=True, log=log)
-        written.append(png)
-
-    ori = work / f"{stem}-ori.png"
-    if ori in written:
-        tri, key = f"{stem}-stdtriangle", work / f"{stem}-ipfkey.png"
-        if (
-            _run(
-                [
-                    neper,
-                    "-T",
-                    "-n",
-                    "1",
-                    "-domain",
-                    "stdtriangle(20)",
-                    "-dim",
-                    "2",
-                    "-o",
-                    tri,
-                ],
-                work,
-                log,
-            )
-            and _run(
-                [
-                    neper,
-                    "-M",
-                    f"{tri}.tess",
-                    "-cl",
-                    "0.02",
-                    "-statnode",
-                    "col_stdtriangle",
-                ],
-                work,
-                log,
-            )
-            and _render_neper_png(
-                [
-                    neper,
-                    "-V",
-                    f"{tri}.msh",
-                    "-povray",
-                    povray,
-                    "-datanodecol",
-                    f"col:file({tri}.stnode)",
-                    "-dataeltcol",
-                    "from_nodes",
-                    "-dataelt2dedgerad",
-                    "0",
-                    "-dataelt1drad",
-                    "0.001",
-                    "-showelt1d",
-                    "all",
-                    "-imagesize",
-                    "800:400",
-                    "-print",
-                    key.stem,
-                ],
-                work,
-                log,
-            )
-        ):
-            append_key(ori, key, log=log)
-            key.unlink()
-        for ext in (".tess", ".msh", ".stnode"):
-            (work / (tri + ext)).unlink(missing_ok=True)
-    return written
-
-
 def verify_readback(path, qgrid, ok, cellids, flip_y):
-    """Re-read the written tesr, compare with what was meant, return a report.
-
-    Three checks: the cell map is identical, `**oridef` is the quality mask,
-    and every voxel orientation read back is the same rotation as the measured
-    one. The file holds a fundamental-zone representative, so equality is
-    only expected up to the symmetry group -- which is what a disorientation
-    measures, hence ~0 rather than exactly 0.
-
-    ``qgrid``, ``ok`` and ``cellids`` are in the .ctf's row order and frame;
-    the ``flip_y`` frame change is applied here to form the expected file.
-    """
-    back = read_tesr_full(path)
-    exp_cells = cellids[::-1] if flip_y else cellids
-    exp_ok = ok[::-1] if flip_y else ok
-    exp_q = qmul(ROT_X_180, qgrid[::-1]) if flip_y else qgrid
-    same_cells = np.array_equal(back["cells"], exp_cells)
-    report = [
-        f"read-back: cell ids {'identical' if same_cells else 'DIFFER'} "
-        f"({back['nx']} x {back['ny']} voxels)"
+    """Require identical labels, quality masks and measured pixel rotations."""
+    back = read_ebsd(path)
+    expected_cells = cellids[::-1] if flip_y else cellids
+    expected_ok = ok[::-1] if flip_y else ok
+    expected_q = qmul(ROT_X_180, qgrid[::-1]) if flip_y else qgrid
+    if not np.array_equal(back.labels, expected_cells):
+        raise ValueError("read-back grain labels differ")
+    if not np.array_equal(back.indexed, expected_ok):
+        raise ValueError("read-back indexed mask differs")
+    dis = theta_field(expected_q, back.pixel_quats)
+    if np.max(dis[expected_ok]) > 1e-3:
+        raise ValueError("read-back measured orientations differ")
+    return [
+        "read-back: grain labels and indexed mask identical",
+        f"read-back: indexed pixel orientations max {dis[expected_ok].max():.2e} deg",
     ]
-    if "vox_ori" in back:
-        same_def = np.array_equal(back["oridef"], exp_ok)
-        report.append(
-            f"read-back: **oridef {'identical' if same_def else 'DIFFERS'} "
-            "to the quality mask"
+
+
+def write_orientation_png(path, data, log=print, unit="um"):
+    """Native grain and cubic IPF-Z maps with a matching crystallographic key.
+
+    Rotate sample Z into the crystal frame, fold by cubic symmetry into
+    0 <= y <= x <= z, and color the [001], [101], [111] vertices red,
+    green, blue. The same mapping draws the key and both orientation maps.
+    """
+    from festim_microstructure.ebsd.orientation import qconj, qmul
+    from festim_microstructure.plotting import draw_raster
+
+    def colors(q):
+        direction = np.zeros_like(q)
+        direction[..., 3] = 1
+        v = np.sort(np.abs(qmul(qmul(qconj(q), direction), q)[..., 1:]), axis=-1)
+        y, x, z = v[..., 0], v[..., 1], v[..., 2]
+        rgb = np.stack((z - x, x - y, y), axis=-1)
+        rgb = np.sqrt(np.maximum(rgb, 0))
+        return rgb / np.maximum(rgb.max(axis=-1, keepdims=True), 1e-15)
+
+    plt = use_agg()
+    fig, axes = plt.subplots(1, 4, figsize=(18, 5), layout="constrained")
+    extent = (0, data.extent[0], 0, data.extent[1])
+    draw_raster(axes[0], data.labels, data.vox)
+    axes[0].set_title("UPXO/DefDAP grains")
+    for ax, quats, mask, title in (
+        (
+            axes[1],
+            data.pixel_quats,
+            data.indexed,
+            "measured IPF-Z (rejected pixels grey)",
+        ),
+        (
+            axes[2],
+            data.grain_quats[np.maximum(data.labels - 1, 0)],
+            data.labels > 0,
+            "grain-mean IPF-Z",
+        ),
+    ):
+        rgb = colors(quats)
+        rgb[~mask] = 0.6
+        ax.imshow(rgb, origin="lower", interpolation="nearest", extent=extent)
+        ax.set_title(title)
+    from matplotlib.tri import Triangulation
+
+    # Barycentric directions give a key consistent with the map coloring.
+    n = 40
+    coords, directions = [], []
+    vertices = np.array([[0, 0, 1], [1, 0, 1], [1, 1, 1]], dtype=float)
+    for i in range(n + 1):
+        for j in range(n + 1 - i):
+            weights = np.array([1 - (i + j) / n, i / n, j / n])
+            coords.append((i / n + j / (2 * n), j / n))
+            directions.append(weights @ vertices)
+    coords, directions = np.asarray(coords), np.asarray(directions)
+    v = np.sort(directions, axis=-1)
+    rgb = np.sqrt(
+        np.maximum(np.column_stack((v[:, 2] - v[:, 1], v[:, 1] - v[:, 0], v[:, 0])), 0)
+    )
+    rgb /= rgb.max(axis=1, keepdims=True)
+    tri = Triangulation(coords[:, 0], coords[:, 1])
+    from matplotlib.collections import PolyCollection
+
+    axes[3].add_collection(
+        PolyCollection(
+            coords[tri.triangles],
+            facecolors=rgb[tri.triangles].mean(axis=1),
+            edgecolors="none",
         )
-        dis = cubic_disorientation_angle(
-            qmul(qconj(exp_q.reshape(-1, 4)), rodrigues_to_quat(back["vox_ori"]))
-        )
-        report.append(
-            f"read-back: voxel orientations vs measured: max "
-            f"{dis.max():.2e} deg, mean {dis.mean():.2e} deg over {dis.size} voxels"
-            + ("" if dis.max() < 1e-3 else "  <-- NOT a round trip")
-        )
-    return report
+    )
+    axes[3].autoscale_view()
+    for xy, label in (
+        ((0, 0), "[001] red"),
+        ((1, 0), "[101] green"),
+        ((0.5, 1), "[111] blue"),
+    ):
+        axes[3].text(*xy, label, ha="center")
+    axes[3].set_title("cubic IPF-Z key")
+    for ax in axes:
+        ax.set_aspect("equal")
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for ax in axes[:3]:
+        scale_bar_ax(ax, data.extent[0], unit)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    if log:
+        log(f"  wrote {path}")
+    return path
 
 
 def write_quality_png(path, panels: QualityPanels, log=print):
-    """Three panels tracing every grey pixel of `neper -V ... -datavoxcol ori`.
-
-    Neper paints a voxel grey where `**oridef` is 0, and that is written from
-    the quality mask, so a grey pixel is one the .ctf's own columns failed. The
-    panels are the MAD column (which is what the max_mad cut has to be chosen
-    against), which test rejected each pixel, and which pixels the cell map
-    back-filled because they were rejected or belonged to a pruned grain.
-    """
+    """MAD, quality rejection reasons, and filled/pruned grain pixels."""
     diag, ok, cellids = panels.diag, panels.ok, panels.cellids
     unassigned, opt, vox = panels.unassigned, panels.settings, panels.vox
     unit, flip_y = panels.unit, panels.flip_y
@@ -605,7 +491,7 @@ def write_quality_png(path, panels: QualityPanels, log=print):
     im = ax.imshow(orient(reason), cmap=cmap, vmin=-0.5, vmax=4.5, **kw)
     fig.colorbar(im, ax=ax, ticks=range(5), fraction=0.046).set_ticklabels(labels)
     ax.set_title(
-        f"rejected (grey in -V): {int((~ok).sum())}/{ok.size} px "
+        f"quality rejected: {int((~ok).sum())}/{ok.size} px "
         f"({100 * (~ok).mean():.1f} %)"
     )
 
@@ -622,7 +508,7 @@ def write_quality_png(path, panels: QualityPanels, log=print):
         **kw,
     )
     ax.set_title(
-        f"{ncell} cells, {int(filled.sum())} px back-filled (dark), "
+        f"{ncell} grains\n{int(filled.sum())} filled pixels (dark), "
         f"{int((cellids == 0).sum())} empty"
     )
 

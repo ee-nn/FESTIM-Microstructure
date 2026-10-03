@@ -6,10 +6,14 @@ from .._lazy import lazy_namespace
 
 if TYPE_CHECKING:
     from . import ctf as ctf
+    from . import ebsd as ebsd
     from . import msh4 as msh4
     from . import provenance as provenance
     from . import tesr as tesr
     from .ctf import CtfMap as CtfMap
+    from .ebsd import EbsdData as EbsdData
+    from .ebsd import read_ebsd as read_ebsd
+    from .ebsd import write_ebsd as write_ebsd
     from .msh4 import StatFile as StatFile
     from .msh4 import read_mesh as read_mesh
     from .msh4 import read_msh4 as read_msh4
@@ -18,8 +22,11 @@ if TYPE_CHECKING:
     from .tesr import read_tesr_full as read_tesr_full
     from .tesr import write_tesr as write_tesr
 
-_SUBMODULES = ("ctf", "tesr", "msh4", "provenance")
+_SUBMODULES = ("ctf", "ebsd", "tesr", "msh4", "provenance")
 _NAMES = {
+    "EbsdData": ".ebsd",
+    "read_ebsd": ".ebsd",
+    "write_ebsd": ".ebsd",
     "TesrData": ".tesr",
     "read_tesr": ".tesr",
     "read_tesr_full": ".tesr",

@@ -1,0 +1,51 @@
+# Combined solver and EBSD mesher, using one Python 3.13 interpreter.
+# conda env create -f environment-festim-microstructure-upxo.yml
+# conda activate festim-microstructure-upxo
+# python -m pip install -e .
+# unset FM_UPXO_PYTHON  # select this interpreter automatically
+name: festim-microstructure-upxo
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - fenics-dolfinx >=0.10,<0.12
+  - fenics-ufl
+  - fenics-basix
+  - mpi4py
+  - petsc4py
+  - scifem >=0.20.0
+  - io4dolfinx
+  - h5py
+  - gmsh=4.15.2
+  - python-gmsh=4.15.2
+  - meshio=5.3.5
+  - rasterio >=1.4.3
+  # Meet UPXO's requirements in conda so pip need not replace ABI-sensitive
+  # scientific packages underneath the compiled FEniCSx stack.
+  - numpy >=2.2.6
+  - scipy >=1.16.2
+  - matplotlib >=3.10.6
+  - pandas >=2.3.3
+  - numba >=0.62.1
+  - networkx >=3.5
+  - pyvista >=0.46.3
+  - scikit-image >=0.25.2
+  - scikit-learn >=1.7.2
+  - shapely >=2.1.1
+  - tqdm >=4.67.1
+  - seaborn >=0.13.2
+  - colorama >=0.4.6
+  - termcolor >=2.4.0
+  - connected-components-3d >=3.26.1
+  - xlrd >=2.0.1
+  - openpyxl >=3.1.0
+  - ipywidgets >=8.0.0
+  - pillow >=10.0.0
+  - pytest
+  - pytest-cov
+  - ruff
+  - ipykernel
+  - pip:
+      - festim==2.2rc2
+      - upxo[ebsd] @ git+https://github.com/Design-By-Fundamentals-UKAEA/UPXO.git@fef845ba10a3e849a5bb6b0a3c2ad89098035739

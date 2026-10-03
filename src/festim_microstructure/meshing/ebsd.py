@@ -1,12 +1,12 @@
 """Mesh EBSD rasters and rebuild the 2D GB topology required by FESTIM.
 
-The pipeline converts ``.tesr`` to ``.msh4``, then derives edge connectivity,
-disorientation, lengths, and junctions from Neper's element sets.
+The pipeline imports CTF grains through UPXO/DefDAP, meshes with UPXO, and derives
+edge connectivity, disorientation, lengths, and junctions from the mesh.
 """
 
 from __future__ import annotations
 
-import shutil
+import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -15,30 +15,26 @@ from mpi4py import MPI
 import dolfinx
 import numpy as np
 
+from festim_microstructure.ebsd.convert import convert
 from festim_microstructure.ebsd.orientation import (
     cubic_disorientation_angle,
     qconj,
     qmul,
-    rodrigues_to_quat,
 )
-from festim_microstructure.formats.tesr import read_tesr
+from festim_microstructure.ebsd.settings import Settings
+from festim_microstructure.formats.ebsd import read_ebsd
 from festim_microstructure.meshing.diagnostics import (
     AreaReportOptions,
     measure,
     overlay,
 )
-from festim_microstructure.meshing.neper import (
-    TesrMeshOptions,
-    mesh_tesr,
-    run_interruptible,
-)
+from festim_microstructure.meshing.upxo import UpxoMeshOptions, mesh_ebsd
 from festim_microstructure.plotting import draw_raster, scale_bar_ax, use_agg
 
 __all__ = [
     "EbsdMicrostructure",
     "EbsdOptions",
     "EdgeTable",
-    "cleanup_unscaled_files",
     "mesh_diagnostics",
     "read_extent",
     "run_ebsd_pipeline",
@@ -51,134 +47,142 @@ UNIT_NAMES = {1e-9: "nm", 1e-6: "um", 1e-3: "mm", 1.0: "m"}
 
 
 def unit_name(unit):
-    """Return a display label for a metres-per-TESR-unit scale.
-
-    Args:
-        unit: Number of metres represented by one TESR coordinate unit.
-
-    Returns:
-        A recognized metric unit, or ``"tesr units"`` for another scale.
-    """
-    return UNIT_NAMES.get(unit, "tesr units")
+    """Display label for a metres-per-source-coordinate scale."""
+    return UNIT_NAMES.get(unit, "source units")
 
 
 @dataclass
 class EbsdOptions:
-    """Inputs for EBSD raster meshing."""
+    """Full CTF → UPXO/DefDAP grains → UPXO mesh → FESTIM checks."""
 
-    tesr: str
-    """Raster tessellation; convert source EBSD data first."""
+    ctf: str
     unit: float = 1e-6
-    """Metres per TESR unit; the final mesh and extent are saved in SI units."""
     theta_min: float = 10.0
-    """Minimum GB disorientation in degrees."""
-    mesh: TesrMeshOptions | None = None
-    """Neper meshing options; defaults to :class:`TesrMeshOptions`."""
+    import_settings: Settings | None = None
+    mesh: UpxoMeshOptions | None = None
     stem: str = "poly"
     check_images: bool = True
 
     def __post_init__(self):
-        """Supply default TESR meshing options when none were provided."""
         if self.mesh is None:
-            self.mesh = TesrMeshOptions()
+            self.mesh = UpxoMeshOptions()
+        if self.import_settings is None:
+            self.import_settings = Settings(ctf=str(self.ctf))
+        if Path(self.import_settings.ctf).resolve() != Path(self.ctf).resolve():
+            raise ValueError(
+                "ctf and import_settings.ctf must refer to the same source"
+            )
+        if not np.isfinite(self.unit) or self.unit <= 0:
+            raise ValueError("unit must be finite and positive")
+        if not np.isfinite(self.theta_min) or not 0 <= self.theta_min < 63:
+            raise ValueError("theta_min must be between 0 and 63 degrees")
+        if (
+            not self.stem
+            or Path(self.stem).name != self.stem
+            or self.stem in (".", "..")
+        ):
+            raise ValueError("stem must be a filename without directory components")
 
 
-def run_ebsd_pipeline(
-    options, workdir: str | Path = "results", neper_bin=None, gmsh_bin=None, force=True
-):
-    """Write an SI mesh and metadata; return the extension-free output path.
+def run_ebsd_pipeline(options, workdir: str | Path = "results", force=True):
+    """Import, mesh, check source geometry/orientations and load FESTIM tags.
 
-    Meshing and raster diagnostics run in the input units under ``workdir``,
-    with an ``-unscaled`` stem to distinguish them from the SI outputs.
-    The final mesh is always exported from that raw mesh, so cached runs do
-    not compound the conversion to metres.
+    Accepted meshes carry their native EBSD archive and SI metadata. Grain and
+    boundary tags are checked through the actual DOLFINx importer, and the
+    reconstructed FESTIM network is reported alongside geometry diagnostics.
     """
-    if not np.isfinite(options.unit) or options.unit <= 0:
-        raise ValueError("unit must be a finite, positive metres-per-TESR-unit factor")
-    meshing = replace(
-        options.mesh,
-        stem=f"{options.stem}-unscaled",
-        workdir=Path(workdir),
-        neper_bin=neper_bin,
-        gmsh_bin=gmsh_bin,
-        force=force,
+    options.__post_init__()
+    if not isinstance(options.mesh, UpxoMeshOptions):
+        raise TypeError("EbsdOptions.mesh must be UpxoMeshOptions")
+    # Only one rank imports/publishes files; all ranks load the accepted mesh.
+    # Propagate preparation failures before entering collective mesh import.
+    comm = MPI.COMM_WORLD
+    base, failure = None, None
+    if comm.rank == 0:
+        try:
+            workdir = Path(workdir)
+            workdir.mkdir(parents=True, exist_ok=True)
+            imported = convert(
+                settings=replace(
+                    options.import_settings,
+                    python=options.import_settings.python or options.mesh.python,
+                    diagnostics=options.import_settings.diagnostics
+                    or options.check_images,
+                ),
+                output=workdir / f"{options.stem}-import.npz",
+                force=force,
+            )
+            base = mesh_ebsd(
+                imported.archive,
+                replace(
+                    options.mesh,
+                    python=options.mesh.python or options.import_settings.python,
+                ),
+                workdir=workdir,
+                stem=options.stem,
+                unit=options.unit,
+                force=force,
+            )
+            mesh_diagnostics(
+                base, unit_name(options.unit), check_images=options.check_images
+            )
+        except Exception as exc:
+            failure = exc
+    base, failure = comm.bcast((base, failure), root=0)
+    if failure is not None:
+        raise failure
+    from festim_microstructure.formats.msh4 import read_mesh
+
+    mesh, cells, facets = read_mesh(base, gdim=2)
+    micro = EbsdMicrostructure.from_mesh(
+        base, mesh, cells, facets, read_extent(base), theta_min=options.theta_min
     )
-    raw_base = mesh_tesr(options.tesr, meshing)
-    base = raw_base.parent / options.stem
-    mesh_diagnostics(
-        raw_base,
-        unit_name(options.unit),
-        check_images=options.check_images,
-        report_base=base,
-    )
-    _, gmsh, env = meshing.binaries()
-    run_interruptible(
-        [
-            gmsh,
-            str(raw_base.with_suffix(".msh4")),
-            "-save",
-            "-setnumber",
-            "Mesh.ScalingFactor",
-            str(options.unit),
-            "-format",
-            "msh41",
-            "-o",
-            str(base.with_suffix(".msh4")),
-        ],
-        env=env,
-    )
-    stats = np.loadtxt(str(raw_base) + ".sttesr", ndmin=2)
-    stats[:, 1:] *= options.unit
-    np.savetxt(str(base) + ".sttesr", stats)
-    shutil.copyfile(str(raw_base) + "-grainori.txt", str(base) + "-grainori.txt")
+    micro.check_orientations()
+    if mesh.comm.rank == 0:
+        report = dict(
+            n_grains=micro.n_grains,
+            n_edges=micro.edges.n,
+            interior_edges=int(micro.interior_mask.sum()),
+            surface_edges=micro.surface_edges,
+            triple_junctions=micro.triple_junctions,
+            theta_min=options.theta_min,
+            orientation_source=f"{base.name}-ebsd.npz",
+            extent_m=list(read_extent(base)),
+        )
+        Path(f"{base}-festim.json").write_text(json.dumps(report, indent=2) + "\n")
+    if options.check_images:
+        write_network_png(
+            base, mesh, micro, f"{base}-ebsd.npz", options.unit, unit_name(options.unit)
+        )
     return base
 
 
 def read_extent(base):
-    """``(LX, LY)`` in metres, from the pipeline's SI ``.sttesr`` file."""
-    cols = np.loadtxt(str(base) + ".sttesr", ndmin=2)[0]
-    return float(cols[1]), float(cols[2])
+    """Domain width and height in metres from native mesh metadata."""
+    return tuple(json.loads(Path(f"{base}-metadata.json").read_text())["extent_m"])
 
 
-def cleanup_unscaled_files(base):
-    """Delete the temporary raster-unit files used to produce an SI mesh.
-
-    Call this only after diagnostics that need ``<stem>-unscaled-raw.tesr``
-    have been written. The final ``.msh4``, SI metadata, and diagnostics do not
-    use these files.
-
-    Returns the paths that were removed.
-    """
+def mesh_diagnostics(base, unit_name="um", check_images=True):
+    """Compare final SI mesh with imported labels, in source display units."""
     base = Path(base)
-    prefix = f"{base.name}-unscaled"
-    removed = []
-    for path in base.parent.glob(f"{prefix}*"):
-        if path.is_file():
-            path.unlink()
-            removed.append(path)
-    return removed
-
-
-def mesh_diagnostics(base, unit_name="um", check_images=True, report_base=None):
-    """Write mesh-overlay and grain-area diagnostics.
-
-    The area check also verifies that mesh face ids still match raster cell ids.
-    ``report_base`` controls the CSV name independently of the unscaled mesh.
-    """
-    base = Path(base)
-    report_base = base if report_base is None else Path(report_base)
-    work = base.parent
-    tesr, msh4 = f"{base}-raw.tesr", f"{base}.msh4"
-
+    archive, msh4 = f"{base}-ebsd.npz", f"{base}.msh4"
+    scale = json.loads(Path(f"{base}-metadata.json").read_text())["unit"]
     if check_images:
-        overlay(tesr, msh4, output=str(work / "check-mesh.png"), unit=unit_name)
-    measure(
-        tesr,
+        overlay(
+            archive,
+            msh4,
+            output=f"{base}-check-mesh.png",
+            unit=unit_name,
+            mesh_unit=scale,
+        )
+    return measure(
+        archive,
         msh4,
         AreaReportOptions(
-            csv=f"{report_base}-areachange.csv",
-            png=str(work / "check-area.png") if check_images else None,
+            csv=f"{base}-areachange.csv",
+            png=f"{base}-check-area.png" if check_images else None,
             unit=unit_name,
+            mesh_unit=scale,
         ),
     )
 
@@ -230,8 +234,8 @@ def _edge_grain_pairs(comm, facet_edge, cell_grain, f2c, n_edge):
         raise RuntimeError(
             f"edges {bad[:10]} touch {sides[bad[:10] - 1]} grains; every "
             "edge# set must lie between two face# sets or between one "
-            "face# set and the domain. The msh4 is not a neper -M raster "
-            "mesh, or the cell tags did not survive the read."
+            "face# set and the domain. Check the grain and boundary tags "
+            "in the mesh."
         )
     pair = np.array(
         [sorted(g) + [0] * (2 - len(g)) for g in grains[1:]], dtype=np.int32
@@ -261,18 +265,20 @@ def _edge_extents(comm, mesh, facet_edge, fdim, fmap, n_edge):
 
 
 def _edge_theta(base, n_grain, n_edge, pair, sides):
-    """Disorientation per edge from the grain orientations Neper wrote.
-
-    Line k of ``-grainori.txt`` is face k, so the file and the ``face#`` sets
-    must describe the same raster; that is checked rather than assumed.
-    """
-    ori = np.loadtxt(str(base) + "-grainori.txt", ndmin=2)
-    if ori.shape[0] != n_grain:
+    """Disorientations from the native archive associated with this mesh."""
+    data = read_ebsd(f"{base}-ebsd.npz")
+    if data.ncells != n_grain:
         raise RuntimeError(
-            f"{base}-grainori.txt has {ori.shape[0]} lines but the mesh "
-            f"has {n_grain} face# sets; they must be the same raster"
+            f"native EBSD archive has {data.ncells} grains "
+            f"but mesh has {n_grain} face sets"
         )
-    q = rodrigues_to_quat(ori)
+    from festim_microstructure.ebsd.orientation import (
+        quat_to_rodrigues,
+        to_fundamental_zone,
+    )
+
+    q = data.grain_quats
+    ori = quat_to_rodrigues(to_fundamental_zone(q))
     theta = np.zeros(n_edge)
     inner = sides == 2
     a, b = pair[inner, 0] - 1, pair[inner, 1] - 1
@@ -303,7 +309,7 @@ def _count_triple_junctions(comm, mesh, facet_edge, v2f, vmap, extent):
 
 @dataclass
 class EbsdMicrostructure:
-    """Rebuild GB topology and disorientations from Neper's EBSD mesh.
+    """Rebuild GB topology and disorientations from the tagged UPXO EBSD mesh.
 
     Mesh ``edge#`` sets provide boundaries and ``face#`` sets retain raster cell
     ids. Junction counts are exact in serial and lower bounds in parallel.
@@ -328,7 +334,7 @@ class EbsdMicrostructure:
     def from_mesh(
         cls, base, mesh, cell_tags, facet_tags, extent, theta_min=10.0, crysym="cubic"
     ):
-        """Reconstruct the topology from a mesh ``neper -M`` wrote."""
+        """Reconstruct topology from the pipeline's grain and boundary tags."""
         if crysym != "cubic":
             raise NotImplementedError(
                 "theta is computed with the closed-form cubic disorientation "
@@ -341,6 +347,7 @@ class EbsdMicrostructure:
         fdim = tdim - 1
         top.create_connectivity(fdim, tdim)
         top.create_connectivity(0, fdim)
+        top.create_connectivity(0, tdim)
         f2c = top.connectivity(fdim, tdim)
         v2f = top.connectivity(0, fdim)
         fmap, cmap, vmap = top.index_map(fdim), top.index_map(tdim), top.index_map(0)
@@ -428,29 +435,20 @@ class EbsdMicrostructure:
         return float(self.edges["ymin"][touching].min())
 
     def check_orientations(self):
-        """Fail loudly if theta is not a real disorientation distribution.
+        """Check finite orientations and cubic boundary-angle bounds.
 
-        With theta computed here rather than by Neper the failure modes move:
-        an all-zero orientation file, or one that does not belong to this
-        raster, are what would make every boundary look alike.
+        Identity orientations and zero-angle boundaries can be physically valid;
+        source readback checks and grain IDs establish their provenance.
         """
         theta = self.edges["theta"][self.interior_mask]
-        problems = []
-        if np.allclose(self.ori, 0.0):
-            problems.append("every grain orientation in the tesr readout is zero")
-        if theta.size and np.allclose(theta, 0.0):
-            problems.append("every interior edge has theta = 0")
-        if theta.size and theta.max() > 63.0:
-            # the maximum disorientation is ~62.8 deg for cubic symmetry
-            problems.append(
-                f"max theta = {theta.max():.1f} deg exceeds the cubic bound"
-            )
-        if problems:
+        if (
+            not np.isfinite(self.ori).all()
+            or not np.isfinite(theta).all()
+            or np.any(theta < 0)
+            or np.any(theta > 63)
+        ):
             raise RuntimeError(
-                "the orientations are not usable: "
-                + "; ".join(problems)
-                + ". Check that -grainori.txt was written from the same tesr "
-                "that was meshed."
+                "grain orientations or cubic disorientations are invalid"
             )
         return self.n_grains
 
@@ -480,7 +478,7 @@ class EbsdMicrostructure:
         return "\n".join(lines)
 
 
-def write_network_png(base, mesh, micro, tesr_path, unit=1e-6, unit_name="um"):
+def write_network_png(base, mesh, micro, archive_path, unit=1e-6, unit_name="um"):
     """check-network.png: the raster with the boundaries as FESTIM will use them.
 
     Same background as check-mesh.png (meshing.diagnostics), but the edges are the
@@ -496,12 +494,13 @@ def write_network_png(base, mesh, micro, tesr_path, unit=1e-6, unit_name="um"):
 
     use_agg()
     base = Path(base)
-    cells, vox = read_tesr(tesr_path)
+    data = read_ebsd(archive_path)
+    cells, vox = data.labels, data.vox
     fdim = mesh.topology.dim - 1
     owned = np.arange(mesh.topology.index_map(fdim).size_local, dtype=np.int32)
     owned = owned[micro.facet_edge[owned] > 0]
     nodes = dolfinx.mesh.entities_to_geometry(mesh, fdim, owned, False)
-    segs = mesh.geometry.x[nodes][:, :, :2] / unit  # back to tesr units
+    segs = mesh.geometry.x[nodes][:, :, :2] / unit  # back to source units
     e = micro.facet_edge[owned] - 1
     surface = micro.edges["domtype"][e] > 0
     kept = micro.network_mask[e]

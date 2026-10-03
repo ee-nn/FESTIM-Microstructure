@@ -1,7 +1,7 @@
 """Short-circuit diffusion through the GB network of a polycrystal measured by
 EBSD, in 2D.
 
-The mesh is Neper's direct meshing of the raster, so the grain boundaries are
+The mesh is UPXO's validated meshing of the raster, so the grain boundaries are
 the measured ones and each boundary's disorientation comes from the two grains'
 measured orientations. See :mod:`festim_microstructure.meshing.ebsd`.
 
@@ -10,7 +10,7 @@ one network species at the rate ``k``; the network is the list of edge ids above
 the disorientation threshold.
 
 Prerequisite: the SI ``poly.msh4`` and accompanying extent/orientation files
-written by ``examples/ebsd_ctf_to_tesr.py``.
+written by ``examples/ebsd_ctf_to_mesh.py``.
 """
 
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Conversion settings, and the Channel-to-Neper crystal-symmetry table."""
+"""Quality, crop, frame and UPXO/DefDAP import settings."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class Settings:
     """Configuration for :func:`convert`, including saved provenance."""
 
     ctf: str
-    #: Crop before segmentation to avoid unpruned Neper slivers.
+    #: Crop the measured map before segmentation.
     crop: str | None = None
     phase: int = 1  #: phase to keep
     threshold: float = 10.0  #: grain boundary misorientation, degrees
@@ -43,27 +43,37 @@ class Settings:
     min_bands: int = 0  #: minimum Bands; 0 disables the test
     allow_error: bool = False  #: keep points whose Error column is non-zero
     min_pixels: int = 5  #: discard grains smaller than this
-    #: TESR length scale; keep it near unity for Neper's absolute tolerances.
+    #: Multiply both source pixel spacings by this factor.
     scale: float = 1.0
-    #: Reverse the y axis because EBSD and Neper use opposite vertical
-    #: directions. Written as a proper frame change, (x, y, z) -> (x, -y, -z):
-    #: the rows are mirrored and every orientation is rotated 180 deg about x.
+    #: Proper frame change: mirror rows and rotate orientations 180 deg about x.
     flip_y: bool = False
-    #: Rotation taking the Euler-angle frame onto the map frame, as Bunge
-    #: angles in degrees, left-multiplied onto every measured orientation;
-    #: equivalent to MTEX's ``'EulerCorrection', rotation.byEuler(...)``.
-    #: ``None`` assumes the two frames coincide. MTEX assumes (180, 0, 0) for
-    #: .ctf files; verify against a known specimen feature before relying on it.
+    #: Rotation taking the Euler frame onto the map frame (Bunge degrees).
     euler_correction: tuple[float, float, float] | None = None
-    fill: bool = True  #: grow cells into unassigned voxels; see fill_holes
-    #: Repair raster topologies that ``neper -M`` cannot reconstruct.
-    topology_fix: bool = True
-    voxel_ori: bool = True  #: write **oridata/**oridef (large; needed by -V)
-    #: Write quality and segmentation diagnostics.
+    #: Assign unindexed/pruned pixels to the nearest surviving grain for geometry.
+    #: Original membership is retained and these pixels do not affect grain means.
+    fill: bool = True
     diagnostics: bool = False
-    #: Optional Neper binary for rendered checks; absence is non-fatal.
-    neper: str | None = "neper"
-    povray: str = "povray"  #: neper -V renders through this
+    #: Optional UPXO interpreter; defaults to the combined active environment.
+    python: str | None = None
+    timeout: float = 600.0
+
+    def __post_init__(self):
+        if not isinstance(self.phase, int) or self.phase < 1:
+            raise ValueError("phase must be a positive integer")
+        if not isinstance(self.min_pixels, int) or self.min_pixels < 1:
+            raise ValueError("min_pixels must be a positive integer")
+        if not np.isfinite(self.threshold) or not 0 < self.threshold < 63:
+            raise ValueError("threshold must be between 0 and 63 degrees")
+        if not np.isfinite(self.max_mad) or self.max_mad < 0 or self.min_bands < 0:
+            raise ValueError("quality cutoffs must be finite and nonnegative")
+        if (
+            not np.isfinite(self.scale)
+            or self.scale <= 0
+            or not np.isfinite(self.timeout)
+            or self.timeout <= 0
+        ):
+            raise ValueError("scale and timeout must be finite and positive")
+        self.euler_correction_quat
 
     @property
     def euler_correction_quat(self):
@@ -71,8 +81,10 @@ class Settings:
         if self.euler_correction is None:
             return None
         angles = np.asarray(self.euler_correction, dtype=float)
-        if angles.shape != (3,):
-            raise ValueError("euler_correction must be three Bunge angles in degrees")
+        if angles.shape != (3,) or not np.isfinite(angles).all():
+            raise ValueError(
+                "euler_correction must be three finite Bunge angles in degrees"
+            )
         return euler_bunge_to_quat(*angles)
 
     @property

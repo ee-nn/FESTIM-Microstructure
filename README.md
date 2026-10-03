@@ -37,13 +37,15 @@ exports.
 
 ## Requirements
 
-The stack is split across two package managers and **two conda environments**:
+The solver and EBSD mesher share a Python 3.13 conda environment. Dependencies
+come from two package managers:
 
 - **conda-forge** supplies DOLFINx, the Gmsh Python API, FESTIM's compiled
   dependencies (`scifem`, `io4dolfinx`), and Neper.
 - **PyPI** supplies FESTIM itself. Versions 2.1 and 2.2rc* are not yet on
   conda-forge, where the newest 2.x build is `2.0b2.post2`.
-- **Neper lives in its own environment.** conda-forge's `neper` is built
+- **UPXO requires Python 3.13** and shares the combined environment with FESTIM.
+- **Optional Neper lives in its own environment.** conda-forge's `neper` is built
   against `scotch 6.1.x`, which pins `zlib <1.3`, while `fenics-dolfinx >=0.10`
   needs `libzlib >=1.3.2` (through `libadios2`). No single solve can contain
   both; `conda env create` on a combined file fails with
@@ -58,8 +60,29 @@ recommendation.
 
 ## Installation
 
-Install [Miniforge](https://github.com/conda-forge/miniforge) (or Miniconda),
-then:
+Install [Miniforge](https://github.com/conda-forge/miniforge) (or Miniconda).
+For a combined Python 3.13 solver and UPXO environment:
+
+```bash
+conda env create -f environment-festim-microstructure-upxo.yml
+conda activate festim-microstructure-upxo
+python -m pip install -e .
+unset FM_UPXO_PYTHON
+fm-check
+python examples/ebsd_ctf_to_mesh.py
+```
+
+Run these commands from the repository checkout. The combined environment
+installs the scientific and FEniCSx packages through conda and pins the evaluated
+UPXO commit and DefDAP 0.93.6. With Python 3.13 and UPXO installed, the importer and mesher automatically use
+the active interpreter. An explicit `UpxoMeshOptions(python=...)` or
+`FM_UPXO_PYTHON` still takes precedence. Neper is needed only for the generated
+Neper tessellation examples.
+The combined file passed a Linux Conda dependency dry run. Run `pytest -q`
+after installation to validate the combined runtime; the earlier complete
+pipeline evaluation used separate Python 3.12 and 3.13 environments.
+
+For solver workflows using the original Python 3.12 environment:
 
 ```bash
 git clone https://github.com/ee-nn/FESTIM-Microstructure.git
@@ -70,17 +93,13 @@ conda env create -f environment.yml
 conda activate festim-microstructure
 pip install -e .
 
-# 2. Neper, in its own environment (never activated)
+# Optional: Neper for generated tessellations
 conda env create -f environment-neper.yml
-
-# 3. tell environment 1 where environment 2's executables are
 tools/link-neper-env.sh
-conda activate festim-microstructure   # re-activate so the variables load
-fm-check
 ```
 
-Step 3 records `FM_NEPER_BIN`, `FM_GMSH_BIN` and `FM_POVRAY_BIN` as conda
-environment variables of `festim-microstructure` (`conda env config vars`), so
+The optional Neper linking script records `FM_NEPER_BIN`, `FM_GMSH_BIN` and
+`FM_POVRAY_BIN` as conda environment variables of `festim-microstructure` (`conda env config vars`), so
 they are exported on activate and cleared on deactivate; nothing is written to
 your shell profile. If you prefer, skip the script and export the same three
 variables yourself -- or pass paths explicitly (`NeperSettings(neper_bin=...)`).
@@ -88,9 +107,10 @@ Resolution order is always explicit argument, then the variable, then `PATH`.
 
 The Neper environment is optional. Without it, the Gmsh-based Voronoi route
 (`VoronoiMicrostructure.create`, `examples/voronoi_polycrystal_*.py`), the EBSD `.ctf` converter,
-and the homogenisation study all work; only Neper-backed tessellations and EBSD
-*meshing* need it. The POV-Ray render checks are optional within that: on
-linux-64, `conda install -n neper-env conda-forge::povray` and re-run step 3.
+and the homogenisation study all work. EBSD meshing uses UPXO; only
+Neper-backed generated tessellations need Neper. The POV-Ray render checks are
+optional within that: on linux-64, install `conda-forge::povray` into `neper-env`
+and re-run the linking script.
 
 `pip install -e .` is required -- without it the modules under `src/` are not
 on the import path and none of the examples will run. For a development install
@@ -100,7 +120,7 @@ including test and lint extras:
 pip install -e ".[test,lint]"
 ```
 
-For VS Code, select the `festim-microstructure` Conda environment with
+For VS Code, select the `festim-microstructure-upxo` Conda environment with
 **Python: Select Interpreter**. The project configures `src/` as an analysis
 search path for Pylance/Pyright; running the examples still requires the
 editable install in the selected environment. If imports stay underlined after
@@ -177,7 +197,8 @@ pip check
 
 ```
 FESTIM-Microstructure/
-├── environment.yml             # FEniCSx / FESTIM env (the one you work in)
+├── environment.yml             # Python 3.12 FEniCSx / FESTIM environment
+├── environment-festim-microstructure-upxo.yml  # combined Python 3.13 environment
 ├── environment-neper.yml       # Neper + gmsh executable, kept separate (see Requirements)
 ├── tools/link-neper-env.sh     # records the Neper paths on the FEniCSx env
 ├── pyproject.toml
@@ -194,13 +215,12 @@ FESTIM-Microstructure/
 │   ├── plotting.py             # raster colours, scale bars, image helpers
 │   ├── formats/                # file I/O
 │   │   ├── ctf.py
-│   │   ├── tesr.py
+│   │   ├── ebsd.py             # native grain/pixel arrays and masks
+│   │   ├── tesr.py             # generic Neper-format interoperability
 │   │   ├── msh4.py             # mesh readers and Neper StatFile
 │   │   └── provenance.py
-│   ├── ebsd/                   # measured map -> raster tessellation
+│   ├── ebsd/                   # UPXO/DefDAP measured grain import
 │   │   ├── orientation.py
-│   │   ├── segmentation.py
-│   │   ├── morphology.py
 │   │   ├── settings.py
 │   │   ├── convert.py
 │   │   └── diagnostics.py
@@ -352,7 +372,7 @@ into your own script:
 python examples/voronoi_polycrystal_2d.py       # in-process Gmsh tessellation
 python examples/voronoi_polycrystal_3d.py
 python examples/neper_voronoi_network.py        # needs neper + gmsh executables
-python examples/ebsd_ctf_to_tesr.py             # EBSD conversion + SI mesh
+python examples/ebsd_ctf_to_mesh.py             # EBSD conversion + SI mesh
 python examples/ebsd_gb_diffusion.py            # transport using the saved SI mesh
 python examples/fisher_grain_boundary.py        # single boundary vs Le Claire
 python examples/gb_homogenisation.py --sizes 2e-6 3e-6 4e-6
@@ -377,25 +397,69 @@ print(micro.report())
 
 workdir = Path("results")
 workdir.mkdir(parents=True, exist_ok=True)
-tesr = workdir / "poly.tesr"
-result = fm.ebsd.convert.convert(
-    "examples/data/D7 PBF SS316L.ctf",
-    str(tesr),
-    min_pixels=15,
-    max_mad=1.5,
-    allow_error=True,
-    crop="0,306,0,306",
-    diagnostics=True,
+ctf = "examples/data/D7 PBF SS316L.ctf"
+options = fm.EbsdOptions(
+    ctf=ctf,
+    import_settings=fm.ebsd.Settings(
+        ctf=ctf, min_pixels=15, max_mad=1.5, allow_error=True,
+        crop="0,306,0,306", diagnostics=True,
+    ),
+    mesh=fm.UpxoMeshOptions(),
 )
-base = fm.meshing.ebsd.run_ebsd_pipeline(
-    fm.EbsdOptions(tesr=str(tesr)), workdir=workdir
-)
+base = fm.meshing.ebsd.run_ebsd_pipeline(options, workdir=workdir)
+
 ```
 
-Configure EBSD meshing with `fm.EbsdOptions(mesh=fm.TesrMeshOptions(...))`
-(`TesrMeshOptions` is in `meshing.neper`). Pass binary paths with
-`convert(..., neper=...)` and
-`run_ebsd_pipeline(..., neper_bin=..., gmsh_bin=...)`.
+The EBSD chain is **CTF → UPXO/DefDAP grains → UPXO mesh → FESTIM**.
+Quality and phase filters and the crop apply before UPXO's `EBSDReader` detects
+grains. DefDAP supplies grain labels and symmetry-aware mean orientations; the
+package translates its quaternion convention and applies explicit sample-frame
+corrections. The current boundary-angle diagnostics support cubic m-3m (Laue 11).
+The custom segmentation and Neper topology-repair code have been removed.
+
+`Settings(fill=True)` assigns unindexed/pruned pixels to the nearest surviving
+grain for meshing. The archive retains their original membership and quality
+mask, and those pixels never contribute to grain means or indexed orientation
+error. Use `fill=False` to retain unmeshed regions. `min_pixels` and `threshold`
+control DefDAP grain detection. `flip_y` mirrors rows and rotates both pixel and
+grain orientations by 180° about sample x; `euler_correction` is a separate,
+explicit Euler-to-map frame correction.
+
+Configure smoothing and mesh sizes with `UpxoMeshOptions`. Defaults use five
+Taubin passes (λ=0.25, μ=−0.265), explicit pixel seeds, and no grain merging or
+diagonal repairs. `smoothing="none"` preserves raster boundaries. Sizes are in
+pixel coordinates; both pixel spacings are applied when exporting to metres.
+The pipeline rejects changes to grain IDs, components, holes, neighbor pairs,
+coverage, mesh conformity or grain areas. Default smoothing limits are 5%
+per-grain area change and one pixel of boundary displacement. There is no silent
+fallback; maps with unfilled voids may require `smoothing="none"`.
+
+Outputs include `<stem>.msh4`, `<stem>-ebsd.npz` (grain/pixel orientations,
+labels, masks and spacings), `<stem>-metadata.json` (SI extent), import provenance,
+`<stem>-validation.json`, and `<stem>-festim.json`. Quantitative diagnostics cover
+source orientation transcription, indexed/filled error populations, grain area
+and equivalent-diameter changes, displaced area, and grain-to-mesh identity.
+Optional images show quality rejection, grains and cubic IPF-Z, orientation
+error, mesh overlays, and the actual FESTIM boundary network. There are no TESR
+files, Neper rendering commands, or unscaled mesh intermediates in this chain.
+
+For separate import/inspection, use
+`fm.ebsd.convert.convert(ctf, "grains.npz", ...)` and
+`fm.ebsd.measure_against_ctf(ctf, "grains.npz")`. Low-level
+`fm.meshing.upxo.mesh_ebsd("grains.npz", ...)` meshes an existing native archive.
+`force=False` checks source/settings/code and output hashes before cache reuse.
+A failed meshing worker retains the previous accepted mesh and writes a failure
+validation report and log.
+
+In the combined Python 3.13 environment, the active interpreter runs both UPXO
+and FESTIM. `FM_UPXO_PYTHON`, `Settings(python=...)`, or
+`UpxoMeshOptions(python=...)` can select a compatible importer/mesher interpreter.
+The combined environment pins UPXO's evaluated commit and its DefDAP extra.
+UPXO remains an external dependency with its upstream GPL-3.0 license.
+The EBSD `TesrMeshOptions`, `mesh_tesr`, `EbsdOptions(tesr=...)`, conversion
+`topology_fix`, `voxel_ori`, and Neper/POV-Ray options have been removed.
+Generated Neper tessellations retain their existing `NeperSettings` API.
+
 The returned Voronoi mesh is in metres; the optional Gmsh file uses units of
 `size`. The `fm-check` environment diagnostic remains a console command.
 

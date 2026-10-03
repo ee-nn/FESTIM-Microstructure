@@ -1,17 +1,12 @@
-"""Drive a ``.ctf`` to ``.tesr`` conversion, stage by stage.
-
-:class:`CtfConversion` holds the state one conversion accumulates and exposes
-each stage as its own method, so a caller can stop after the segmentation, look
-at it, and only then write. :func:`convert` runs the lot and is what most
-callers want.
-"""
+"""Import CTF grains with UPXO/DefDAP and preserve scientific diagnostics."""
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+import tempfile
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -19,27 +14,17 @@ from festim_microstructure.ebsd.diagnostics import (
     QualityPanels,
     SegmentationError,
     format_report,
-    render_checks,
     segmentation_error,
     verify_readback,
+    write_orientation_png,
     write_quality_png,
 )
 from festim_microstructure.ebsd.diagnostics import write_png as write_segerr_png
-from festim_microstructure.ebsd.morphology import fill_holes, make_meshable
 from festim_microstructure.ebsd.orientation import (
     ROT_X_180,
     euler_bunge_to_quat,
     qconj,
     qmul,
-    quat_to_rodrigues,
-    rodrigues_to_quat,
-    rotate_sample_frame,
-    to_fundamental_zone,
-)
-from festim_microstructure.ebsd.segmentation import (
-    grain_mean_orientations,
-    relabel_and_prune,
-    segment_grains,
 )
 from festim_microstructure.ebsd.settings import (
     CUBIC_LAUE,
@@ -47,8 +32,9 @@ from festim_microstructure.ebsd.settings import (
     settings_from_provenance,
 )
 from festim_microstructure.formats.ctf import CtfMap
+from festim_microstructure.formats.ebsd import EbsdData, read_ebsd, write_ebsd
 from festim_microstructure.formats.provenance import write_provenance
-from festim_microstructure.formats.tesr import TesrData, read_tesr_full, write_tesr
+from festim_microstructure.meshing.upxo import UPXO_REVISION, import_ebsd
 
 __all__ = [
     "ConversionResult",
@@ -57,548 +43,383 @@ __all__ = [
     "build_grid",
     "convert",
     "crop_grid",
-    "measure_tesr_against_ctf",
+    "measure_against_ctf",
 ]
 
 
 @dataclass
 class ConversionResult:
-    """What one conversion produced.
+    """Native archive, source provenance, and orientation error populations."""
 
-    ``cellids``, ``ok`` and ``ori_cell`` are as *written*, i.e. after the
-    ``flip_y`` frame change; ``qcell`` and ``segmentation`` are in the .ctf's
-    own frame (after ``euler_correction``), because a common change of sample
-    frame does not change a disorientation.
-    """
-
-    tesr: Path
+    archive: Path
     provenance: Path
     settings: Settings
-    crysym: str
-    ncells: int
-    voxsize: tuple
-    extent: tuple  #: (lx, ly) in the .ctf's own length unit, times settings.scale
-    cellids: Any
-    ok: Any
-    ori_cell: Any  #: (ncell, 3) Rodrigues, as written
-    qcell: Any  #: (ncell, 4) quaternions, .ctf frame
-    npx: Any  #: voxels per grain, id order
-    window: tuple  #: the crop applied to the .ctf grid
+    data: EbsdData
+    window: tuple
     segmentation: SegmentationError
 
     @property
-    def rms_deg(self) -> float:
-        """The headline number: RMS disorientation over the indexed voxels."""
+    def rms_deg(self):
         return self.segmentation.indexed.rms
+
+    @property
+    def ncells(self):
+        return self.data.ncells
+
+    @property
+    def cellids(self):
+        return self.data.labels
+
+    @property
+    def voxsize(self):
+        return self.data.vox
+
+    @property
+    def extent(self):
+        return self.data.extent
 
 
 @dataclass
 class MeasureOptions:
-    """Inputs for :func:`measure_tesr_against_ctf`.
-
-    Give ``settings`` or ``provenance``: the crop window, the frame change and
-    the Euler correction are choices recorded in one of the two and are not
-    recoverable from the .tesr alone.
-    """
+    """Compare source CTF orientations with native grain and/or pixel data."""
 
     settings: Settings | None = None
     provenance: str | None = None
     against: str = "grain"
-    """``"grain"`` compares each pixel with its grain's ``**cell/*ori``, which
-    is the segmentation error and the only orientation the rest of the pipeline
-    sees. ``"voxel"`` compares it with its own ``**oridata`` entry, which
-    measures transcription only and should come back at the 1e-6 deg noise
-    floor. ``"both"`` reports each."""
     png: str | None = None
     csv: str | None = None
 
-    def resolve(self, ctf_path) -> Settings:
-        """Choose settings from provenance, explicit options, or the CTF path.
-
-        Args:
-            ctf_path: Source CTF path used when no other settings were supplied.
-
-        Returns:
-            The settings used for conversion.
-        """
-        if self.provenance is not None:
-            return settings_from_provenance(self.provenance)
-        return self.settings or Settings(ctf=str(ctf_path))
-
-
-def _orientation_sample_mask(segmented_cellids, final_cellids, ncells):
-    """Reliable pixels from the dominant original segment of each final grain.
-
-    Filling and topology repair may assign rejected, pruned, or absorbed pixels
-    to a surviving grain. Those pixels remain part of its geometry but do not
-    determine its representative orientation.
-    """
-    segmented = np.asarray(segmented_cellids)
-    final = np.asarray(final_cellids)
-    if segmented.shape != final.shape:
-        raise ValueError("segmented and final cell maps must have the same shape")
-
-    source = np.zeros(ncells + 1, dtype=segmented.dtype)
-    for grain in range(1, ncells + 1):
-        original = segmented[(final == grain) & (segmented > 0)]
-        if original.size == 0:
-            raise ValueError(f"grain {grain} has no original segmented pixels")
-        ids, counts = np.unique(original, return_counts=True)
-        source[grain] = ids[np.argmax(counts)]
-    return (final > 0) & (segmented == source[final])
+    def resolve(self, ctf_path):
+        if self.against not in ("grain", "voxel", "both"):
+            raise ValueError("against must be grain, voxel, or both")
+        return (
+            settings_from_provenance(self.provenance)
+            if self.provenance
+            else self.settings or Settings(ctf=str(ctf_path))
+        )
 
 
 class CtfConversion:
-    """One ``.ctf`` on its way to a ``.tesr``.
+    """Quality/crop adapter, UPXO import, native persistence and diagnostics.
 
-    The stages run in order and each one leaves its output on the instance:
-    :meth:`read`, :meth:`segment`, :meth:`clean`, :meth:`orient`,
-    :meth:`measure`, :meth:`write`, :meth:`diagnose`. :meth:`run` chains them.
+    Grain detection and symmetry-aware grain means are performed by DefDAP
+    through UPXO's modern EBSDReader. No local grain segmentation or topology
+    repair is applied. Optional nearest-grain filling is explicit geometry
+    preparation; the original membership remains available in the archive.
     """
 
-    def __init__(self, settings: Settings, log=print):
-        """Initialize conversion state.
-
-        Args:
-            settings: EBSD input, filtering, and output settings.
-            log: Callable receiving progress messages; ``None`` silences them.
-        """
+    def __init__(self, settings, log=print):
         self.settings = settings
-        self.log = log or (lambda *a, **k: None)
-        self.window: tuple = ()
+        self.log = log or (lambda *args: None)
 
-    # -- stage 1: read and mask -------------------------------------------
     def read(self):
-        """Parse the .ctf, build the orientation grid and the quality mask."""
-        opt, log = self.settings, self.log
-        self.ctf = ctf = CtfMap(opt.ctf)
-        ny, nx = ctf.shape
-        log(
-            f"{opt.ctf}: {nx} x {ny} pixels, step {ctf.header['XStep']} x "
-            f"{ctf.header['YStep']}, {ctf.npoints} rows"
-        )
-        if not np.isclose(ctf.header["XStep"], ctf.header["YStep"]):
-            log("  note: XStep != YStep -- voxels will not be square")
-
-        crysym, phase = ctf.crysym(opt.phase)
-        if crysym is None or phase is None:
-            raise ValueError("no phase line found; cannot determine crystal symmetry")
-        self.crysym = crysym
-        if phase["laue"] not in CUBIC_LAUE:
+        opt = self.settings
+        opt.__post_init__()
+        self.ctf = CtfMap(opt.ctf)
+        self.crysym, phase = self.ctf.crysym(opt.phase)
+        if phase is None or phase["laue"] not in CUBIC_LAUE:
             raise ValueError(
-                f"phase '{phase['name']}' has Laue group {phase['laue']} -> "
-                f"{self.crysym}, which this script cannot segment. The "
-                "disorientation used here is specific to Laue group m-3m. "
-                "Segment in MTEX and write the grain ids into the **data "
-                "section instead."
-            )
-        log(
-            f"  phase {opt.phase}: {phase['name']}, Laue {phase['laue']} -> "
-            f"{self.crysym}"
-        )
-
-        if opt.euler_correction is None:
-            log(
-                "  note: no euler_correction given, so the Euler-angle and map "
-                "frames are assumed to coincide. MTEX assumes (180, 0, 0) for "
-                ".ctf files; GB disorientations do not depend on this"
+                f"Laue group {phase['laue'] if phase else 'unknown'}: "
+                "EBSD boundary disorientations currently require m-3m (Laue 11)"
             )
         self.qgrid, self.ok, self.diag = build_grid(
-            ctf,
+            self.ctf,
             opt.phase,
             opt.max_mad,
             not opt.allow_error,
             opt.min_bands,
             opt.euler_correction_quat,
         )
-        self.window = (slice(0, ny), slice(0, nx))
+        self.window = (slice(0, self.ok.shape[0]), slice(0, self.ok.shape[1]))
         if opt.crop:
             self.qgrid, self.ok, self.window = crop_grid(
-                self.qgrid, self.ok, opt.crop, ctf.header["XStep"], ctf.header["YStep"]
+                self.qgrid,
+                self.ok,
+                opt.crop,
+                self.ctf.header["XStep"],
+                self.ctf.header["YStep"],
             )
             self.diag = {k: v[self.window] for k, v in self.diag.items()}
-            ny, nx = self.ok.shape
-            log(f"  cropped to {nx} x {ny} pixels ({opt.crop})")
-        self.shape = (ny, nx)
-
-        frac = self.ok.mean()
-        log(
-            f"indexed & above quality cutoffs: {self.ok.sum()} of "
-            f"{self.ok.size} ({100 * frac:.1f}%)"
-        )
-        if frac < 0.8:
-            log(
-                "  WARNING: a large fraction of the map was rejected. Loosen "
-                "max_mad or set allow_error, or expect a holed tessellation"
-            )
-        return self
-
-    # -- stage 2: grains ---------------------------------------------------
-    def segment(self):
-        """Flood-fill the pixels into grains and prune the tiny ones."""
-        opt, log = self.settings, self.log
-        labels = segment_grains(self.qgrid, self.ok, opt.threshold)
-        self.cellids, self.ncells, dropped, lost = relabel_and_prune(
-            labels, self.ok, opt.min_pixels
-        )
-        log(
-            f"  grains at {opt.threshold:g} deg: {self.ncells} "
-            f"({dropped} below {opt.min_pixels} px dropped, {lost} px)"
-        )
-        if self.ncells == 0:
-            raise ValueError("no grains survived; lower min_pixels or threshold")
-        return self
-
-    # -- stage 3: raster clean-up -----------------------------------------
-    def clean(self):
-        """Back-fill the holes and remove the topologies ``neper -M`` rejects.
-
-        Degenerate cells are what abort ``neper -T -n from_morpho`` partway
-        through "Listing cell voxels", and the objective function cannot place
-        ``pts(res=N)`` control points on a cell two pixels across either. The
-        bottom of the size distribution is reported so the failure is visible
-        here, not there.
-        """
-        opt, log = self.settings, self.log
-        # Keep the segmented membership separate from the filled/repaired map.
-        # The latter defines geometry; the former identifies which reliable
-        # pixels may determine each grain's representative orientation.
-        self.segmented_cellids = self.cellids.copy()
-        self.unassigned = self.segmented_cellids == 0
-        empty_before = int(self.unassigned.sum())
-        log(
-            f"  unassigned voxels: {empty_before} of {self.cellids.size} "
-            f"({100 * empty_before / self.cellids.size:.1f} %)"
-        )
-        if opt.fill:
-            self.cellids, filled = fill_holes(self.cellids)
-            log(f"  filled {filled} voxels from the nearest cell")
-        elif empty_before > 0.05 * self.cellids.size:
-            log(
-                "  WARNING: the raster has substantial holes and fill=False was "
-                "given. The tessellation fit will treat hole boundaries as grain "
-                "boundaries"
-            )
-
-        if opt.topology_fix:
-            self.cellids, absorbed, pinches = make_meshable(self.cellids)
-            self.ncells = int(self.cellids.max())
-            if absorbed:
-                log(
-                    f"  absorbed {len(absorbed)} enclosed grain(s) into their "
-                    f"surrounding grain: {', '.join(map(str, absorbed))}"
-                )
-            if pinches:
-                log(f"  unpinched {pinches} corner-only self-contact(s), 1 px each")
-            if absorbed or pinches:
-                log(f"  grains: {self.ncells}")
-
-        self.npx = np.bincount(self.cellids.ravel())[1:]
-        log(
-            "  smallest grains (px): "
-            + ", ".join(str(c) for c in np.sort(self.npx)[:8])
-        )
-        if self.npx.min() < 10:
-            log(
-                f"  WARNING: {int((self.npx < 10).sum())} grains under 10 px. "
-                "Neper's tessellation fit is liable to abort on these -- raise "
-                "min_pixels (20 is a reasonable floor)"
-            )
-        return self
-
-    # -- stage 4: orientations --------------------------------------------
-    def orient(self):
-        """One orientation per grain and the per-voxel field, in the .ctf frame."""
-        opt = self.settings
-        ny, nx = self.shape
-        self.qfz = to_fundamental_zone(self.qgrid.reshape(-1, 4)).reshape(ny, nx, 4)
-        sample_mask = _orientation_sample_mask(
-            self.segmented_cellids, self.cellids, self.ncells
-        )
-        self.qcell = grain_mean_orientations(
-            self.qgrid,
-            self.cellids,
-            self.ncells,
-            sample_mask=sample_mask,
-        )
+        if not self.ok.any():
+            raise ValueError("no indexed pixels survived the quality filters and crop")
         self.vox = (
             self.ctf.header["XStep"] * opt.scale,
             self.ctf.header["YStep"] * opt.scale,
         )
+        self.log(
+            f"CTF quality/crop: {self.ok.shape[1]} x {self.ok.shape[0]}, "
+            f"{self.ok.sum()}/{self.ok.size} indexed pixels"
+        )
         return self
 
-    # -- stage 5: what the segmentation cost -------------------------------
-    def measure(self):
-        """Measure the segmentation error, in the .ctf's own frame.
+    def import_grains(self):
+        opt = self.settings
+        imported = import_ebsd(self.ctf, self.window, self.ok, opt, log=self.log)
+        source = imported["source_labels"]
+        labels = np.maximum(source, 0).astype(np.int32)
+        if not np.any(labels):
+            raise ValueError(
+                "no grains survived DefDAP grain detection; lower min_pixels"
+            )
+        if opt.fill and np.any(labels == 0):
+            from scipy.ndimage import distance_transform_edt
 
-        Computed in the .ctf frame, before ``flip_y`` changes the sample frame;
-        a common frame change does not change a disorientation. This is the
-        headline quality number for stage 1 of the pipeline: the RMS angle
-        between a pixel's measured orientation and the single orientation its
-        grain will carry from here on.
-        """
+            nearest = distance_transform_edt(
+                labels == 0, return_distances=False, return_indices=True
+            )
+            labels[labels == 0] = labels[tuple(nearest[:, labels == 0])]
+        # DefDAP quaternions have the opposite vector sign to our Bunge
+        # representation. Conjugate both pixel and symmetry-aware grain means.
+        pixels = qconj(imported["pixel_quats"])
+        grains = qconj(imported["grain_quats"])
+        if opt.euler_correction_quat is not None:
+            pixels = qmul(opt.euler_correction_quat, pixels)
+            grains = qmul(opt.euler_correction_quat, grains)
+        # The CTF parser independently checks transcription/convention; it does
+        # not supply the data used for grain detection or the grain means.
+        from festim_microstructure.ebsd.diagnostics import theta_field
+
+        transcription = theta_field(self.qgrid, pixels)
+        if np.max(transcription[self.ok]) > 1e-3:
+            raise ValueError("UPXO import orientations disagree with source CTF")
+        self.packages = imported["packages"]
+        self.cellids, self.source_labels, self.qcell = labels, source, grains
+        self.unassigned = source <= 0
+        self.ncells = len(grains)
+        self.log(
+            f"UPXO/DefDAP: {self.ncells} grains; {self.unassigned.sum()} "
+            "pixels without original grain membership"
+        )
+        self.data = EbsdData(labels, grains, self.vox, pixels, self.ok, source)
+        return self
+
+    def measure(self):
         self.segmentation = segmentation_error(
             self.qgrid,
-            self.cellids,
-            self.qcell,
+            self.data.labels,
+            self.data.grain_quats,
             self.vox,
             ok=self.ok,
             threshold=self.settings.threshold,
-            backfilled=self.unassigned,
+            backfilled=self.data.source_labels <= 0,
+            qvox=self.data.pixel_quats,
         )
         for line in format_report(self.segmentation):
             self.log("  " + line)
         return self
 
-    # -- stage 6: write ----------------------------------------------------
     def write(self, output=None):
-        """Apply the output frame change, then write.
-
-        The instance keeps the .ctf row order and frame; only the written
-        raster, kept as ``self.raster``, carries the ``flip_y`` frame change.
-        """
-        opt, log = self.settings, self.log
-        cellids, ok, qcell = self.cellids, self.ok, self.qcell
-        qvox = self.qfz if opt.voxel_ori else None
-        if opt.flip_y:
-            # (x, y, z) -> (x, -y, -z): mirror the rows and rotate every
-            # orientation by the same 180 deg about x, so that positions and
-            # orientations stay in one right-handed frame.
-            cellids, ok = cellids[::-1], ok[::-1]
-            qcell = rotate_sample_frame(qcell, ROT_X_180)
-            if qvox is not None:
-                qvox = rotate_sample_frame(
-                    qvox[::-1].reshape(-1, 4), ROT_X_180
-                ).reshape(qvox.shape)
-
-        self.raster = TesrData(
-            cellids=cellids,
-            ori_cell=quat_to_rodrigues(qcell),
-            voxsize=self.vox,
-            crysym=self.crysym,
-            ori_vox=None if qvox is None else quat_to_rodrigues(qvox),
-            oridef=ok,
+        self.archive_path = Path(output or Path(self.settings.ctf).with_suffix(".npz"))
+        if self.archive_path.suffix != ".npz":
+            raise ValueError(
+                "EBSD imports are native .npz archives; use a .npz output path"
+            )
+        self.archive_path.parent.mkdir(parents=True, exist_ok=True)
+        self.provenance_path = self.archive_path.with_name(
+            self.archive_path.stem + "-provenance.json"
         )
-        self.tesr_path = Path(output or Path(opt.ctf).with_suffix(".tesr"))
-        write_tesr(self.tesr_path, self.raster)
-        self.provenance_path = self.tesr_path.with_name(
-            self.tesr_path.stem + "-provenance.json"
-        )
+        data = self.data
+        if self.settings.flip_y:
+            data = EbsdData(
+                data.labels[::-1],
+                qmul(ROT_X_180, data.grain_quats),
+                data.vox,
+                qmul(ROT_X_180, data.pixel_quats[::-1]),
+                data.indexed[::-1],
+                data.source_labels[::-1],
+            )
+        # Publish only an archive that can be re-read and independently checked.
+        with tempfile.TemporaryDirectory(dir=self.archive_path.parent) as scratch:
+            candidate = Path(scratch) / "ebsd.npz"
+            write_ebsd(candidate, data)
+            verify_readback(
+                candidate, self.qgrid, self.ok, self.cellids, self.settings.flip_y
+            )
+            candidate.replace(self.archive_path)
+        self.output_data = data
         write_provenance(
-            self.provenance_path, opt, self.segmentation, self.vox, log=log
-        )
-        return self
-
-    # -- stage 7: diagnostics ----------------------------------------------
-    def diagnose(self):
-        """The optional check images and the read-back verification."""
-        opt, log = self.settings, self.log
-        if not opt.diagnostics:
-            return self
-        unit = opt.unit
-        write_segerr_png(
-            self.tesr_path.with_name(self.tesr_path.stem + "-segerror.png"),
+            self.provenance_path,
+            self.settings,
             self.segmentation,
-            self.cellids,
-            unit=unit,
-            log=log,
+            self.vox,
+            log=self.log,
         )
-        write_quality_png(
-            self.tesr_path.with_name(self.tesr_path.stem + "-quality.png"),
-            QualityPanels(
-                diag=self.diag,
-                ok=self.ok,
-                unassigned=self.unassigned,
-                cellids=self.cellids,
-                settings=opt,
-                vox=self.vox,
-                unit=unit,
-                flip_y=opt.flip_y,
-            ),
-            log=log,
+        rec = json.loads(self.provenance_path.read_text())
+        rec.update(
+            identity=self.identity(),
+            archive_sha256=hashlib.sha256(self.archive_path.read_bytes()).hexdigest(),
+            packages=self.packages,
+            importer="upxo.interfaces.defdap.ebsd_reader.EBSDReader",
+            original_membership_pixels=int((self.source_labels > 0).sum()),
+            pruned_pixels=int((self.source_labels == -2).sum()),
+            unindexed_pixels=int((self.source_labels == 0).sum()),
         )
-        for line in verify_readback(
-            self.tesr_path, self.qgrid, self.ok, self.cellids, opt.flip_y
-        ):
-            log(f"  {line}")
-        if opt.neper:
-            render_checks(
-                self.tesr_path,
-                self.extent[0],
-                unit=unit,
-                neper=opt.neper,
-                povray=opt.povray,
-                log=log,
+        self.provenance_path.write_text(json.dumps(rec, indent=2) + "\n")
+        return self
+
+    def identity(self):
+        from festim_microstructure.meshing import upxo
+
+        return json.loads(
+            json.dumps(
+                dict(
+                    settings={**asdict(self.settings), "ctf": str(self.settings.ctf)},
+                    source_sha256=hashlib.sha256(
+                        Path(self.settings.ctf).read_bytes()
+                    ).hexdigest(),
+                    upxo_revision=UPXO_REVISION,
+                    code_sha256=hashlib.sha256(
+                        Path(__file__).read_bytes() + Path(upxo.__file__).read_bytes()
+                    ).hexdigest(),
+                )
+            )
+        )
+
+    def diagnose(self):
+        if self.settings.diagnostics:
+            stem = self.archive_path.with_suffix("")
+            write_segerr_png(
+                f"{stem}-segerr.png",
+                self.segmentation,
+                self.cellids,
+                unit=self.settings.unit,
+                flip_y=self.settings.flip_y,
+                log=self.log,
+            )
+            write_quality_png(
+                f"{stem}-quality.png",
+                QualityPanels(
+                    self.diag,
+                    self.ok,
+                    self.unassigned,
+                    self.cellids,
+                    self.settings,
+                    self.vox,
+                    self.settings.unit,
+                    self.settings.flip_y,
+                ),
+                log=self.log,
+            )
+            write_orientation_png(
+                f"{stem}-ipfz.png",
+                self.output_data,
+                log=self.log,
+                unit=self.settings.unit,
             )
         return self
 
-    @property
-    def extent(self):
-        """Return the raster width and height in its TESR units."""
-        ny, nx = self.shape
-        return nx * self.vox[0], ny * self.vox[1]
-
-    def result(self) -> ConversionResult:
-        """Collect conversion artifacts and diagnostics into a result object."""
+    def result(self):
         return ConversionResult(
-            tesr=self.tesr_path,
-            provenance=self.provenance_path,
-            settings=self.settings,
-            crysym=self.crysym,
-            ncells=self.ncells,
-            voxsize=self.vox,
-            extent=self.extent,
-            cellids=self.raster.cellids,
-            ok=self.raster.oridef,
-            ori_cell=self.raster.ori_cell,
-            qcell=self.qcell,
-            npx=self.npx,
-            window=self.window,
-            segmentation=self.segmentation,
+            self.archive_path,
+            self.provenance_path,
+            self.settings,
+            self.output_data,
+            self.window,
+            self.segmentation,
         )
 
-    def run(self, output=None) -> ConversionResult:
-        """Execute all conversion stages and collect their outputs.
+    def run(self, output=None, force=True):
+        archive = Path(output or Path(self.settings.ctf).with_suffix(".npz"))
+        if archive.suffix != ".npz":
+            raise ValueError("EBSD imports require a native .npz output path")
+        self.read()
+        provenance = archive.with_name(archive.stem + "-provenance.json")
+        if not force and archive.is_file() and provenance.is_file():
+            try:
+                saved = json.loads(provenance.read_text())
+            except (ValueError, OSError):
+                saved = {}
+            if (
+                saved.get("identity") == self.identity()
+                and saved.get("archive_sha256")
+                == hashlib.sha256(archive.read_bytes()).hexdigest()
+            ):
+                data = read_ebsd(archive)
+                self.output_data = data
+                if self.settings.flip_y:
+                    data = EbsdData(
+                        data.labels[::-1],
+                        qmul(qconj(ROT_X_180), data.grain_quats),
+                        data.vox,
+                        qmul(qconj(ROT_X_180), data.pixel_quats[::-1]),
+                        data.indexed[::-1],
+                        data.source_labels[::-1],
+                    )
+                self.data, self.cellids, self.source_labels = (
+                    data,
+                    data.labels,
+                    data.source_labels,
+                )
+                self.unassigned = data.source_labels <= 0
+                self.archive_path, self.provenance_path = archive, provenance
+                return self.measure().diagnose().result()
+        return self.import_grains().measure().write(output).diagnose().result()
 
-        Args:
-            output: Optional TESR output path; defaults to the CTF stem.
 
-        Returns:
-            Paths, grain data, and segmentation diagnostics.
-        """
-        self.read().segment().clean().orient().measure().write(output).diagnose()
-        self._summarise()
-        return self.result()
+def convert(
+    ctf_path=None, output=None, *, settings=None, log=print, force=True, **kwargs
+):
+    """Import a CTF into a native archive through UPXO/DefDAP.
 
-    def _summarise(self):
-        """Log the output size, grain scale, and diagnostic hints."""
-        opt, log = self.settings, self.log
-        lx, ly = self.extent
-        grain_size = np.sqrt(self.npx.mean()) * self.vox[0]
-        out = self.tesr_path
-        log(f"\nwrote {out} ({out.stat().st_size / 1e6:.1f} MB)")
-        log(f"  domain      : {lx:.4g} x {ly:.4g}")
-        log(f"  grain size  : ~{grain_size:.4g} (equivalent square)")
-        if not opt.diagnostics:
-            log(f"  set diagnostics=True for {out.stem}-quality.png and the rest")
-        if self.ncells > 400:
-            side = grain_size * np.sqrt(250)
-            log(
-                f"\n{self.ncells} grains is a long tessellation fit. Crop to ~250 "
-                f"by re-running with a window about {side:.3g} x {side:.3g} in "
-                f'the .ctf\'s units, i.e. crop="x0,x0+{side:.3g},y0,y0+{side:.3g}"'
-            )
-
-
-def convert(ctf_path=None, output=None, *, settings=None, log=print, **kwargs):
-    """Convert a .ctf into a .tesr, and measure what the segmentation cost.
-
-    Either give `ctf_path` plus any `Settings` field as a keyword argument, or
-    build a `Settings` yourself and pass it as `settings`. `output` defaults to
-    the .ctf's name with a .tesr suffix. `log` takes every progress line and can
-    be set to None to run silently.
-
-    Returns a :class:`ConversionResult`; its ``rms_deg`` is the headline RMS
-    disorientation in degrees.
-
-    Raises ValueError if the map has no cubic phase line or if no grain
-    survives the prune, rather than exiting the interpreter.
+    Quality filters and crop apply before grain detection. Rejected and pruned
+    pixels never determine grain means, even when filling includes them in the
+    geometry. The archive retains their original status for later diagnostics.
     """
     if kwargs and settings is not None:
         raise TypeError("pass either a Settings object or keyword arguments")
     if settings is None and ctf_path is None:
         raise TypeError("pass ctf_path or a Settings object")
-    opt = settings if settings is not None else Settings(ctf=str(ctf_path), **kwargs)
-    return CtfConversion(opt, log=log).run(output)
+    return CtfConversion(settings or Settings(ctf=str(ctf_path), **kwargs), log).run(
+        output, force=force
+    )
 
 
-def measure_tesr_against_ctf(ctf_path, tesr_path, options=None, log=print):
-    """Re-measure the segmentation error of a .ctf/.tesr pair already on disk.
+def measure_against_ctf(ctf_path, archive_path, options=None, log=print):
+    """Independently compare persisted grain/pixel orientations with source CTF.
 
-    `convert` reports this as it goes; this is the same measurement made
-    afterwards, straight off the two files, so it also verifies that what was
-    written is what was meant. See :class:`MeasureOptions`.
-
-    Returns the :class:`~festim_microstructure.ebsd.diagnostics.SegmentationError`.
+    Original membership is persisted, so the indexed and backfilled populations
+    exactly match conversion diagnostics, including pruned pixels.
     """
-    log = log or (lambda *a, **k: None)
-    mopt = options or MeasureOptions()
-    opt = mopt.resolve(ctf_path)
-
-    ctf = CtfMap(ctf_path)
-    _crysym, phase = ctf.crysym(opt.phase)
-    if phase is None or phase["laue"] not in CUBIC_LAUE:
-        raise ValueError(
-            "m-3m (Laue 11) phases only: the disorientation used here is "
-            "specific to that group"
+    opt = options or MeasureOptions(
+        provenance=str(
+            Path(archive_path).with_name(Path(archive_path).stem + "-provenance.json")
         )
-    qgrid, ok, _diag = build_grid(
-        ctf,
-        opt.phase,
-        opt.max_mad,
-        not opt.allow_error,
-        opt.min_bands,
-        opt.euler_correction_quat,
     )
-    if opt.crop:
-        qgrid, ok, _w = crop_grid(
-            qgrid, ok, opt.crop, ctf.header["XStep"], ctf.header["YStep"]
+    settings = opt.resolve(ctf_path)
+    source = CtfConversion(settings, log=None).read()
+    data = read_ebsd(archive_path)
+    if data.labels.shape != source.ok.shape:
+        raise ValueError("archive shape differs from the source CTF crop")
+    if settings.flip_y:
+        cells, original = data.labels[::-1], data.source_labels[::-1]
+        grains = qmul(qconj(ROT_X_180), data.grain_quats)
+        pixels = qmul(qconj(ROT_X_180), data.pixel_quats[::-1])
+    else:
+        cells, original, grains, pixels = (
+            data.labels,
+            data.source_labels,
+            data.grain_quats,
+            data.pixel_quats,
         )
-
-    t = read_tesr_full(tesr_path)
-    if (t["ny"], t["nx"]) != ok.shape:
-        raise ValueError(
-            f"{tesr_path} is {t['nx']} x {t['ny']} voxels but the .ctf window "
-            f"is {ok.shape[1]} x {ok.shape[0]}. Pass the Settings (or the "
-            "provenance json) of the conversion that wrote it."
-        )
-    # Undo the flip_y frame change so everything is compared in the .ctf frame.
-    cells = t["cells"][::-1] if opt.flip_y else t["cells"]
-    undo = qconj(ROT_X_180)
-    qcell = rodrigues_to_quat(t["cell_ori"])
-    if opt.flip_y:
-        qcell = qmul(undo, qcell)
-
-    qvox = None
-    if mopt.against in ("voxel", "both"):
-        if "vox_ori" in t:
-            r = t["vox_ori"][::-1] if opt.flip_y else t["vox_ori"]
-            qvox = rodrigues_to_quat(r).reshape((*ok.shape, 4))
-            if opt.flip_y:
-                qvox = qmul(undo, qvox)
-        else:
-            log("  note: no **oridata in the tesr (voxel_ori=False); check skipped")
-
     res = segmentation_error(
-        qgrid, cells, qcell, t["vox"], ok=ok, threshold=opt.threshold, qvox=qvox
+        source.qgrid,
+        cells,
+        grains,
+        data.vox,
+        ok=source.ok,
+        threshold=settings.threshold,
+        backfilled=original <= 0,
+        qvox=pixels if opt.against in ("voxel", "both") else None,
     )
-    for line in format_report(res):
-        log("  " + line)
-
-    # `convert` knows which voxels fill_holes back-filled, including the ones
-    # whose grain was pruned by min_pixels; working from the files alone only
-    # the quality rejections are visible, so the two populations differ by the
-    # pruned pixels and the numbers differ with them. Say so rather than leave
-    # two unequal RMS values lying about.
-    ref = {}
-    if mopt.provenance is not None:
-        ref = json.loads(Path(mopt.provenance).read_text())
-        ref = ref.get("segmentation_error_deg", {}).get("indexed", {})
-    if ref and ref.get("n") != res.indexed.n:
-        log(
-            f"  note: convert() measured {ref['rms']:.3f} deg over {ref['n']} "
-            f"voxels. The {res.indexed.n - ref['n']} extra voxels here "
-            "belonged to grains the prune removed and were then back-filled; "
-            "only the conversion can tell them apart from voxels in a grain of "
-            "their own."
-        )
-
-    if mopt.png:
-        write_segerr_png(mopt.png, res, cells, unit=opt.unit, log=log)
-    if mopt.csv:
+    if log:
+        for line in format_report(res):
+            log("  " + line)
+    if opt.png:
+        write_segerr_png(opt.png, res, cells, unit=settings.unit, log=log)
+    if opt.csv:
         from festim_microstructure.ebsd.diagnostics import write_csv
 
-        write_csv(mopt.csv, res, log=log)
+        write_csv(opt.csv, res, log=log)
     return res
 
 
@@ -629,6 +450,9 @@ def build_grid(
         good &= ctf["Bands"] >= min_bands
 
     euler = np.stack((ctf["Euler1"], ctf["Euler2"], ctf["Euler3"]), axis=-1)
+    finite = np.isfinite(euler).all(axis=1)
+    good &= finite
+    euler[~finite] = 0.0
     quat = euler_bunge_to_quat(euler[:, 0], euler[:, 1], euler[:, 2])
     if euler_correction is not None:
         quat = qmul(np.asarray(euler_correction, dtype=float), quat)
@@ -650,25 +474,11 @@ def build_grid(
 
 
 def crop_grid(qgrid, ok, spec, xstep, ystep):
-    """Cut a rectangular window out of the map, before segmentation.
-
-    Cropping here rather than in Neper matters for two reasons:
-     1. The segmentation, the prune and the cell ids all describe
-        the same region, and a clipped grain is either big enough
-        to keep or dropped like any other.
-
-     2. Per-voxel orientations. Possible bug is that Neper 5.0.0 cannot read
-        back a raster when the file carries a `**oridata` section and has
-        been through (auto)crop. Cropping upstream keeps the file small enough
-        to keep orientations, so -V colouring & -S intragranular measures still work.
-
-    Bounds are in the .ctf's own 'as- acquired' length units,
-    i.e. before any flip_y.
-    """
+    """Crop source coordinates before grain detection and rebase to zero."""
     try:
         x0, x1, y0, y1 = (float(v) for v in spec.split(","))
     except ValueError:
-        raise SystemExit(
+        raise ValueError(
             f"crop={spec!r}: expected four comma-separated numbers, "
             "xmin,xmax,ymin,ymax, in the same units as XStep"
         )
@@ -676,7 +486,7 @@ def crop_grid(qgrid, ok, spec, xstep, ystep):
     ix0, ix1 = max(round(x0 / xstep), 0), min(round(x1 / xstep), nx)
     iy0, iy1 = max(round(y0 / ystep), 0), min(round(y1 / ystep), ny)
     if ix1 - ix0 < 2 or iy1 - iy0 < 2:
-        raise SystemExit(
+        raise ValueError(
             f"crop={spec} keeps {max(ix1 - ix0, 0)} x {max(iy1 - iy0, 0)} "
             f"pixels. The map is {nx} x {ny} pixels of {xstep} x {ystep}, "
             f"i.e. {nx * xstep:g} x {ny * ystep:g} in those units."

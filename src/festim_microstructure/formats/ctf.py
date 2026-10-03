@@ -86,7 +86,7 @@ class CtfMap:
         return self.header["YCells"], self.header["XCells"]
 
     def crysym(self, phase_index=1):
-        """Look up a phase's Neper crystal-symmetry label.
+        """Look up a phase's crystal-symmetry label.
 
         Args:
             phase_index: One-based index in the CTF phase table.
@@ -95,7 +95,7 @@ class CtfMap:
             The symmetry label and phase metadata, or ``(None, None)`` when
             the CTF has no phase table.
         """
-        if not self.phases:
+        if phase_index < 1 or phase_index > len(self.phases):
             return None, None
         ph = self.phases[phase_index - 1]
         return LAUE_TO_CRYSYM.get(ph["laue"]), ph

@@ -18,7 +18,7 @@ sharing one cell-problem declaration across identification and validation.
 
 - `voronoi_polycrystal_2d.py`, `voronoi_polycrystal_3d.py`, and
   `neper_voronoi_network.py` demonstrate short-circuit diffusion.
-- `ebsd_ctf_to_tesr.py` and `ebsd_gb_diffusion.py` demonstrate the EBSD path.
+- `ebsd_ctf_to_mesh.py` and `ebsd_gb_diffusion.py` demonstrate the EBSD path.
 - `gb_homogenisation.py` identifies effective diffusivity, validates it against
   permeation and uptake, and generates the study figures in one run.
 - `li2022_fig4.py` and `li2022_fig4_codim.py` reproduce and compare the two
@@ -32,13 +32,15 @@ exports are in `examples/results/voronoi_polycrystal_2d/`. Meshes, diagnostics,
 figures, and JSON files use the same per-script layout. Rerunning a script can
 replace its own outputs; different scripts use separate folders.
 
-The EBSD preprocessing writes `results/ebsd_ctf_to_tesr/d7.tesr` and
-`poly.msh4` in metres, with SI extent and grain-orientation files alongside it.
-`ebsd_gb_diffusion.py` reads these prepared files; its simulation exports go to
-`results/ebsd_gb_diffusion/`. Temporary raster-unit meshing files use an
-`-unscaled` stem and are deleted after all diagnostic images have been written.
-Rerun preprocessing to replace meshes generated with the old unit convention.
-The original CTF stays in `examples/data/`.
+The EBSD example runs the complete CTF → UPXO/DefDAP → UPXO mesh → FESTIM
+chain. It writes `results/ebsd_ctf_to_mesh/poly.msh4` in metres, with native
+`poly-ebsd.npz` grain/pixel data, SI extent metadata, source provenance, and
+validation reports. It also generates quality, orientation, mesh, area and
+FESTIM network images. `ebsd_gb_diffusion.py` reads these prepared files; its
+simulation exports go to `results/ebsd_gb_diffusion/`.
+Activate the environment in `environment-festim-microstructure-upxo.yml`.
+Rerun preprocessing to replace older Neper/TESR outputs. The original CTF stays
+in `examples/data/`; the new chain does not produce TESR or unscaled mesh files.
 
 The consolidated study writes `identified.json`, `validation.json`, and
 `fig_*.png` under `results/gb_homogenisation/`. Validation and the field map

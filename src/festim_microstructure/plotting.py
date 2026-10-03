@@ -134,7 +134,7 @@ def append_key(png, key_png, output=None, labels=("001", "011", "111"), log=prin
     """Paste an IPF colour key to the right of a rendered map; returns the path.
 
     `key_png` is the standard stereographic triangle as Neper prints it (the
-    ipf-key stage of meshing.neper.mesh_tesr), so the key comes out of the same
+    optional EBSD orientation rendering), so the key comes out of the same
     colouring code as the map rather than approximating it. It arrives with the
     uniform border every neper -V render has, and unlabelled, so it is trimmed,
     scaled to the map and its corners labelled here; the documented recipe uses
