@@ -21,7 +21,7 @@ options = fm.EbsdOptions(
         crop="0,306,0,306",
         diagnostics=True,
     ),
-    mesh=fm.UpxoMeshOptions(smooth_lambda=0.25, smooth_mu=-0.265, smooth_iter=5),
+    mesh=fm.UpxoMeshOptions(smooth_lambda=0.5, smooth_mu=-0.53, smooth_iter=5),
     unit=1e-6,
     theta_min=10.0,
 )
