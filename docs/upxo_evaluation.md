@@ -1,15 +1,73 @@
 # UPXO 2D EBSD meshing evaluation
 
-**Result: the modern polygon mesher is a viable Neper replacement for the cases
-tested, provided FESTIM supplies conforming polygons and an export adapter.
-Controlled Taubin smoothing also passes the real-map checks. Automatic seeding
-and the moving-average paths still prevent a wholesale pipeline replacement.**
+**Result: the 2D EBSD pathway uses pinned UPXO 1.3.1 with explicit pixel
+seeds and FESTIM’s export adapter. Exact polygons pass all eight fixtures;
+gentle Taubin passes the real crop and six synthetic fixtures. Serial
+CTF-to-FESTIM transport validates boundary exchange and inventory conservation.**
 
-Evaluated on October 2, 2026, on branch `upxo`, against UPXO 1.2.0 at
+The historical evaluation ran on October 2, 2026, on branch `upxo`, against UPXO 1.2.0 at
 [`fef845ba10a3e849a5bb6b0a3c2ad89098035739`](https://github.com/Design-By-Fundamentals-UKAEA/UPXO/tree/fef845ba10a3e849a5bb6b0a3c2ad89098035739).
 The evaluation initially left the production pipeline unchanged. The subsequent
 replacement described below now uses the evaluated path for EBSD meshing.
 The code imports UPXO; it does not copy or modify UPXO source.
+
+## UPXO 1.3.1 compatibility refresh
+
+The production pin is now UPXO **1.3.1**, revision
+[`a53885ef0a7a06f6b3fb195747363ae0a19bb127`](https://github.com/Design-By-Fundamentals-UKAEA/UPXO/tree/a53885ef0a7a06f6b3fb195747363ae0a19bb127),
+with DefDAP **0.93.6**. Both workers share one compatibility check.
+The migration scope is the **2D EBSD pathway**; generated Neper polycrystals
+remain an optional supported backend.
+
+Rerun on October 9, 2026, with the DefDAP importer and UPXO 1.3.1 in the
+combined environment. Geometry, mesh, export and serial DOLFINx reconstruction
+reproduced the supplied review across all eight inputs:
+
+| Path | Accepted cases |
+|---|---:|
+| Exact raster polygons | 8/8 |
+| Gentle Taubin, explicit pixel seeds | 7/8 |
+| Automatic seeds, existing harness settings | 0/8 |
+
+The real crop retained 264 grains and 777 arcs with gentle Taubin: maximum
+area change 1.285%, boundary displacement 0.298 pixels, no lost or added
+neighbor pairs, and 124,004 triangles. Automatic seeds now construct and export
+all eight meshes, resolving the old construction errors, but still fail the
+acceptance gates. The real crop has 20.2% maximum area change and 1.229-pixel
+boundary displacement. Explicit pixel seeds remain the production policy.
+All 24 adapted exports reconstructed successfully in DOLFINx; the rejected
+cases still fail geometry acceptance. Native exports still lacked facet tags.
+Observed metrics and input provenance are checked in as
+[`upxo_evaluation_131.json`](upxo_evaluation_131.json). The older tables below
+remain historical measurements against 1.2.0.
+
+Native physical curve tags remain absent, so the FESTIM export adapter stays.
+DefDAP symmetry-aware averaging also stays: UPXO's newer
+`grain_average_euler_deg()` uses an arithmetic quaternion mean. Rejected pixels
+remain excluded from grain means. `EbsdMicrostructure.from_mesh()` now creates
+vertex-to-cell connectivity itself; callers need no extra topology setup.
+
+For `fill=False`, the supported void-preserving route is
+`UpxoMeshOptions(smoothing="none")`. Gentle Taubin moves the interior-void
+boundary and appropriately fails coverage validation. The checks are unchanged.
+Optional `thin_grain_px=1.5` enables thin-grain protection; the default is 0.
+The adapter explicitly passes `close_staircase=False` to prevent the protection
+option from triggering label-changing preprocessing.
+
+The required `ebsd-full-stack` CI job installs the combined Python 3.13
+environment from scratch. It runs CTF-to-archive-to-tagged-mesh reconstruction,
+a closed FESTIM grain/boundary transport problem (inventory conservation and
+nonzero boundary exchange), and existing solver tests. Any dependency skip fails
+the job; this failure policy was also verified with a deliberately missing worker.
+Local validation passed **49 integration/worker/import tests with zero skips**
+and **95 additional regression tests**. Ruff lint/format and `pip check` passed.
+Local command:
+
+```bash
+FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py \
+  test/test_short_circuit.py test/test_subdomains.py test/test_gb_field.py \
+  test/test_gb_homogenisation.py
+```
 
 ## Full EBSD replacement
 
@@ -33,8 +91,11 @@ The default meshing policy remains five gentle Taubin passes (λ=0.25,
 Geometry and mesh validation are mandatory, including actual triangle
 components/holes. Exact polygons use `smoothing="none"`.
 The combined environment pins the UPXO revision and DefDAP EBSD extra.
-The combined Python 3.13 environment has not been installed here; runtime
-validation used the existing FESTIM interpreter with a Python 3.13 UPXO worker.
+The combined Python 3.13 environment was installed and tested locally on
+October 9, 2026: UPXO 1.3.1, DefDAP 0.93.6, FESTIM 2.2rc2, DOLFINx 0.11.0,
+SciFEM 0.26.0, NumPy 2.5.3 and Gmsh 4.15.2. CTF-to-FESTIM transport tests
+pass for both exact polygons and gentle Taubin, including inventory conservation
+and transfer into an initially empty grain boundary.
 
 The complete example crop (191 × 191 pixels at 1.6 µm spacing) passed:
 
@@ -52,7 +113,7 @@ policy; they do not claim the DefDAP importer was part of that original audit.
 The current harness prepares real-map labels through the new importer, so future
 runs use DefDAP labels and means and can differ from those historical results.
 
-## Results
+## Historical 1.2.0 results
 
 Eight inputs were evaluated through five paths: exact raster polygons, Taubin,
 moving-average, mean-coordinate smoothing, and Taubin with automatic seeds.
@@ -133,7 +194,7 @@ pairs, with maximum area error below 4 × 10⁻⁷ relative. Thus the explicit-s
 reconstruction itself is faithful at this precision. The thin-twin failure with
 the stronger Taubin weights is avoidable by reducing filter strength.
 
-### Confirmed limitations
+### Historical 1.2.0 limitations
 
 1. **Native export is missing FESTIM's boundary tags.**
    `confMesh2dGMSH` creates physical surfaces, but no physical curves. Its native
@@ -149,15 +210,15 @@ the stronger Taubin weights is avoidable by reducing filter strength.
 3. **Thin grains can change substantially.**
    The largest grain-area change in the thin-twin fixture was 8.26% for Taubin,
    41.87% for moving average, and 69.95% for mean coordinates.
-4. **Automatic seeding is unreliable on these inputs.**
+4. **Historical automatic-seeding failures (1.2.0).**
    All seven synthetic fixtures fail before smoothing with
    `ValueError: A linearring requires at least 4 coordinates`, inside
    `GrainManifold2D._generate_clipped_polygons`. The real map constructs a mesh,
    but its input polygons leave 2.44% of the domain uncovered. This tests the
    automatic seed generator with jitter disabled, not every possible setting.
-5. **A direct DOLFINx import requires topology setup.**
-   Our existing `EbsdMicrostructure.from_mesh` midpoint query needs vertex-to-cell
-   connectivity. The evaluation creates `0 -> mesh.topology.dim` before calling
+5. **Historical connectivity limitation (resolved locally).**
+   The older `EbsdMicrostructure.from_mesh` midpoint query needed vertex-to-cell
+   connectivity. The production method now creates it itself. The evaluation creates `0 -> mesh.topology.dim` before calling
    it; without that setup DOLFINx 0.11 raises a missing-connectivity error.
 
 ## What the evaluation adapter does
@@ -200,6 +261,10 @@ Taubin's small void-boundary movement fails the partition gate.
 
 ## Reproduction and artifacts
 
+The following version list describes the historical 1.2.0 run; the checkout
+command selects the current 1.3.1 pin. The combined environment file is the
+preferred installation for reproducing current mesh and solver validation.
+
 UPXO was installed in `/tmp/upxo-eval-env`, separate from the existing Python
 3.12 FESTIM environment. Relevant versions were Python 3.13.15, UPXO 1.2.0,
 Gmsh 4.15.2, Shapely 2.1.2, Rasterio 1.5.2, NumPy 2.5.3, SciPy 1.18.1,
@@ -209,7 +274,7 @@ To reproduce on Linux with Conda and the existing FESTIM environment available:
 
 ```bash
 git clone https://github.com/Design-By-Fundamentals-UKAEA/UPXO.git /tmp/upxo-review
-git -C /tmp/upxo-review checkout fef845ba10a3e849a5bb6b0a3c2ad89098035739
+git -C /tmp/upxo-review checkout a53885ef0a7a06f6b3fb195747363ae0a19bb127
 conda create --prefix /tmp/upxo-eval-env -c conda-forge python=3.13 pip libglu -y
 /tmp/upxo-eval-env/bin/python -m pip install "/tmp/upxo-review[ebsd]" \
   numpy==2.5.3 scipy==1.18.1 shapely==2.1.2 gmsh==4.15.2 \
@@ -219,7 +284,7 @@ conda create --prefix /tmp/upxo-eval-env -c conda-forge python=3.13 pip libglu -
 FM_UPXO_PYTHON=/tmp/upxo-eval-env/bin/python python tools/evaluate_upxo.py prepare
 /tmp/upxo-eval-env/bin/python tools/evaluate_upxo.py mesh --jobs 2 --timeout 180
 /tmp/upxo-eval-env/bin/python tools/evaluate_upxo.py mesh \
-  --cases ctf_map thin_twins --methods reconstruction taubin_gentle
+  --methods raw taubin_gentle automatic_seeds
 python tools/evaluate_upxo.py verify
 
 /tmp/upxo-eval-env/bin/python -m pytest \

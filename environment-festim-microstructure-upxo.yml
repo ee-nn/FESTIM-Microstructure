@@ -48,4 +48,4 @@ dependencies:
   - ipykernel
   - pip:
       - festim==2.2rc2
-      - upxo[ebsd] @ git+https://github.com/Design-By-Fundamentals-UKAEA/UPXO.git@fef845ba10a3e849a5bb6b0a3c2ad89098035739
+      - upxo[ebsd] @ git+https://github.com/Design-By-Fundamentals-UKAEA/UPXO.git@a53885ef0a7a06f6b3fb195747363ae0a19bb127

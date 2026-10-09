@@ -268,6 +268,9 @@ class CtfConversion:
                         Path(self.settings.ctf).read_bytes()
                     ).hexdigest(),
                     upxo_revision=UPXO_REVISION,
+                    worker_environment=upxo.probe_worker(
+                        self.settings.python, timeout=self.settings.timeout
+                    ),
                     code_sha256=hashlib.sha256(
                         Path(__file__).read_bytes() + Path(upxo.__file__).read_bytes()
                     ).hexdigest(),

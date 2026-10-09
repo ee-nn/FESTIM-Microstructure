@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import sys
 import types
 from unittest import mock
@@ -99,3 +100,11 @@ def ctf_writer():
         return path
 
     return write
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Required full-stack CI must not silently pass with missing dependencies."""
+    if os.environ.get("FM_REQUIRE_FULL_STACK") == "1":
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter and reporter.stats.get("skipped"):
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED

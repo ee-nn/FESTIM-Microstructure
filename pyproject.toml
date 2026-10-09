@@ -90,12 +90,3 @@ testpaths = ["test"]
 markers = [
     "fenics: needs dolfinx, festim and gmsh (skipped when they are not installed)",
 ]
-
-# Make the src-layout package discoverable to Pylance/Pyright in a checkout.
-[tool.pyright]
-include = ["src", "examples", "test"]
-extraPaths = ["src"]
-executionEnvironments = [
-    { root = "examples", extraPaths = ["src", "examples"] },
-    { root = ".", extraPaths = ["src"] },
-]

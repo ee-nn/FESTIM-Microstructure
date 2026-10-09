@@ -74,13 +74,15 @@ python examples/ebsd_ctf_to_mesh.py
 
 Run these commands from the repository checkout. The combined environment
 installs the scientific and FEniCSx packages through conda and pins the evaluated
-UPXO commit and DefDAP 0.93.6. With Python 3.13 and UPXO installed, the importer and mesher automatically use
+UPXO 1.3.1 commit and DefDAP 0.93.6. With Python 3.13 and UPXO installed, the importer and mesher automatically use
 the active interpreter. An explicit `UpxoMeshOptions(python=...)` or
 `FM_UPXO_PYTHON` still takes precedence. Neper is needed only for the generated
 Neper tessellation examples.
-The combined file passed a Linux Conda dependency dry run. Run `pytest -q`
-after installation to validate the combined runtime; the earlier complete
-pipeline evaluation used separate Python 3.12 and 3.13 environments.
+CI creates this combined environment from scratch and runs required CTF-to-FESTIM
+transport and solver tests. Missing dependencies or skipped tests fail that job.
+Run `FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py`
+after installation to check mesh reconstruction, boundary exchange and inventory
+conservation locally.
 
 For solver workflows using the original Python 3.12 environment:
 
@@ -168,12 +170,35 @@ space, or symlink them.
 
 ### Updating
 
+For the combined solver and EBSD environment:
+
 ```bash
-conda env update -f environment.yml --prune
-pip install -e .
-conda env update -f environment-neper.yml --prune
-tools/link-neper-env.sh        # only needed if an env was recreated or moved
+conda env update -n festim-microstructure-upxo -f environment-festim-microstructure-upxo.yml --prune
+conda activate festim-microstructure-upxo
+python -m pip install --no-deps -e .
+unset FM_UPXO_PYTHON
+fm-check --ebsd
+FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py
 ```
+
+For the original solver environment, use `conda env update -f environment.yml
+--prune` and reinstall the package there. Update the optional Neper environment
+with `conda env update -f environment-neper.yml --prune`; rerun
+`tools/link-neper-env.sh` if it was recreated or moved.
+
+Import and mesh cache identities probe the selected worker before reuse. They
+record its Python executable/version, all installed distribution versions,
+source provenance and installation-record fingerprints. Changing
+`FM_UPXO_PYTHON` or reinstalling dependencies invalidates the matching cache.
+The probe also rejects incompatible UPXO/DefDAP before a cached result is used.
+Manual edits to installed dependency files or editable dependency source trees
+are not fingerprinted: use immutable dependency installations, or `force=True`
+after such edits. Project worker/importer code is fingerprinted separately.
+
+`fm-check` probes an available EBSD worker and reports dependency versions and
+runtime-import failures. `fm-check --ebsd` also fails when no worker is configured;
+use it before running EBSD examples. The worker probe uses the selected
+interpreter and does not require UPXO in a separate solver interpreter.
 
 ### Version coupling
 
@@ -432,7 +457,11 @@ pixel coordinates; both pixel spacings are applied when exporting to metres.
 The pipeline rejects changes to grain IDs, components, holes, neighbor pairs,
 coverage, mesh conformity or grain areas. Default smoothing limits are 5%
 per-grain area change and one pixel of boundary displacement. There is no silent
-fallback; maps with unfilled voids may require `smoothing="none"`.
+fallback. With `fill=False`, `smoothing="none"` is the supported void-preserving
+route: Taubin can move void boundaries and fail coverage validation.
+`thin_grain_px=1.5` enables optional protection for thin grains; the default is
+`0` (disabled). The adapter always sets `close_staircase=False` so protection
+does not enable label-changing preprocessing. All preservation checks still apply.
 
 Outputs include `<stem>.msh4`, `<stem>-ebsd.npz` (grain/pixel orientations,
 labels, masks and spacings), `<stem>-metadata.json` (SI extent), import provenance,

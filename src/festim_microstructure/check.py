@@ -1,5 +1,6 @@
 """``fm-check`` reports Python dependencies and external executables."""
 
+import argparse
 import importlib
 import os
 import re
@@ -7,7 +8,7 @@ import subprocess
 import sys
 
 from ._binaries import ENV_VARS, resolve_all
-from .meshing.upxo import resolve_python
+from .meshing.upxo import probe_worker, resolve_python
 
 __all__ = ["main"]
 
@@ -42,6 +43,13 @@ def _program_version(path, flag):
 
 def main(argv=None):
     """Print dependency and executable availability for this installation."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--ebsd",
+        action="store_true",
+        help="require a compatible, working UPXO/DefDAP EBSD stack",
+    )
+    args = parser.parse_args(argv)
     ok = True
     print("python-side stack")
     for module in ("festim_microstructure", "numpy", "scipy", "matplotlib", "PIL"):
@@ -57,7 +65,17 @@ def main(argv=None):
 
     upxo_python = resolve_python(required=False)
     print(f"  UPXO interpreter       {upxo_python or 'not configured'}")
+    if upxo_python is not None:
+        try:
+            report = probe_worker(upxo_python, health=True)
+            print("  EBSD worker            OK (runtime imports verified)")
+            for name, version in report["packages"].items():
+                print(f"    {name:20s} {version}")
+        except RuntimeError as exc:
+            print(f"  EBSD worker            FAILED: {exc}")
+            ok = False
     if upxo_python is None:
+        ok &= not (args.ebsd or os.environ.get("FM_UPXO_PYTHON"))
         print(
             "  EBSD meshing: create and activate "
             "environment-festim-microstructure-upxo.yml"

@@ -28,6 +28,8 @@ def test_configured_interpreter_does_not_fall_back(monkeypatch):
         ("mesh_size_gb", float("nan")),
         ("smooth_mu", 0),
         ("timeout", 0),
+        ("thin_grain_px", -1),
+        ("thin_grain_px", float("nan")),
     ],
 )
 def test_reject_unsupported_or_invalid_options(field, value):
@@ -42,6 +44,7 @@ def test_worker_failure_preserves_accepted_outputs(tmp_path, monkeypatch):
     mesh = tmp_path / "poly.msh4"
     mesh.write_bytes(b"previous accepted mesh")
     monkeypatch.setattr(upxo, "resolve_python", lambda explicit: "/fake/python")
+    monkeypatch.setattr(upxo, "probe_worker", lambda *a, **kw: {"python": "fake"})
 
     def failed_worker(command, **kwargs):
         stage = Path(command[-1]).parent
@@ -131,3 +134,118 @@ def test_triangle_topology_counts_islands_voids_and_disconnected_parts(case, exp
         labels[8:16, 8:16] = 0 if case == "void" else 2
     triangles, owners = pixel_triangles(labels)
     assert upxo.mesh_topology(triangles, owners) == expected
+
+
+@pytest.mark.parametrize("smoothing", ["none", "taubin"])
+def test_real_worker_void_preservation(tmp_path, smoothing):
+    """Exact polygons preserve voids; moving their boundary remains a rejection."""
+    if upxo.resolve_python(required=False) is None:
+        pytest.skip("UPXO interpreter unavailable")
+    labels = np.ones((24, 24), dtype=np.int32)
+    labels[8:16, 8:16] = 0
+    source = tmp_path / "void.npz"
+    write_ebsd(source, EbsdData(labels, np.array([[1.0, 0, 0, 0]]), (1, 1)))
+    options = upxo.UpxoMeshOptions(smoothing=smoothing)
+    if smoothing == "taubin":
+        with pytest.raises(RuntimeError, match="UPXO meshing failed"):
+            upxo.mesh_ebsd(source, options, workdir=tmp_path)
+        report = json.loads((tmp_path / "poly-failed-validation.json").read_text())
+        assert not report["geometry"]["accepted"]
+        assert not (tmp_path / "poly.msh4").exists()
+    else:
+        base = upxo.mesh_ebsd(source, options, workdir=tmp_path)
+        report = json.loads(Path(f"{base}-validation.json").read_text())
+        assert report["accepted"]
+        assert report["mesh"]["actual_topology"] == {"1": {"parts": 1, "holes": 1}}
+
+
+def test_real_worker_thin_grain_protection_preserves_labels(tmp_path):
+    if upxo.resolve_python(required=False) is None:
+        pytest.skip("UPXO interpreter unavailable")
+    labels = np.ones((24, 24), dtype=np.int32)
+    labels[:, 11:12] = 2
+    source = tmp_path / "thin.npz"
+    write_ebsd(source, EbsdData(labels, np.array([[1.0, 0, 0, 0]] * 2), (1, 1)))
+    base = upxo.mesh_ebsd(
+        source, upxo.UpxoMeshOptions(thin_grain_px=1.5), workdir=tmp_path
+    )
+    report = json.loads(Path(f"{base}-validation.json").read_text())
+    assert report["accepted"]
+    np.testing.assert_array_equal(read_ebsd(f"{base}-ebsd.npz").labels, labels)
+    assert report["geometry"]["actual_topology"] == {
+        "1": {"parts": 2, "holes": 0},
+        "2": {"parts": 1, "holes": 0},
+    }
+
+
+@pytest.mark.parametrize(
+    "version,revision,defdap,error",
+    [
+        ("1.2.0", upxo.UPXO_REVISION, "0.93.6", "UPXO 1.3.1"),
+        (upxo.UPXO_VERSION, "wrong", "0.93.6", "evaluated commit"),
+        (upxo.UPXO_VERSION, upxo.UPXO_REVISION, "0.93.5", "DefDAP 0.93.6"),
+        (upxo.UPXO_VERSION, upxo.UPXO_REVISION, "0.93.6", None),
+    ],
+)
+def test_shared_worker_compatibility(monkeypatch, version, revision, defdap, error):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        upxo.importlib.metadata,
+        "version",
+        lambda name: version if name == "upxo" else defdap,
+    )
+    monkeypatch.setattr(
+        upxo.importlib.metadata,
+        "distribution",
+        lambda name: SimpleNamespace(
+            read_text=lambda name: json.dumps({"vcs_info": {"commit_id": revision}})
+        ),
+    )
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            upxo._check_compatibility(require_defdap=True)
+    else:
+        upxo._check_compatibility(require_defdap=True)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("missing"),
+        subprocess.TimeoutExpired("probe", 1),
+        subprocess.CalledProcessError(1, "probe", stderr="wrong version"),
+    ],
+)
+def test_environment_probe_errors_are_actionable(monkeypatch, error):
+    monkeypatch.setattr(upxo, "resolve_python", lambda explicit: "/fake/python")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(upxo.subprocess, "run", fail)
+    with pytest.raises(RuntimeError, match="environment probe failed"):
+        upxo.probe_worker()
+
+
+def test_import_identity_observes_environment_variable_and_package_changes(
+    tmp_path, ctf_writer, monkeypatch
+):
+    from festim_microstructure.ebsd.convert import CtfConversion
+    from festim_microstructure.ebsd.settings import Settings
+
+    ctf = ctf_writer(tmp_path / "map.ctf", np.zeros((4, 4, 3)))
+    observed = {"version": "first"}
+
+    def probe(executable, **kwargs):
+        return {"executable": upxo.resolve_python(executable), **observed}
+
+    monkeypatch.setattr(upxo, "probe_worker", probe)
+    conversion = CtfConversion(Settings(ctf=str(ctf)))
+    monkeypatch.setenv("FM_UPXO_PYTHON", "/usr/bin/python3")
+    first = conversion.identity()
+    monkeypatch.setenv("FM_UPXO_PYTHON", "/bin/sh")
+    second = conversion.identity()
+    assert first != second
+    observed["version"] = "replacement"
+    assert second != conversion.identity()

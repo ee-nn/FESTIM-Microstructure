@@ -37,12 +37,11 @@ class StatFile:
 
 
 def read_mesh(base, gdim, comm=None, rank=0):
-    """Read a Neper ``.msh4`` into dolfinx.
+    """Read a tagged Gmsh ``.msh4`` into DOLFINx.
 
-    ``cell_tags`` carry the polyhedron / raster-cell (grain) id and
-    ``facet_tags`` the tessellation face (3D) or edge (2D) id, because Neper
-    writes every tessellation entity as an element set and the facet physical
-    ids run independently of the cell ones.
+    ``cell_tags`` carry grain IDs and ``facet_tags`` carry boundary IDs.
+    The physical IDs of cells and facets are independent. UPXO exports use
+    the FESTIM tagging adapter; generated Neper meshes use entity element sets.
 
     Coordinates must already be in SI units (metres). No scaling is applied.
     """
@@ -59,8 +58,8 @@ def read_mesh(base, gdim, comm=None, rank=0):
     if facet_tags is None or facet_tags.values.size == 0:
         raise RuntimeError(
             "no facet tags were read: the facet element sets did not survive "
-            "the msh4 round trip (for a raster mesh, check that -dim all reached "
-            "neper -M)"
+            "the msh4 round trip. Ensure the mesh exporter writes physical "
+            "groups for boundary curves (2D) or surfaces (3D)."
         )
     return mesh, cell_tags, facet_tags
 

@@ -7,6 +7,7 @@ Only NumPy is imported until geometry reconstruction or meshing is requested.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.metadata
 import importlib.util
 import json
@@ -22,8 +23,16 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["UpxoMeshOptions", "import_ebsd", "mesh_ebsd", "resolve_python"]
-UPXO_REVISION = "fef845ba10a3e849a5bb6b0a3c2ad89098035739"
+__all__ = [
+    "UpxoMeshOptions",
+    "import_ebsd",
+    "mesh_ebsd",
+    "probe_worker",
+    "resolve_python",
+]
+UPXO_VERSION = "1.3.1"
+DEFDAP_VERSION = "0.93.6"
+UPXO_REVISION = "a53885ef0a7a06f6b3fb195747363ae0a19bb127"
 _PROTOCOL = 2
 
 
@@ -33,6 +42,8 @@ class UpxoMeshOptions:
 
     ``smoothing='none'`` preserves the raster boundaries exactly. Taubin uses
     explicit pixel seeds and disables grain merging and diagonal repairs.
+    ``thin_grain_px`` enables optional thin-grain protection without changing
+    pixel labels. For unfilled voids, use ``smoothing="none"``.
     Geometry that fails the preservation checks raises before publication.
     """
 
@@ -40,6 +51,7 @@ class UpxoMeshOptions:
     smooth_iter: int = 5
     smooth_lambda: float = 0.25
     smooth_mu: float = -0.265
+    thin_grain_px: float = 0.0
     mesh_size_gb: float = 0.75
     mesh_size_bulk: float = 4.5
     n_threads: int = 1
@@ -61,7 +73,7 @@ class UpxoMeshOptions:
             value = getattr(self, name)
             if not np.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-        for name in ("max_area_change", "max_boundary_displacement"):
+        for name in ("max_area_change", "max_boundary_displacement", "thin_grain_px"):
             value = getattr(self, name)
             if not np.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and nonnegative")
@@ -103,13 +115,104 @@ def _save_json(path, value):
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
+def probe_worker(executable=None, *, health=False, timeout=30.0):
+    """Observe the selected worker before cache reuse, or check its EBSD APIs.
+
+    Run in isolation just like the importer/mesher. No probe is cached, so an
+    environment replacement at the same interpreter path invalidates results.
+    """
+    executable = resolve_python(executable)
+    with tempfile.TemporaryDirectory(prefix="upxo-probe-") as scratch:
+        output = Path(scratch) / "environment.json"
+        try:
+            result = subprocess.run(
+                [
+                    executable,
+                    "-I",
+                    str(Path(__file__).resolve()),
+                    "--health" if health else "--environment",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=True,
+            )
+        except (
+            OSError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
+            detail = getattr(exc, "stderr", None) or str(exc)
+            raise RuntimeError(f"UPXO environment probe failed: {detail}") from exc
+        try:
+            return json.loads(output.read_text())
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"UPXO environment probe returned no valid report: {result.stdout}"
+            ) from exc
+
+
+def _environment_report(*, health=False):
+    """Fingerprint installed distribution metadata and test EBSD runtime imports."""
+    if sys.version_info < (3, 13):
+        raise RuntimeError("UPXO requires Python 3.13 or newer")
+    _check_compatibility(require_defdap=True)
+    required = (
+        "upxo",
+        "defdap",
+        "numpy",
+        "scipy",
+        "shapely",
+        "gmsh",
+        "rasterio",
+        "meshio",
+        "pyvista",
+    )
+    packages = {name: importlib.metadata.version(name) for name in required}
+    distributions = []
+    for dist in importlib.metadata.distributions():
+        distributions.append(
+            {
+                "name": dist.metadata["Name"],
+                "version": dist.version,
+                "origin": dist.read_text("direct_url.json"),
+                "record_sha256": hashlib.sha256(
+                    (dist.read_text("RECORD") or "").encode()
+                ).hexdigest(),
+            }
+        )
+    report = {
+        "python": sys.version,
+        "executable": sys.executable,
+        "prefix": sys.prefix,
+        "packages": packages,
+        "distributions": sorted(distributions, key=lambda d: (d["name"], d["version"])),
+    }
+    if health:
+        for module in (
+            "upxo.interfaces.defdap.ebsd_reader",
+            "upxo.meshing.conformal_mesher2d",
+            "upxo.meshing.gsmesh2d",
+            "upxo.pxtalops.gssmooth2d",
+            "rasterio.features",
+            "shapely",
+            "meshio",
+            "gmsh",
+        ):
+            importlib.import_module(module)
+        report["health"] = "ok"
+    return report
+
+
 def mesh_ebsd(
     archive, options=None, *, workdir="results", stem="poly", unit=1e-6, force=True
 ):
     """Mesh a native EBSD archive and write tagged SI and diagnostic outputs.
 
     Cache reuse requires matching input bytes, options, units, interpreter and
-    worker code, plus checksums of every output. Failed runs leave previously
+    observed installed distributions and worker code, plus output checksums.
+    Failed runs leave previously
     accepted outputs intact and keep a log and validation report for diagnosis.
     """
     from festim_microstructure.formats.ebsd import read_ebsd
@@ -131,6 +234,7 @@ def mesh_ebsd(
     identity = {
         "protocol": _PROTOCOL,
         "upxo_revision": UPXO_REVISION,
+        "worker_environment": probe_worker(executable, timeout=options.timeout),
         "worker_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "input_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "options": settings,
@@ -510,6 +614,21 @@ def export_mesh(mesher, base, vox, ori, shape, unit):
     )
 
 
+def _check_compatibility(*, require_defdap=False):
+    """Enforce the same evaluated versions and source revision in both workers."""
+    if importlib.metadata.version("upxo") != UPXO_VERSION:
+        raise RuntimeError(f"This backend requires evaluated UPXO {UPXO_VERSION}")
+    distribution = importlib.metadata.distribution("upxo")
+    origin = distribution.read_text("direct_url.json")
+    revision = (
+        json.loads(origin).get("vcs_info", {}).get("commit_id") if origin else None
+    )
+    if revision and revision != UPXO_REVISION:
+        raise RuntimeError("UPXO is not installed from the evaluated commit")
+    if require_defdap and importlib.metadata.version("defdap") != DEFDAP_VERSION:
+        raise RuntimeError(f"EBSD import requires DefDAP {DEFDAP_VERSION}")
+
+
 def _worker(request):
     """Run under the pinned UPXO environment; never import solver libraries."""
     from upxo.meshing.conformal_mesher2d import confMesh2dGMSH
@@ -537,12 +656,7 @@ def _worker(request):
     }
     validation = directory / f"{stem}-validation.json"
     try:
-        if report["upxo_version"] != "1.2.0":
-            raise RuntimeError(
-                "This backend requires the evaluated UPXO 1.2.0 revision"
-            )
-        if revision and revision != UPXO_REVISION:
-            raise RuntimeError("UPXO is not installed from the evaluated commit")
+        _check_compatibility()
         reference = raster_polygons(labels)
         cells = reference
         if options.smoothing == "taubin" and options.smooth_iter:
@@ -560,6 +674,8 @@ def _worker(request):
                 fix_diagonal=False,
                 merge_enclosed=False,
                 jitter_factor=0,
+                thin_grain_px=options.thin_grain_px,
+                close_staircase=False,
             )
             inverse = {new: old for old, new in smooth["old_to_new_gid"].items()}
             cells = {
@@ -717,20 +833,7 @@ def _import_worker(request):
 
     path = Path(request)
     config = json.loads(path.read_text())
-    if (
-        importlib.metadata.version("upxo") != "1.2.0"
-        or importlib.metadata.version("defdap") != "0.93.6"
-    ):
-        raise RuntimeError(
-            "EBSD import requires evaluated UPXO 1.2.0 and DefDAP 0.93.6"
-        )
-    distribution = importlib.metadata.distribution("upxo")
-    origin = distribution.read_text("direct_url.json")
-    revision = (
-        json.loads(origin).get("vcs_info", {}).get("commit_id") if origin else None
-    )
-    if revision and revision != UPXO_REVISION:
-        raise RuntimeError("UPXO is not installed from the evaluated commit")
+    _check_compatibility(require_defdap=True)
     reader = EBSDReader.load(path.parent / "filtered.ctf")
     try:
         reader.detect_grains(
@@ -766,6 +869,14 @@ def _import_worker(request):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in ("--worker", "--import"):
-        raise SystemExit("usage: upxo.py --worker/--import REQUEST.json")
-    (_worker if sys.argv[1] == "--worker" else _import_worker)(sys.argv[2])
+    modes = {
+        "--worker": _worker,
+        "--import": _import_worker,
+        "--environment": lambda path: _save_json(Path(path), _environment_report()),
+        "--health": lambda path: _save_json(
+            Path(path), _environment_report(health=True)
+        ),
+    }
+    if len(sys.argv) != 3 or sys.argv[1] not in modes:
+        raise SystemExit("usage: upxo.py --worker/--import/--environment/--health PATH")
+    modes[sys.argv[1]](sys.argv[2])

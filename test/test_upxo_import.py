@@ -120,14 +120,15 @@ def test_import_cache_invalidates_when_source_changes(
     ctf = ctf_writer(tmp_path / "map.ctf", np.zeros((4, 4, 3)))
     output = tmp_path / "map.npz"
     first = convert(ctf, output, min_pixels=1, force=False, log=None)
+    run = upxo.subprocess.run
     with monkeypatch.context() as context:
-        context.setattr(
-            upxo.subprocess,
-            "run",
-            lambda *args, **kwargs: pytest.fail(
-                "valid cache should reuse imported grains"
-            ),
-        )
+
+        def cached_run(command, **kwargs):
+            if "--import" in command:
+                pytest.fail("valid cache should reuse imported grains")
+            return run(command, **kwargs)
+
+        context.setattr(upxo.subprocess, "run", cached_run)
         second = convert(ctf, output, min_pixels=1, force=False, log=None)
     np.testing.assert_array_equal(first.data.labels, second.data.labels)
     ctf_writer(ctf, np.full((4, 4, 3), [0, 30, 0]))
