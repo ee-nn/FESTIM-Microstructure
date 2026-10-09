@@ -249,3 +249,57 @@ def test_import_identity_observes_environment_variable_and_package_changes(
     assert first != second
     observed["version"] = "replacement"
     assert second != conversion.identity()
+
+
+def test_mesh_cache_invalidates_when_worker_environment_changes(tmp_path, monkeypatch):
+    """A dependency replacement at the same executable must rerun the worker."""
+    source = tmp_path / "map.npz"
+    write_ebsd(
+        source, EbsdData(np.ones((4, 4), dtype=int), np.array([[1.0, 0, 0, 0]]), (1, 1))
+    )
+    observed = {"version": "first"}
+    monkeypatch.setattr(upxo, "resolve_python", lambda explicit: "/fake/python")
+    monkeypatch.setattr(upxo, "probe_worker", lambda *a, **kw: dict(observed))
+    calls = []
+
+    def worker(command, **kwargs):
+        calls.append(command)
+        stage = Path(command[-1]).parent
+        (stage / "poly.msh4").write_text("accepted mesh")
+
+    monkeypatch.setattr(upxo.subprocess, "run", worker)
+    upxo.mesh_ebsd(source, workdir=tmp_path, force=False)
+    upxo.mesh_ebsd(source, workdir=tmp_path, force=False)
+    assert len(calls) == 1
+    observed["version"] = "replacement"
+    upxo.mesh_ebsd(source, workdir=tmp_path, force=False)
+    assert len(calls) == 2
+
+
+def test_environment_fingerprint_detects_same_version_reinstall(monkeypatch):
+    from types import SimpleNamespace
+
+    record = {"RECORD": "first build", "direct_url.json": None}
+    monkeypatch.setattr(upxo, "_check_compatibility", lambda **kw: None)
+    monkeypatch.setattr(upxo.sys, "version_info", (3, 13))
+    monkeypatch.setattr(upxo.importlib.metadata, "version", lambda name: "test")
+    monkeypatch.setattr(
+        upxo.importlib.metadata,
+        "distributions",
+        lambda: [
+            SimpleNamespace(
+                metadata={"Name": "upxo"},
+                version="1.3.1",
+                read_text=lambda name: record[name],
+            )
+        ],
+    )
+    first = upxo._environment_report()
+    record["RECORD"] = "same version, different build"
+    assert first != upxo._environment_report()
+
+
+def test_environment_probe_rejects_missing_interpreter(monkeypatch):
+    monkeypatch.setenv("FM_UPXO_PYTHON", "/does/not/exist")
+    with pytest.raises(RuntimeError, match="environment probe failed"):
+        upxo.probe_worker()

@@ -121,7 +121,10 @@ def probe_worker(executable=None, *, health=False, timeout=30.0):
     Run in isolation just like the importer/mesher. No probe is cached, so an
     environment replacement at the same interpreter path invalidates results.
     """
-    executable = resolve_python(executable)
+    try:
+        executable = resolve_python(executable)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"UPXO environment probe failed: {exc}") from exc
     with tempfile.TemporaryDirectory(prefix="upxo-probe-") as scratch:
         output = Path(scratch) / "environment.json"
         try:
@@ -190,17 +193,20 @@ def _environment_report(*, health=False):
         "distributions": sorted(distributions, key=lambda d: (d["name"], d["version"])),
     }
     if health:
-        for module in (
-            "upxo.interfaces.defdap.ebsd_reader",
-            "upxo.meshing.conformal_mesher2d",
-            "upxo.meshing.gsmesh2d",
-            "upxo.pxtalops.gssmooth2d",
-            "rasterio.features",
-            "shapely",
-            "meshio",
-            "gmsh",
-        ):
-            importlib.import_module(module)
+        apis = {
+            "upxo.interfaces.defdap.ebsd_reader": ("EBSDReader",),
+            "upxo.meshing.conformal_mesher2d": ("confMesh2dGMSH",),
+            "upxo.meshing.gsmesh2d": ("_flatten_cells",),
+            "upxo.pxtalops.gssmooth2d": ("smooth_gs_slice",),
+            "rasterio.features": ("shapes",),
+            "shapely.geometry": ("Polygon",),
+            "meshio": ("write",),
+            "gmsh": ("initialize", "finalize"),
+        }
+        for module, attributes in apis.items():
+            imported = importlib.import_module(module)
+            for attribute in attributes:
+                getattr(imported, attribute)
         report["health"] = "ok"
     return report
 

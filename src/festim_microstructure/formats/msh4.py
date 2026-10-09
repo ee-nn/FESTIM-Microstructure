@@ -69,8 +69,8 @@ def read_msh4(path):
 
     Returns ``(xyz, seg, tri)`` where ``xyz`` maps node tag -> coordinates,
     ``seg`` is a list of (edge id, [n1, n2]) and ``tri`` a list of
-    (face id, [n1, n2, n3]); the ids are the entity tags Neper wrote, which for
-    its own meshes equal the tessellation entity ids (edge#, face#).
+    (face id, [n1, n2, n3]); IDs are the Gmsh entity tags written by the
+    exporter. The UPXO adapter sets them to boundary and grain IDs.
     """
     with open(path) as fh:
         lines = fh.read().split("\n")

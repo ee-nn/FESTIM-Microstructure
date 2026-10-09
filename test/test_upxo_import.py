@@ -151,3 +151,29 @@ def test_native_archive_retains_voids_components_and_membership(tmp_path):
     assert not list(tmp_path.glob("*.tesr"))
     with pytest.raises(ValueError, match="original grain membership"):
         EbsdData(labels, quats, (0.5, 0.75), indexed=np.zeros_like(labels, dtype=bool))
+
+
+@requires_upxo
+def test_import_cache_invalidates_when_worker_environment_changes(
+    tmp_path, ctf_writer, monkeypatch
+):
+    from festim_microstructure.meshing import upxo
+
+    ctf = ctf_writer(tmp_path / "map.ctf", np.zeros((4, 4, 3)))
+    output = tmp_path / "map.npz"
+    convert(ctf, output, min_pixels=1, force=False, log=None)
+    probe, run = upxo.probe_worker, upxo.subprocess.run
+    calls = []
+
+    def changed_environment(*args, **kwargs):
+        return {**probe(*args, **kwargs), "test_dependency": "reinstalled"}
+
+    def tracked_run(command, **kwargs):
+        if "--import" in command:
+            calls.append(command)
+        return run(command, **kwargs)
+
+    monkeypatch.setattr(upxo, "probe_worker", changed_environment)
+    monkeypatch.setattr(upxo.subprocess, "run", tracked_run)
+    convert(ctf, output, min_pixels=1, force=False, log=None)
+    assert len(calls) == 1
