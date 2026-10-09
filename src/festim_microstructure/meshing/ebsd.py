@@ -479,13 +479,12 @@ class EbsdMicrostructure:
 
 
 def write_network_png(base, mesh, micro, archive_path, unit=1e-6, unit_name="um"):
-    """check-network.png: the raster with the boundaries as FESTIM will use them.
+    """Write ``<stem>-check-network.png`` with the boundaries FESTIM selects.
 
-    Same background as check-mesh.png (meshing.diagnostics), but the edges are the
-    driver's: those above ``micro.theta_min`` coloured by theta, interior edges below it
-    dashed white, specimen-surface edges grey. Compare with check-mesh.png to
-    see what the disorientation filter removed, and with check-grains.png to
-    see how far interface smoothing moved the boundaries off the pixels.
+    The background matches the mesh overlay. Retained interior boundaries are
+    coloured by disorientation, rejected boundaries are dashed white, and
+    specimen-surface edges are grey. Compare with ``<stem>-check-mesh.png`` to
+    inspect the disorientation filter and displacement from the source pixels.
     """
     if mesh.comm.size > 1:
         return
@@ -527,7 +526,7 @@ def write_network_png(base, mesh, micro, archive_path, unit=1e-6, unit_name="um"
     ax.set_ylabel(f"y ({unit_name})")
     scale_bar_ax(ax, nx * vox[0], unit_name)
     fig.tight_layout()
-    out = base.parent / "check-network.png"
+    out = Path(f"{base}-check-network.png")
     fig.savefig(out, dpi=150)
     plt.close(fig)
     print(f"  wrote {out}")

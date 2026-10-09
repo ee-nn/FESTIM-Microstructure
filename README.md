@@ -468,6 +468,9 @@ labels, masks and spacings), `<stem>-metadata.json` (SI extent), import provenan
 `<stem>-validation.json`, and `<stem>-festim.json`. Quantitative diagnostics cover
 source orientation transcription, indexed/filled error populations, grain area
 and equivalent-diameter changes, displaced area, and grain-to-mesh identity.
+Mesh diagnostic images are `<stem>-check-area.png` (grain-area changes),
+`<stem>-check-mesh.png` (mesh over source pixels), and
+`<stem>-check-network.png` (FESTIM boundary selection and disorientation).
 Optional images show quality rejection, grains and cubic IPF-Z, orientation
 error, mesh overlays, and the actual FESTIM boundary network. There are no TESR
 files, Neper rendering commands, or unscaled mesh intermediates in this chain.
