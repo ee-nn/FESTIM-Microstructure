@@ -833,8 +833,28 @@ def import_ebsd(ctf, window, indexed, settings, log=print):
         return result
 
 
+def _sign_aligned_quaternion_mean(equivalents):
+    """Average DefDAP symmetry equivalents with antipodal sign alignment.
+
+    ``equivalents`` has shape (n_symmetry, 4, n_pixels), as returned by
+    DefDAP's ``Quat.calcSymEqvs``. Keep its sequential symmetry selection, but
+    align each selected quaternion with the running sum before adding it.
+    DefDAP 0.93.6 selects by absolute dot product without this sign correction,
+    which can cancel equivalent orientations and displace the grain mean.
+    """
+    total = equivalents[0, :, 0].copy()
+    for i in range(1, equivalents.shape[2]):
+        candidates = equivalents[:, :, i]
+        dots = candidates @ total
+        best = np.argmax(np.abs(dots))
+        total += candidates[best] if dots[best] >= 0 else -candidates[best]
+    total /= np.linalg.norm(total)
+    return total if total[0] >= 0 else -total
+
+
 def _import_worker(request):
     """UPXO import and DefDAP symmetry-aware means, without local segmentation."""
+    from defdap.quat import Quat
     from upxo.interfaces.defdap.ebsd_reader import EBSDReader
 
     path = Path(request)
@@ -854,8 +874,8 @@ def _import_worker(request):
         raise ValueError("no grains survived DefDAP grain detection")
     means = []
     for grain in grains:
-        grain.calcAverageOri()
-        means.append(grain.refOri.quatCoef)
+        equivalents = Quat.calcSymEqvs(grain.quatList, grain.crystalSym)
+        means.append(_sign_aligned_quaternion_mean(equivalents))
     labels = np.asarray(reader.lfi_ebsd, dtype=np.int32)
     if not np.array_equal(np.unique(labels[labels > 0]), np.arange(1, len(means) + 1)):
         raise ValueError("UPXO grain IDs differ from DefDAP orientation row order")

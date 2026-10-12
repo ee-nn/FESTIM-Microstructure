@@ -437,7 +437,8 @@ base = fm.meshing.ebsd.run_ebsd_pipeline(options, workdir=workdir)
 
 The EBSD chain is **CTF → UPXO/DefDAP grains → UPXO mesh → FESTIM**.
 Quality and phase filters and the crop apply before UPXO's `EBSDReader` detects
-grains. DefDAP supplies grain labels and symmetry-aware mean orientations; the
+grains. DefDAP supplies grain labels and cubic symmetry equivalents. The importer
+aligns quaternion signs before averaging to avoid DefDAP 0.93.6 cancellation; the
 package translates its quaternion convention and applies explicit sample-frame
 corrections. The current boundary-angle diagnostics support cubic m-3m (Laue 11).
 The custom segmentation and Neper topology-repair code have been removed.

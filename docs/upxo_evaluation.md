@@ -42,7 +42,8 @@ Observed metrics and input provenance are checked in as
 remain historical measurements against 1.2.0.
 
 Native physical curve tags remain absent, so the FESTIM export adapter stays.
-DefDAP symmetry-aware averaging also stays: UPXO's newer
+DefDAP symmetry handling stays, with importer-side quaternion sign alignment
+to correct the 0.93.6 averaging cancellation bug: UPXO's newer
 `grain_average_euler_deg()` uses an arithmetic quaternion mean. Rejected pixels
 remain excluded from grain means. `EbsdMicrostructure.from_mesh()` now creates
 vertex-to-cell connectivity itself; callers need no extra topology setup.
@@ -69,6 +70,23 @@ FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py \
   test/test_gb_homogenisation.py
 ```
 
+## Quaternion mean correction
+
+The original 1.3.1 audit above predates a correction to DefDAP 0.93.6 averaging.
+Its sequential mean selected symmetry equivalents using absolute dot products,
+but added opposite-sign quaternions without aligning them. The importer now
+uses the same DefDAP symmetry equivalents and grain pixel membership, aligning
+each selected quaternion to the running sum before addition. Dependency source
+files are unchanged. Importer/worker code hashes invalidate earlier caches.
+For the original crop, grain 215's 219 indexed pixels give 3.705° RMS after
+correction, compared with the erroneous stored mean's 33.052°. The regenerated
+crop has 5.081° overall indexed RMS (previously 5.734°), with source pixels,
+quality masks and grain membership unchanged. The real example passes tagged
+mesh/network validation with the stronger five-pass Taubin settings (λ=0.5,
+μ=−0.53). Historical global orientation-error and boundary-angle measurements
+above predate this correction;
+geometry/mesh acceptance measurements are unaffected by this averaging change.
+
 ## Full EBSD replacement
 
 The production chain now imports CTF grains through UPXO's modern
@@ -78,8 +96,8 @@ handoffs, optional Neper rendering and temporary unscaled mesh exports have
 been removed. Generic TESR readers and generated Neper tessellations remain
 separate APIs.
 
-Quality/phase masks and crop apply before detection. DefDAP's grain means are
-symmetry-aware; UPXO's simpler `grain_avg_quats` was not used because it only
+Quality/phase masks and crop apply before detection. Grain means use DefDAP's
+symmetry equivalents with sign-aligned averaging; UPXO's simpler `grain_avg_quats` was not used because it only
 resolves quaternion sign ambiguity. Both original membership and filled geometry
 are persisted, so rejected/pruned pixels cannot bias grain means and subsequent
 source comparisons reproduce the same diagnostic populations. Transcription,

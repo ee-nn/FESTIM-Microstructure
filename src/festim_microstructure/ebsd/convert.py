@@ -102,8 +102,9 @@ class MeasureOptions:
 class CtfConversion:
     """Quality/crop adapter, UPXO import, native persistence and diagnostics.
 
-    Grain detection and symmetry-aware grain means are performed by DefDAP
-    through UPXO's modern EBSDReader. No local grain segmentation or topology
+    Grain detection uses DefDAP through UPXO's modern EBSDReader. Grain means
+    use DefDAP symmetry equivalents with local quaternion sign alignment.
+    No local grain segmentation or topology
     repair is applied. Optional nearest-grain filling is explicit geometry
     preparation; the original membership remains available in the archive.
     """

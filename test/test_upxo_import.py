@@ -177,3 +177,47 @@ def test_import_cache_invalidates_when_worker_environment_changes(
     monkeypatch.setattr(upxo.subprocess, "run", tracked_run)
     convert(ctf, output, min_pixels=1, force=False, log=None)
     assert len(calls) == 1
+
+
+# Four original pixels from real-map grain 215 straddling a quaternion hemisphere.
+# The uncorrected DefDAP sequential average yields a spurious ~24-degree RMS.
+HEMISPHERE_EULER = np.array(
+    [
+        [165.451904296875, 31.153900146484375, 12.655900001525874],
+        [167.2752990722656, 34.25370025634765, 10.659099578857415],
+        [169.02780151367188, 34.58020019531249, 14.624600410461426],
+        [161.7310028076172, 33.029499053955085, 21.60210037231445],
+    ]
+)
+
+
+def test_symmetry_mean_is_invariant_to_antipodal_signs():
+    from festim_microstructure.ebsd.orientation import crystal_equivalents
+    from festim_microstructure.meshing.upxo import _sign_aligned_quaternion_mean
+
+    pixels = euler_bunge_to_quat(*HEMISPHERE_EULER.T)
+    equivalents = crystal_equivalents(pixels).transpose(1, 2, 0)
+    equivalents = np.where(equivalents[:, :1, :] < 0, -equivalents, equivalents)
+    original = equivalents.copy()
+    mean = _sign_aligned_quaternion_mean(equivalents)
+    error = cubic_disorientation_angle(qmul(qconj(pixels), mean))
+    assert np.sqrt(np.mean(error**2)) < 4.0
+    assert error.max() < 6.0
+    flipped = equivalents.copy()
+    flipped[:, :, 1::2] *= -1
+    other = _sign_aligned_quaternion_mean(flipped)
+    assert abs(np.dot(mean, other)) == pytest.approx(1.0, abs=1e-12)
+    np.testing.assert_array_equal(equivalents, original)
+
+
+@requires_upxo
+def test_worker_mean_handles_hemisphere_crossing(tmp_path, ctf_writer):
+    euler = HEMISPHERE_EULER.reshape(2, 2, 3)
+    ctf = ctf_writer(tmp_path / "hemisphere.ctf", euler)
+    result = convert(ctf, tmp_path / "map.npz", min_pixels=1, log=None)
+    assert result.ncells == 1
+    assert result.segmentation.indexed.n == 4
+    assert result.rms_deg < 4.0
+    assert result.segmentation.indexed.max < 6.0
+    measured = measure_against_ctf(ctf, result.archive, log=None)
+    assert measured.indexed.rms == pytest.approx(result.rms_deg)
