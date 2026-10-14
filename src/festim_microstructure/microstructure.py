@@ -1,7 +1,7 @@
 """The microstructure contract the builders implement and the helpers consume.
 
-Three protocols, because there are really two different things in this package
-that both get called "a microstructure":
+The protocols describe two different things in this package that both get
+called "a microstructure":
 
 * :class:`MeshedMicrostructure` -- a mesh with one tagged subdomain per grain,
   which is what the subdomain factories in
@@ -12,12 +12,10 @@ that both get called "a microstructure":
   somewhere else.
 * :class:`BoundaryNetwork` -- a tessellation topology with a per-entity
   disorientation and masks selecting the boundaries to keep. Implemented by the
-  Neper and EBSD readers.
+  EBSD reader.
 
 Both are declared as :pep:`544` protocols, so an implementation conforms by
-having the right attributes rather than by inheriting: ``NeperMesh``
-is built from stat files and has no mesh, and forcing it into a common base
-class would mean giving it attributes it cannot fill. They are
+having the right attributes rather than by inheriting. They are
 ``runtime_checkable``, so ``isinstance`` answers whether an object conforms.
 """
 
@@ -39,14 +37,7 @@ __all__ = [
 
 @runtime_checkable
 class Microstructure(Protocol):
-    """What every microstructure in this package can say about itself.
-
-    Deliberately thin. ``n_grains`` is *not* here: a :class:`NeperMesh` built by
-    :meth:`~festim_microstructure.meshing.neper.NeperMesh.from_base` is read
-    from the face/edge/vertex stat files, which say nothing about how many cells
-    the tessellation had, so its report names the count only when it was given
-    one.
-    """
+    """What every microstructure in this package can say about itself."""
 
     def report(self) -> str:
         """A human-readable summary, one line per quantity."""
@@ -73,8 +64,8 @@ class MeshedMicrostructure(Microstructure, Protocol):
     #: ``MeshTags`` on the facets, or ``None`` when the network is geometric.
     facet_tags: Any
     #: The facet-tag value, or values, marking the grain boundaries; ``None``
-    #: when the network is geometric. A Neper or EBSD mesh tags every
-    #: tessellation face separately, so its network is a sequence of ids.
+    #: when the network is geometric. An EBSD mesh tags every boundary edge
+    #: separately, so its network is a sequence of ids.
     gb_tag: Any
     #: One orientation per grain, indexed by ``grain_id - 1`` (radians).
     orientations: np.ndarray
@@ -101,7 +92,7 @@ class MeshedMicrostructure(Microstructure, Protocol):
 
 @runtime_checkable
 class BoundaryNetwork(Microstructure, Protocol):
-    """A tessellation's grain-boundary topology, as Neper and EBSD report it.
+    """A tessellation's grain-boundary topology, as the EBSD reader reports it.
 
     Entities are boundaries: faces in 3D, edges in 2D. Every array here is in
     id order, so ``theta[k]`` belongs to entity ``k + 1``.
@@ -137,7 +128,7 @@ class BoundaryNetwork(Microstructure, Protocol):
 class TaggedPolycrystal:
     """A :class:`MeshedMicrostructure` made from a mesh and its tags.
 
-    The adapter for a mesh this package did not generate: a Neper or EBSD mesh
+    The adapter for a mesh this package did not generate: an EBSD mesh
     read with :func:`festim_microstructure.formats.msh4.read_mesh`, or one built
     by hand. The Voronoi builders return microstructures of their own and do not
     need it.

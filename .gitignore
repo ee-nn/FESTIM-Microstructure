@@ -3,8 +3,6 @@ results/
 *.bp/
 *.msh
 *.msh4
-*.tess
-*.st*
 *.json
 *.csv
 *.png

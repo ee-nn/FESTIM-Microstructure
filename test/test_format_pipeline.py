@@ -22,36 +22,8 @@ from festim_microstructure.ebsd.orientation import (
 from festim_microstructure.ebsd.settings import Settings, settings_from_provenance
 from festim_microstructure.formats.ebsd import EbsdData, read_ebsd, write_ebsd
 from festim_microstructure.formats.provenance import read_provenance
-from festim_microstructure.formats.tesr import (
-    TesrData,
-    read_tesr,
-    read_tesr_full,
-    write_tesr,
-)
 from festim_microstructure.meshing.diagnostics import area_change, overlay
 from festim_microstructure.meshing.upxo import resolve_python
-
-
-@pytest.mark.parametrize("voxel_ori", [False, True])
-def test_tesr_roundtrip(tmp_path, voxel_ori):
-    """Verify tesr roundtrip."""
-    cells = np.array([[1, 1, 2], [1, 2, 2]])
-    orientations = np.array([[0.0, 0.0, 0.0], [0.1, 0.2, 0.3]])
-    voxel = orientations[cells - 1] if voxel_ori else None
-    mask = np.array([[True, False, True], [True, True, True]])
-    path = tmp_path / "map.tesr"
-    write_tesr(path, TesrData(cells, orientations, (0.5, 0.75), "cubic", voxel, mask))
-    read_cells, vox = read_tesr(path)
-    full = read_tesr_full(path)
-    np.testing.assert_array_equal(read_cells, cells)
-    np.testing.assert_array_equal(full["cells"], cells)
-    np.testing.assert_allclose(full["cell_ori"], orientations)
-    assert vox == full["vox"] == (0.5, 0.75)
-    if voxel_ori:
-        np.testing.assert_allclose(full["vox_ori"], voxel)
-        np.testing.assert_array_equal(full["oridef"], mask)
-    else:
-        assert "vox_ori" not in full
 
 
 @pytest.mark.skipif(

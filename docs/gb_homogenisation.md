@@ -13,10 +13,10 @@ A workflow in three steps:
 3. **Identify an anisotropic `D_eff`** for a homogeneous model, and then check
    that it predicts things it was not fitted to (`examples/gb_homogenisation.py`).
 
-Voronoi cells stand in for the Neper microstructure. Nothing above the mesh
-generator depends on that choice: `Microstructure` only has to supply a list of
-boundary segments, per-grain cell tags and a per-grain orientation, so a Neper
-`.tess` or an EBSD map drops in at the same place.
+The study uses Voronoi cells. The transport helpers consume the
+`MeshedMicrostructure` contract: mesh and cell tags, per-grain orientations,
+and a boundary network supplied through facet tags or a geometric locator.
+An EBSD mesh can provide the same inputs.
 
 ![The microstructure and the flux its boundaries carry](fig_microstructure.png)
 

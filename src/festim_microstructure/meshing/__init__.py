@@ -7,20 +7,15 @@ from .._lazy import lazy_namespace
 if TYPE_CHECKING:
     from . import diagnostics as diagnostics
     from . import ebsd as ebsd
-    from . import neper as neper
     from . import upxo as upxo
     from .ebsd import EbsdMicrostructure as EbsdMicrostructure
     from .ebsd import EbsdOptions as EbsdOptions
     from .ebsd import run_ebsd_pipeline as run_ebsd_pipeline
-    from .neper import NeperMesh as NeperMesh
-    from .neper import NeperSettings as NeperSettings
     from .upxo import UpxoMeshOptions as UpxoMeshOptions
     from .upxo import mesh_ebsd as mesh_ebsd
 
-_SUBMODULES = ("neper", "ebsd", "diagnostics", "upxo")
+_SUBMODULES = ("ebsd", "diagnostics", "upxo")
 _NAMES = {
-    "NeperMesh": ".neper",
-    "NeperSettings": ".neper",
     "UpxoMeshOptions": ".upxo",
     "mesh_ebsd": ".upxo",
     "EbsdMicrostructure": ".ebsd",

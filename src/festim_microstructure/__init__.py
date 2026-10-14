@@ -1,6 +1,6 @@
 """Microstructures for FESTIM: meshes, tagged subdomains, coefficient fields.
 
-The package creates and interprets polycrystals -- Voronoi, Neper, EBSD --
+The package creates and interprets polycrystals -- Voronoi and EBSD --
 converts them into FESTIM subdomains and diffusivity fields, and supplies the
 post-processing a grain-boundary study needs. The transport model itself is
 declared with FESTIM: species, exchange terms, boundary conditions, settings
@@ -15,8 +15,6 @@ usable without FEniCS.
 from typing import TYPE_CHECKING
 
 from ._lazy import lazy_namespace
-from .meshing.neper import NeperMesh as NeperMesh
-from .meshing.neper import NeperSettings as NeperSettings
 from .meshing.upxo import UpxoMeshOptions as UpxoMeshOptions
 from .microstructure import BoundaryNetwork as BoundaryNetwork
 from .microstructure import MeshedMicrostructure as MeshedMicrostructure
@@ -76,8 +74,6 @@ __getattr__, __dir__, __all__ = lazy_namespace(
         "MeshedMicrostructure",
         "Microstructure",
         "TaggedPolycrystal",
-        "NeperMesh",
-        "NeperSettings",
         "UpxoMeshOptions",
         "MeshSizing",
         "VoronoiMicrostructure",

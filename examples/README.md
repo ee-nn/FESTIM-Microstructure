@@ -16,8 +16,8 @@ documentation; the package supplies the subdomains, the coefficient fields and
 the post-processing. `gb_homogenisation.py` contains the complete RVE study,
 sharing one cell-problem declaration across identification and validation.
 
-- `voronoi_polycrystal_2d.py`, `voronoi_polycrystal_3d.py`, and
-  `neper_voronoi_network.py` demonstrate short-circuit diffusion.
+- `voronoi_polycrystal_2d.py` and `voronoi_polycrystal_3d.py` demonstrate
+  short-circuit diffusion.
 - `ebsd_ctf_to_mesh.py` and `ebsd_gb_diffusion.py` demonstrate the EBSD path.
 - `gb_homogenisation.py` identifies effective diffusivity, validates it against
   permeation and uptake, and generates the study figures in one run.
@@ -39,8 +39,7 @@ validation reports. It also generates quality, orientation, mesh, area and
 FESTIM network images. `ebsd_gb_diffusion.py` reads these prepared files; its
 simulation exports go to `results/ebsd_gb_diffusion/`.
 Activate the environment in `environment-festim-microstructure-upxo.yml`.
-Rerun preprocessing to replace older Neper/TESR outputs. The original CTF stays
-in `examples/data/`; the new chain does not produce TESR or unscaled mesh files.
+The original CTF stays in `examples/data/`.
 
 The consolidated study writes `identified.json`, `validation.json`, and
 `fig_*.png` under `results/gb_homogenisation/`. Validation and the field map

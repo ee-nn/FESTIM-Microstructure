@@ -16,8 +16,8 @@ The code imports UPXO; it does not copy or modify UPXO source.
 The production pin is now UPXO **1.3.1**, revision
 [`a53885ef0a7a06f6b3fb195747363ae0a19bb127`](https://github.com/Design-By-Fundamentals-UKAEA/UPXO/tree/a53885ef0a7a06f6b3fb195747363ae0a19bb127),
 with DefDAP **0.93.6**. Both workers share one compatibility check.
-The migration scope is the **2D EBSD pathway**; generated Neper polycrystals
-remain an optional supported backend.
+The migration scope is the **2D EBSD pathway**. Generated 2D and 3D
+polycrystals use the Gmsh Voronoi builders.
 
 Rerun on October 9, 2026, with the DefDAP importer and UPXO 1.3.1 in the
 combined environment. Geometry, mesh, export and serial DOLFINx reconstruction
@@ -91,10 +91,8 @@ geometry/mesh acceptance measurements are unaffected by this averaging change.
 
 The production chain now imports CTF grains through UPXO's modern
 `EBSDReader` and DefDAP 0.93.6, meshes with UPXO, and validates the actual
-DOLFINx/FESTIM network. Custom segmentation, Neper topology repair, TESR
-handoffs, optional Neper rendering and temporary unscaled mesh exports have
-been removed. Generic TESR readers and generated Neper tessellations remain
-separate APIs.
+DOLFINx/FESTIM network. Orientation and mesh diagnostics use native arrays
+and the final SI mesh.
 
 Quality/phase masks and crop apply before detection. Grain means use DefDAP's
 symmetry equivalents with sign-aligned averaging; UPXO's simpler `grain_avg_quats` was not used because it only
@@ -164,18 +162,14 @@ passed **27 tests**, with that same optional-dependency skip.
 The input was `examples/data/D7 PBF SS316L.ctf`, using the existing example's
 crop `0,306,0,306`, `min_pixels=15`, `max_mad=1.5`, `allow_error=True`, and
 10-degree segmentation threshold. Filling rejected pixels remained enabled;
-**Neper-specific topology repair was disabled**.
+no label topology repair was applied.
 
 - The crop has 191 × 191 pixels, 1.6 µm spacing, and a 305.6 × 305.6 µm extent.
 - Segmentation retained **264 grains and five enclosed boundary loops**.
-- Running the existing Neper topology repair on the same labels reduces this to
-  **259 grains**, absorbing original IDs 58, 153, 162, 170, and 260. No diagonal
-  pinches were repaired in this crop.
 - UPXO's exact-polygon mesh retained all 264 grains and the five loops. It had
   **69,364 nodes, 137,198 triangles, 777 tagged boundary arcs**, and a minimum
   triangle angle of **21.23°**. The run took approximately **20 seconds**,
-  including geometry checks and export; this is not a
-  controlled speed comparison with Neper.
+  including geometry checks and export.
 - No inverted/zero-area triangles, nonmanifold facets, duplicate coordinate
   nodes, or missing boundary segments were found. Maximum mesh-versus-polygon
   grain-area error was **7.14 × 10⁻⁸ relative**.
@@ -324,8 +318,7 @@ Generated artifacts are under ignored `examples/results/upxo-evaluation/`:
 - `<case>/<method>/`: native export, tagged SI export, expected mesh arrays,
   orientation/extent sidecars, `result.json`, and `run.log`.
 - `ctf_map/<method>/overlay.png`: original CTF pixels with reconstructed polygons.
-- `neper-topology-repair.json`: the independent comparison with the existing
-  topology workaround; `project-tests.log` and `verify.log`: validation logs.
+- `project-tests.log` and `verify.log`: validation logs.
 
 This is a serial evaluation of one measured crop and small synthetic fixtures.
 It does not establish parallel import behavior, transport-solver equivalence,
@@ -336,9 +329,9 @@ performance superiority, or safe smoothing parameters for other scans.
 Keep the existing segmentation, quality filtering, orientation algebra, and
 raster diagnostics. Add an optional UPXO polygon-meshing backend with explicit
 grain/facet tagging and topology-preserving polygon preparation. The exact
-polygon route can retain enclosed grains and remove Neper's absorption workaround
-for this backend. Controlled Taubin smoothing with explicit seeds is also a
-credible candidate; gentler weights pass both the real-map and thin-twin checks.
+polygon route can retain enclosed grains. Controlled Taubin smoothing with
+explicit seeds is also a credible candidate; gentler weights pass both the
+real-map and thin-twin checks.
 Keep the geometry validation gates and avoid the moving-average paths and
 automatic seeding until their observed failures are addressed. DefDAP import and
 replacement of the existing CTF segmentation were not evaluated.

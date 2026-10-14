@@ -91,7 +91,7 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
 
     After FESTIM has located the network, ``located_facets`` holds the parent
     facets it was given and ``entity_ids_of_facets`` the tessellation entity
-    (the Neper face or EBSD edge) behind each of them, aligned. Only the tagged
+    (a boundary face or edge) behind each of them, aligned. Only the tagged
     route can fill them, and they are what lets a per-boundary quantity be read
     back onto the submesh: :meth:`entity_field` turns an array with one value
     per tessellation entity into a DG0 function on the submesh.
@@ -160,8 +160,8 @@ class GrainBoundaryNetwork(F.VolumeSubdomain):
                 "boundaries; pass the ids to keep"
             )
         self.facet_tags = facet_tags
-        # one tag or a sequence of them: a Neper or EBSD mesh tags every
-        # tessellation face separately, so its network is a list of ids
+        # One tag or a sequence: an EBSD mesh tags every boundary edge
+        # separately, so its network is a list of ids.
         self.entity_ids = (
             None
             if entity_ids is None

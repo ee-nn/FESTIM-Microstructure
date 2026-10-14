@@ -50,7 +50,7 @@ def test_facet_tags_without_ids_name_no_boundaries(network):
 
 
 def test_one_tag_and_a_sequence_of_them_are_both_accepted(network):
-    """Neper and EBSD tag every face separately; a Voronoi mesh uses one marker."""
+    """EBSD tags every edge separately; a Voronoi mesh uses one marker."""
     assert network(1, object(), 2, facet_tags=tags([7]), entity_ids=7).entity_ids == [7]
     many = network(1, object(), 2, facet_tags=tags([7]), entity_ids=[3, 7])
     assert list(many.entity_ids) == [3, 7]

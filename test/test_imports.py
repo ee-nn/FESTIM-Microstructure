@@ -39,20 +39,17 @@ def test_console_script_targets_exist(stubbed_heavy_deps, target):
 
 
 def test_pure_modules_need_no_fenics():
-    """These must import with nothing but numpy/scipy/matplotlib/pillow."""
+    """These must import with nothing but numpy/scipy/matplotlib."""
     for name in (
         "festim_microstructure",
-        "festim_microstructure._binaries",
         "festim_microstructure.check",
         "festim_microstructure.voronoi",
-        "festim_microstructure.meshing.neper",
         "festim_microstructure.ebsd",
         "festim_microstructure.ebsd.orientation",
         "festim_microstructure.ebsd.diagnostics",
         "festim_microstructure.meshing.diagnostics",
         "festim_microstructure.ebsd.convert",
         "festim_microstructure.formats.ctf",
-        "festim_microstructure.formats.tesr",
         "festim_microstructure.formats.msh4",
         "festim_microstructure.formats.provenance",
         "festim_microstructure.plotting",

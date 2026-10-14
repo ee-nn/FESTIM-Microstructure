@@ -1,13 +1,10 @@
-"""``fm-check`` reports Python dependencies and external executables."""
+"""``fm-check`` reports Python dependencies and the UPXO EBSD worker."""
 
 import argparse
 import importlib
 import os
-import re
-import subprocess
 import sys
 
-from ._binaries import ENV_VARS, resolve_all
 from .meshing.upxo import probe_worker, resolve_python
 
 __all__ = ["main"]
@@ -22,27 +19,8 @@ def _version(module):
     return getattr(m, "__version__", "?"), None
 
 
-_VERSION_RE = re.compile(r"\d+\.\d+")
-
-
-def _program_version(path, flag):
-    """Return the first output line that appears to contain a version."""
-    try:
-        out = subprocess.run(
-            [path, flag], capture_output=True, text=True, timeout=20, check=False
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return f"could not run ({type(e).__name__})"
-    lines = [ln.strip() for ln in (out.stdout + "\n" + out.stderr).splitlines()]
-    lines = [ln for ln in lines if ln]
-    for ln in lines:
-        if _VERSION_RE.search(ln) and "cannot open" not in ln:
-            return ln
-    return lines[0] if lines else f"exit {out.returncode}"
-
-
 def main(argv=None):
-    """Print dependency and executable availability for this installation."""
+    """Print dependency and EBSD worker availability for this installation."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--ebsd",
@@ -52,7 +30,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     ok = True
     print("python-side stack")
-    for module in ("festim_microstructure", "numpy", "scipy", "matplotlib", "PIL"):
+    for module in ("festim_microstructure", "numpy", "scipy", "matplotlib"):
         v, err = _version(module)
         print(f"  {module:22s} {v if err is None else 'MISSING  ' + err}")
         ok &= err is None
@@ -81,38 +59,6 @@ def main(argv=None):
             "environment-festim-microstructure-upxo.yml"
         )
 
-    print("\nexternal programs (explicit path > FM_*_BIN > PATH)")
-    found = resolve_all()
-    for name, var in ENV_VARS.items():
-        path = found[name]
-        env_val = os.environ.get(var)
-        source = "env var" if env_val and path == env_val else "PATH"
-        if path is None:
-            print(
-                f"  {name:8s} not found      ({var} unset)"
-                if not env_val
-                else f"  {name:8s} not found      ({var}={env_val!r} does not exist)"
-            )
-        elif str(path).startswith("INVALID"):
-            print(f"  {name:8s} {path}")
-            ok = False
-        else:
-            flag = {"neper": "--version", "gmsh": "--version", "povray": "--version"}[
-                name
-            ]
-            print(f"  {name:8s} {path}  [{source}]  {_program_version(path, flag)}")
-    if found["neper"] is None:
-        print(
-            "\nNeper is not available: Neper-backed generated tessellations will not "
-            "run.\nEBSD meshing uses UPXO; the Voronoi route and EBSD converter "
-            "also work without Neper. To add it:\n"
-            "  conda env create -f environment-neper.yml && tools/link-neper-env.sh"
-        )
-    elif found["gmsh"] is None:
-        print(
-            "\nNeper was found but no gmsh executable: `neper -M` will fail. "
-            "Add gmsh to the Neper environment and re-run tools/link-neper-env.sh."
-        )
     return 0 if ok else 1
 
 

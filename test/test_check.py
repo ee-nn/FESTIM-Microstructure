@@ -20,9 +20,6 @@ def test_ebsd_health_status(monkeypatch, capsys, available, failed, required, st
     monkeypatch.setattr(
         check, "resolve_python", lambda **kw: "/worker/python" if available else None
     )
-    monkeypatch.setattr(
-        check, "resolve_all", lambda: {name: None for name in check.ENV_VARS}
-    )
 
     def probe(executable, **kwargs):
         assert executable == "/worker/python"
@@ -44,7 +41,4 @@ def test_explicit_missing_worker_fails_default_check(monkeypatch):
     monkeypatch.setenv("FM_UPXO_PYTHON", "/does/not/exist")
     monkeypatch.setattr(check, "_version", lambda name: ("test", None))
     monkeypatch.setattr(check, "resolve_python", lambda **kw: None)
-    monkeypatch.setattr(
-        check, "resolve_all", lambda: {name: None for name in check.ENV_VARS}
-    )
     assert check.main([]) == 1

@@ -1,6 +1,6 @@
 """The microstructure contract, and who satisfies it.
 
-Needs neither dolfinx nor Neper: conformance is decided on attribute names, so
+Needs no dolfinx: conformance is decided on attribute names, so
 a stand-in object is enough, and the real classes are checked against the
 protocol without being built.
 """
@@ -96,19 +96,12 @@ def test_dimension_agnostic_voronoi_fields():
     assert {"facet_tags", "gb_tag"} <= fields
 
 
-def test_boundary_network_implementations_are_found_dimension_agnostically(
-    stubbed_heavy_deps,
-):
-    """Neper (faces) and EBSD (edges) answer to the same names."""
+def test_ebsd_class_declares_the_whole_boundary_network_contract(stubbed_heavy_deps):
+    """EBSD boundary edges supply the topology and disorientation fields."""
     from festim_microstructure.meshing.ebsd import EbsdMicrostructure
-    from festim_microstructure.meshing.neper import NeperMesh
 
-    for cls in (NeperMesh, EbsdMicrostructure):
-        assert missing_members(cls, BoundaryNetwork) == []
-        # the dimension-specific spellings stay available
-        assert hasattr(cls, "network_entity_ids")
-
-    assert NeperMesh.network_area is NeperMesh.network_measure
+    assert missing_members(EbsdMicrostructure, BoundaryNetwork) == []
+    assert hasattr(EbsdMicrostructure, "network_entity_ids")
     assert EbsdMicrostructure.network_length is EbsdMicrostructure.network_measure
 
 

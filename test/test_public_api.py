@@ -182,7 +182,7 @@ sys.meta_path.insert(0, NoSolvers())
 import festim_microstructure as fm
 from festim_microstructure.check import _version, main
 from festim_microstructure.ebsd.convert import CtfConversion
-from festim_microstructure.formats import ctf, msh4, provenance, tesr
+from festim_microstructure.formats import ctf, msh4, provenance
 from festim_microstructure.meshing.diagnostics import overlay
 assert callable(main)
 assert callable(CtfConversion)

@@ -112,5 +112,5 @@ LAUE_TO_CRYSYM = {
     8: "6/m",
     9: "6/mmm",
     10: "m-3",
-    11: "cubic",  # m-3m; Neper's `cubic` and `m-3m` both carry 24 operators
+    11: "cubic",  # m-3m, with 24 proper rotation operators
 }

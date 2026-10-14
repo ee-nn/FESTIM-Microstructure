@@ -19,7 +19,7 @@ import festim_microstructure as fm
 
 | Area | Contents |
 | --- | --- |
-| Microstructure generation | 2D and 3D Voronoi polycrystals via Gmsh; Neper-backed tessellations |
+| Microstructure generation | 2D and 3D Voronoi polycrystals via Gmsh |
 | EBSD import | Conversion of EBSD orientation maps into conforming grain meshes |
 | FESTIM subdomains and fields | Tagged grains, the boundary network as one codim-1 subdomain, per-grain surface patches, lattice tensor and per-boundary diffusivity fields |
 | Post-processing | Grain-plus-network inventories and flux averages, homogenisation and short-circuit estimates, network topology checks |
@@ -41,22 +41,13 @@ The solver and EBSD mesher share a Python 3.13 conda environment. Dependencies
 come from two package managers:
 
 - **conda-forge** supplies DOLFINx, the Gmsh Python API, FESTIM's compiled
-  dependencies (`scifem`, `io4dolfinx`), and Neper.
+  dependencies (`scifem`, `io4dolfinx`).
 - **PyPI** supplies FESTIM itself. Versions 2.1 and 2.2rc* are not yet on
   conda-forge, where the newest 2.x build is `2.0b2.post2`.
 - **UPXO requires Python 3.13** and shares the combined environment with FESTIM.
-- **Optional Neper lives in its own environment.** conda-forge's `neper` is built
-  against `scotch 6.1.x`, which pins `zlib <1.3`, while `fenics-dolfinx >=0.10`
-  needs `libzlib >=1.3.2` (through `libadios2`). No single solve can contain
-  both; `conda env create` on a combined file fails with
-  `LibMambaUnsatisfiableError` on exactly that pair. Since Neper is only ever
-  run as a subprocess -- nothing in the Python stack links against it -- the
-  split costs nothing: the FEniCSx environment just needs to know the path.
 
-**Platforms:** linux-64, osx-64, osx-arm64. There is no Windows build of Neper
-on conda-forge, and DOLFINx is easiest to obtain on Linux/macOS, so Windows
-users should work inside WSL2. FESTIM's own installation guide makes the same
-recommendation.
+**Platforms:** linux-64, osx-64, osx-arm64. Windows users should work inside
+WSL2 for the FEniCSx stack.
 
 ## Installation
 
@@ -76,8 +67,7 @@ Run these commands from the repository checkout. The combined environment
 installs the scientific and FEniCSx packages through conda and pins the evaluated
 UPXO 1.3.1 commit and DefDAP 0.93.6. With Python 3.13 and UPXO installed, the importer and mesher automatically use
 the active interpreter. An explicit `UpxoMeshOptions(python=...)` or
-`FM_UPXO_PYTHON` still takes precedence. Neper is needed only for the generated
-Neper tessellation examples.
+`FM_UPXO_PYTHON` still takes precedence.
 CI creates this combined environment from scratch and runs required CTF-to-FESTIM
 transport and solver tests. Missing dependencies or skipped tests fail that job.
 Run `FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py`
@@ -90,29 +80,11 @@ For solver workflows using the original Python 3.12 environment:
 git clone https://github.com/ee-nn/FESTIM-Microstructure.git
 cd FESTIM-Microstructure
 
-# 1. the FEniCSx / FESTIM environment (this is the one you work in)
+# The FEniCSx / FESTIM environment
 conda env create -f environment.yml
 conda activate festim-microstructure
 pip install -e .
-
-# Optional: Neper for generated tessellations
-conda env create -f environment-neper.yml
-tools/link-neper-env.sh
 ```
-
-The optional Neper linking script records `FM_NEPER_BIN`, `FM_GMSH_BIN` and
-`FM_POVRAY_BIN` as conda environment variables of `festim-microstructure` (`conda env config vars`), so
-they are exported on activate and cleared on deactivate; nothing is written to
-your shell profile. If you prefer, skip the script and export the same three
-variables yourself -- or pass paths explicitly (`NeperSettings(neper_bin=...)`).
-Resolution order is always explicit argument, then the variable, then `PATH`.
-
-The Neper environment is optional. Without it, the Gmsh-based Voronoi route
-(`VoronoiMicrostructure.create`, `examples/voronoi_polycrystal_*.py`), the EBSD `.ctf` converter,
-and the homogenisation study all work. EBSD meshing uses UPXO; only
-Neper-backed generated tessellations need Neper. The POV-Ray render checks are
-optional within that: on linux-64, install `conda-forge::povray` into `neper-env`
-and re-run the linking script.
 
 `pip install -e .` is required -- without it the modules under `src/` are not
 on the import path and none of the examples will run. For a development install
@@ -134,8 +106,9 @@ changing environments, run **Developer: Reload Window**.
 fm-check
 ```
 
-prints the versions of the Python-side stack and where each external program
-resolves to, and exits non-zero if the FEniCSx side is broken. It looks like:
+prints the versions of the Python stack and probes the configured UPXO EBSD
+worker. It exits non-zero if dependencies fail to import or the worker fails
+its health check. It looks like:
 
 ```
 python-side stack
@@ -144,10 +117,11 @@ python-side stack
   dolfinx                0.10.0
   festim                 2.2rc2
   gmsh (python-gmsh)     4.13.1
-external programs (explicit path > FM_*_BIN > PATH)
-  neper    /home/you/miniforge3/envs/neper-env/bin/neper  [env var]  neper 5.0.0
-  gmsh     /home/you/miniforge3/envs/neper-env/bin/gmsh   [env var]  4.13.1
-  povray   not found      (FM_POVRAY_BIN unset)
+  ...
+  UPXO interpreter       /home/you/miniforge3/envs/festim-microstructure-upxo/bin/python
+  EBSD worker            OK (runtime imports verified)
+    upxo                 1.3.1
+    defdap               0.93.6
 ```
 
 For MPI, additionally:
@@ -158,15 +132,8 @@ mpirun -n 2 python -c "from mpi4py import MPI; print(MPI.COMM_WORLD.rank)"
 
 The `gmsh (python-gmsh)` line matters: on conda-forge the `gmsh` package
 installs only the executable and shared library, and the Python module comes
-from the separate `python-gmsh` package. `environment.yml` lists `python-gmsh`;
-`environment-neper.yml` lists `gmsh`, because the executable is what `neper -M`
-calls, and it should be the one Neper was built alongside. Keeping them apart
-means the two Gmsh builds never mix.
-
-Paths with whitespace are rejected (`find_binary` raises): Neper re-tokenizes
-its arguments, so a conda prefix such as `~/my envs/neper-env` is torn into
-fragments by the time Neper sees it. Put the environments somewhere without a
-space, or symlink them.
+from the separate `python-gmsh` package. Both environment files include the
+Python API used by the mesh builders.
 
 ### Updating
 
@@ -182,9 +149,7 @@ FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py
 ```
 
 For the original solver environment, use `conda env update -f environment.yml
---prune` and reinstall the package there. Update the optional Neper environment
-with `conda env update -f environment-neper.yml --prune`; rerun
-`tools/link-neper-env.sh` if it was recreated or moved.
+--prune` and reinstall the package there.
 
 Import and mesh cache identities probe the selected worker before reuse. They
 record its Python executable/version, all installed distribution versions,
@@ -224,8 +189,6 @@ pip check
 FESTIM-Microstructure/
 ├── environment.yml             # Python 3.12 FEniCSx / FESTIM environment
 ├── environment-festim-microstructure-upxo.yml  # combined Python 3.13 environment
-├── environment-neper.yml       # Neper + gmsh executable, kept separate (see Requirements)
-├── tools/link-neper-env.sh     # records the Neper paths on the FEniCSx env
 ├── pyproject.toml
 ├── README.md
 ├── docs/
@@ -233,16 +196,14 @@ FESTIM-Microstructure/
 ├── src/festim_microstructure/
 │   ├── __init__.py              # flat API; solver-dependent exports are lazy
 │   ├── _lazy.py                # import support for optional solver dependencies
-│   ├── _binaries.py            # Neper, Gmsh and POV-Ray executable discovery
 │   ├── check.py                # fm-check environment diagnostic
 │   ├── microstructure.py       # microstructure protocols, TaggedPolycrystal
 │   ├── materials.py            # lattice tensor field, short-circuit estimates
-│   ├── plotting.py             # raster colours, scale bars, image helpers
+│   ├── plotting.py             # raster colours, Matplotlib defaults, scale bars
 │   ├── formats/                # file I/O
 │   │   ├── ctf.py
 │   │   ├── ebsd.py             # native grain/pixel arrays and masks
-│   │   ├── tesr.py             # generic Neper-format interoperability
-│   │   ├── msh4.py             # mesh readers and Neper StatFile
+│   │   ├── msh4.py             # tagged Gmsh mesh readers
 │   │   └── provenance.py
 │   ├── ebsd/                   # UPXO/DefDAP measured grain import
 │   │   ├── orientation.py
@@ -254,8 +215,8 @@ FESTIM-Microstructure/
 │   │   ├── gmsh_builder.py
 │   │   └── polycrystal.py
 │   ├── meshing/                # tessellation -> mesh -> BoundaryNetwork
-│   │   ├── neper.py            # NeperMesh: generate, mesh, read, describe
 │   │   ├── ebsd.py
+│   │   ├── upxo.py             # UPXO worker and export adapter
 │   │   └── diagnostics.py
 │   ├── fem/
 │   │   ├── solvers.py          # tune_direct_solver: the MUMPS workspace workaround
@@ -272,7 +233,7 @@ FESTIM-Microstructure/
 
 Nothing importable sits at the repository root. The pure-NumPy parts of the
 package -- the EBSD converter, the orientation algebra, the Voronoi
-tessellation geometry, the Neper stat readers -- import and test without
+tessellation geometry, the file readers -- import and test without
 dolfinx or FESTIM installed; the mesh builders, subdomains and fields import
 them lazily.
 
@@ -396,7 +357,6 @@ into your own script:
 ```bash
 python examples/voronoi_polycrystal_2d.py       # in-process Gmsh tessellation
 python examples/voronoi_polycrystal_3d.py
-python examples/neper_voronoi_network.py        # needs neper + gmsh executables
 python examples/ebsd_ctf_to_mesh.py             # EBSD conversion + SI mesh
 python examples/ebsd_gb_diffusion.py            # transport using the saved SI mesh
 python examples/fisher_grain_boundary.py        # single boundary vs Le Claire
@@ -441,7 +401,6 @@ grains. DefDAP supplies grain labels and cubic symmetry equivalents. The importe
 aligns quaternion signs before averaging to avoid DefDAP 0.93.6 cancellation; the
 package translates its quaternion convention and applies explicit sample-frame
 corrections. The current boundary-angle diagnostics support cubic m-3m (Laue 11).
-The custom segmentation and Neper topology-repair code have been removed.
 
 `Settings(fill=True)` assigns unindexed/pruned pixels to the nearest surviving
 grain for meshing. The archive retains their original membership and quality
@@ -473,8 +432,7 @@ Mesh diagnostic images are `<stem>-check-area.png` (grain-area changes),
 `<stem>-check-mesh.png` (mesh over source pixels), and
 `<stem>-check-network.png` (FESTIM boundary selection and disorientation).
 Optional images show quality rejection, grains and cubic IPF-Z, orientation
-error, mesh overlays, and the actual FESTIM boundary network. There are no TESR
-files, Neper rendering commands, or unscaled mesh intermediates in this chain.
+error, mesh overlays, and the actual FESTIM boundary network.
 
 For separate import/inspection, use
 `fm.ebsd.convert.convert(ctf, "grains.npz", ...)` and
@@ -489,17 +447,10 @@ and FESTIM. `FM_UPXO_PYTHON`, `Settings(python=...)`, or
 `UpxoMeshOptions(python=...)` can select a compatible importer/mesher interpreter.
 The combined environment pins UPXO's evaluated commit and its DefDAP extra.
 UPXO remains an external dependency with its upstream GPL-3.0 license.
-The EBSD `TesrMeshOptions`, `mesh_tesr`, `EbsdOptions(tesr=...)`, conversion
-`topology_fix`, `voxel_ori`, and Neper/POV-Ray options have been removed.
-Generated Neper tessellations retain their existing `NeperSettings` API.
 
 The returned Voronoi mesh is in metres; the optional Gmsh file uses units of
 `size`. The `fm-check` environment diagnostic remains a console command.
 
-Neper, Gmsh and POV-Ray are found through `FM_NEPER_BIN`, `FM_GMSH_BIN`,
-`FM_POVRAY_BIN` (set by `tools/link-neper-env.sh`), falling back to `PATH`;
-`fm-check` shows what resolved. Every Neper subprocess runs with those
-directories prepended to its `PATH`, so Neper finds Gmsh and POV-Ray by itself.
 Parallel runs use MPI directly, as with any DOLFINx program:
 
 ```bash
@@ -535,4 +486,4 @@ For FESTIM questions rather than microstructure questions, use the FESTIM
 
 ## License
 
-Apache-2.0, matching FESTIM.
+GPL-3.0.

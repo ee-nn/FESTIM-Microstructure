@@ -1,39 +1,10 @@
-"""Read Gmsh meshes and the accompanying Neper entity-statistics files."""
+"""Read tagged Gmsh meshes."""
 
 from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["StatFile", "read_mesh", "read_msh4"]
-
-
-class StatFile:
-    """One Neper .st* file: scalar keys in columns, entities in id order.
-
-    Ids are 1-based throughout Neper, so ``self.values[k]`` is entity ``k + 1``
-    and :meth:`ids` converts a boolean mask back into ids.
-    """
-
-    def __init__(self, path, keys):
-        """Read a Neper statistics file and label its columns."""
-        raw = np.loadtxt(path, ndmin=2)
-        if raw.shape[1] != len(keys):
-            raise ValueError(
-                f"{path} has {raw.shape[1]} columns but {len(keys)} keys were "
-                f"expected ({', '.join(keys)}); the -stat option and the key "
-                "tuple have drifted apart"
-            )
-        self.values = {k: raw[:, i] for i, k in enumerate(keys)}
-        self.n = raw.shape[0]
-
-    def __getitem__(self, key):
-        """Return the statistics column with the requested key."""
-        return self.values[key]
-
-    @staticmethod
-    def ids(mask):
-        """Convert an entity mask in ID order to one-based IDs."""
-        return np.flatnonzero(mask).astype(np.int32) + 1
+__all__ = ["read_mesh", "read_msh4"]
 
 
 def read_mesh(base, gdim, comm=None, rank=0):
@@ -41,7 +12,7 @@ def read_mesh(base, gdim, comm=None, rank=0):
 
     ``cell_tags`` carry grain IDs and ``facet_tags`` carry boundary IDs.
     The physical IDs of cells and facets are independent. UPXO exports use
-    the FESTIM tagging adapter; generated Neper meshes use entity element sets.
+    the FESTIM tagging adapter.
 
     Coordinates must already be in SI units (metres). No scaling is applied.
     """
