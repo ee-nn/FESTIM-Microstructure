@@ -1,8 +1,7 @@
 """The microstructure contract, and who satisfies it.
 
-Needs no dolfinx: conformance is decided on attribute names, so
-a stand-in object is enough, and the real classes are checked against the
-protocol without being built.
+Conformance is decided on attribute names, so a stand-in object is enough,
+and the real classes are checked against the protocol without building a mesh.
 """
 
 import numpy as np
@@ -96,7 +95,7 @@ def test_dimension_agnostic_voronoi_fields():
     assert {"facet_tags", "gb_tag"} <= fields
 
 
-def test_ebsd_class_declares_the_whole_boundary_network_contract(stubbed_heavy_deps):
+def test_ebsd_class_declares_the_whole_boundary_network_contract():
     """EBSD boundary edges supply the topology and disorientation fields."""
     from festim_microstructure.meshing.ebsd import EbsdMicrostructure
 

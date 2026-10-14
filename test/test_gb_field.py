@@ -8,10 +8,9 @@ independently of the entity map the field itself uses.
 
 import numpy as np
 import pytest
-from conftest import requires_fenics
 from test_short_circuit import NETWORK_ID, SURFACE_ID_0
 
-pytestmark = requires_fenics
+pytestmark = pytest.mark.fenics
 
 
 @pytest.mark.fenics

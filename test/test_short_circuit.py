@@ -9,9 +9,8 @@ field, and the post-processing.
 
 import numpy as np
 import pytest
-from conftest import requires_fenics
 
-pytestmark = requires_fenics
+pytestmark = pytest.mark.fenics
 
 NETWORK_ID = 1_000_000
 SURFACE_ID_0 = 2_000_000

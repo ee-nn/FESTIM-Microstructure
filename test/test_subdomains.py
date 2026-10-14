@@ -10,8 +10,8 @@ import pytest
 
 
 @pytest.fixture
-def network(stubbed_heavy_deps):
-    """Import the grain-boundary network with optional dependencies stubbed."""
+def network():
+    """Return the grain-boundary network class for constructor checks."""
     from festim_microstructure.fem.subdomains import GrainBoundaryNetwork
 
     return GrainBoundaryNetwork

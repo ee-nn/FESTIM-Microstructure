@@ -15,7 +15,7 @@ from mpi4py import MPI
 import dolfinx
 import numpy as np
 
-from festim_microstructure.ebsd.convert import convert
+from festim_microstructure.ebsd import convert as ebsd_convert
 from festim_microstructure.ebsd.orientation import (
     cubic_disorientation_angle,
     qconj,
@@ -102,7 +102,7 @@ def run_ebsd_pipeline(options, workdir: str | Path = "results", force=True):
         try:
             workdir = Path(workdir)
             workdir.mkdir(parents=True, exist_ok=True)
-            imported = convert(
+            imported = ebsd_convert.convert(
                 settings=replace(
                     options.import_settings,
                     python=options.import_settings.python or options.mesh.python,

@@ -5,10 +5,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import requires_fenics
 
 
-@requires_fenics
+@pytest.mark.fenics
 def test_pipeline_exports_si_mesh_and_preserves_enclosed_grain(
     tmp_path, monkeypatch, ctf_writer
 ):
@@ -82,7 +81,6 @@ def test_pipeline_exports_si_mesh_and_preserves_enclosed_grain(
     assert Path(f"{base}-validation.json").is_file()
 
 
-@requires_fenics
 @pytest.mark.fenics
 @pytest.mark.parametrize("smoothing", ["none", "taubin"])
 def test_ctf_transport_conserves_inventory_and_exchanges_with_boundary(

@@ -53,9 +53,6 @@ fm-check = "festim_microstructure.check:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-festim_microstructure = ["py.typed"]
-
 [tool.setuptools_scm]
 write_to = "src/festim_microstructure/_version.py"
 
@@ -86,5 +83,5 @@ section-order = [
 [tool.pytest.ini_options]
 testpaths = ["test"]
 markers = [
-    "fenics: needs dolfinx, festim and gmsh (skipped when they are not installed)",
+    "fenics: exercises dolfinx, festim and gmsh mesh/solver integration",
 ]

@@ -7,9 +7,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import requires_fenics
 
-pytestmark = requires_fenics
+pytestmark = pytest.mark.fenics
 
 
 @pytest.fixture

@@ -1,26 +1,16 @@
 """Tessellation meshing, boundary-network reconstruction, and diagnostics."""
 
-from typing import TYPE_CHECKING
+from . import diagnostics, ebsd, upxo
+from .ebsd import EbsdMicrostructure, EbsdOptions, run_ebsd_pipeline
+from .upxo import UpxoMeshOptions, mesh_ebsd
 
-from .._lazy import lazy_namespace
-
-if TYPE_CHECKING:
-    from . import diagnostics as diagnostics
-    from . import ebsd as ebsd
-    from . import upxo as upxo
-    from .ebsd import EbsdMicrostructure as EbsdMicrostructure
-    from .ebsd import EbsdOptions as EbsdOptions
-    from .ebsd import run_ebsd_pipeline as run_ebsd_pipeline
-    from .upxo import UpxoMeshOptions as UpxoMeshOptions
-    from .upxo import mesh_ebsd as mesh_ebsd
-
-_SUBMODULES = ("ebsd", "diagnostics", "upxo")
-_NAMES = {
-    "UpxoMeshOptions": ".upxo",
-    "mesh_ebsd": ".upxo",
-    "EbsdMicrostructure": ".ebsd",
-    "EbsdOptions": ".ebsd",
-    "run_ebsd_pipeline": ".ebsd",
-}
-
-__getattr__, __dir__, __all__ = lazy_namespace(__name__, _SUBMODULES, _NAMES)
+__all__ = [
+    "EbsdMicrostructure",
+    "EbsdOptions",
+    "UpxoMeshOptions",
+    "diagnostics",
+    "ebsd",
+    "mesh_ebsd",
+    "run_ebsd_pipeline",
+    "upxo",
+]

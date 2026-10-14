@@ -68,8 +68,9 @@ installs the scientific and FEniCSx packages through conda and pins the evaluate
 UPXO 1.3.1 commit and DefDAP 0.93.6. With Python 3.13 and UPXO installed, the importer and mesher automatically use
 the active interpreter. An explicit `UpxoMeshOptions(python=...)` or
 `FM_UPXO_PYTHON` still takes precedence.
-CI creates this combined environment from scratch and runs required CTF-to-FESTIM
-transport and solver tests. Missing dependencies or skipped tests fail that job.
+CI creates this combined environment from scratch and runs the complete test
+suite, including CTF-to-FESTIM transport and solver tests. Missing dependencies
+or skipped tests fail that job.
 Run `FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py`
 after installation to check mesh reconstruction, boundary exchange and inventory
 conservation locally.
@@ -194,8 +195,7 @@ FESTIM-Microstructure/
 ├── docs/
 │   └── gb_homogenisation.md    # the homogenisation study, with figures
 ├── src/festim_microstructure/
-│   ├── __init__.py              # flat API; solver-dependent exports are lazy
-│   ├── _lazy.py                # import support for optional solver dependencies
+│   ├── __init__.py              # public API with ordinary imports
 │   ├── check.py                # fm-check environment diagnostic
 │   ├── microstructure.py       # microstructure protocols, TaggedPolycrystal
 │   ├── materials.py            # lattice tensor field, short-circuit estimates
@@ -228,14 +228,13 @@ FESTIM-Microstructure/
 │   ├── gb_homogenisation.py    # RVE identification, validation and figures
 │   ├── li2022_fig4*.py         # Li et al. (2022) reproduction scripts
 │   └── ...                     # usage examples and data/
-└── test/                       # pytest; the FEniCS-dependent tests skip without it
+└── test/                       # pytest in the combined FESTIM/UPXO environment
 ```
 
-Nothing importable sits at the repository root. The pure-NumPy parts of the
-package -- the EBSD converter, the orientation algebra, the Voronoi
-tessellation geometry, the file readers -- import and test without
-dolfinx or FESTIM installed; the mesh builders, subdomains and fields import
-them lazily.
+Nothing importable sits at the repository root. The package imports its public
+API directly and requires the FESTIM/DOLFINx stack. Run the examples, conversion
+tools, `fm-check`, and tests from an installed solver environment; the combined
+Python 3.13 environment also supplies UPXO/DefDAP for EBSD workflows.
 
 ## Usage
 
@@ -314,18 +313,11 @@ A boundary-dependent diffusivity is one value per tessellation entity,
 `grain_boundary_network(..., diffusivity_by_entity=...)`, which the network
 turns into a field on its submesh when FESTIM creates it.
 
-`dir(fm)` lists the curated top-level API. Geometry and network names load
-eagerly with NumPy and SciPy; solver-dependent names such as `fm.Grain` and
-`fm.GrainBoundaryNetwork` load FESTIM/DOLFINx on first access. This keeps
-standalone EBSD conversion and `fm-check` usable without the solver stack.
+`fm.__all__` lists the curated top-level API. Classes such as `fm.Grain`,
+`fm.TaggedPolycrystal`, and `fm.EbsdMicrostructure` are imported directly
+alongside the geometry and subpackages.
 
-The same exports are declared explicitly for type checkers, so completion,
-constructor signatures and go-to-definition work with `fm.TaggedPolycrystal`,
-`fm.GrainBoundaryNetwork` and the subpackage helpers. The installed
-package includes a `py.typed` marker for editors using it outside this checkout.
-
-Everything else stays reachable through the subpackages, which resolve the
-same way:
+Additional helpers are available through the subpackages:
 
 ```python
 fm.voronoi.network_tensor
