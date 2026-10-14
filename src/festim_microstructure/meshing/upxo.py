@@ -33,7 +33,7 @@ __all__ = [
 UPXO_VERSION = "1.3.1"
 DEFDAP_VERSION = "0.93.6"
 UPXO_REVISION = "a53885ef0a7a06f6b3fb195747363ae0a19bb127"
-_PROTOCOL = 2
+_PROTOCOL = 3
 
 
 @dataclass
@@ -231,7 +231,7 @@ def mesh_ebsd(
         raise ValueError("stem must be a filename without directory components")
     archive = Path(archive).resolve()
     data = read_ebsd(archive)
-    labels, vox, ori = data.labels, np.asarray(data.vox), data.grain_quats
+    labels, vox = data.labels, np.asarray(data.vox)
     executable = resolve_python(options.python)
     base = Path(workdir).resolve() / stem
     base.parent.mkdir(parents=True, exist_ok=True)
@@ -268,7 +268,7 @@ def mesh_ebsd(
         prefix=f".{stem}-upxo-", dir=base.parent
     ) as scratch:
         stage = Path(scratch)
-        np.savez(stage / "input.npz", labels=labels.astype(np.int32), vox=vox, ori=ori)
+        np.savez(stage / "input.npz", labels=labels.astype(np.int32), vox=vox)
         request = stage / "request.json"
         _save_json(request, {"options": settings, "unit": unit, "stem": stem})
         log = Path(f"{base}-upxo.log")
@@ -563,7 +563,7 @@ def mesh_metrics(mesher, cells):
     }
 
 
-def export_mesh(mesher, base, vox, ori, shape, unit):
+def export_mesh(mesher, base, vox, shape, unit):
     """Retain UPXO's triangles and add deterministic grain and boundary tags."""
     import gmsh
     import meshio
@@ -614,7 +614,7 @@ def export_mesh(mesher, base, vox, ori, shape, unit):
             "version": 1,
             "extent_m": [nx * vox[0] * unit, ny * vox[1] * unit],
             "unit": unit,
-            "n_grains": len(ori),
+            "n_grains": len(np.unique(owners)),
             "crystal_symmetry": "cubic",
         },
     )
@@ -645,7 +645,7 @@ def _worker(request):
     options = UpxoMeshOptions(**config["options"])
     directory, stem = request.parent, config["stem"]
     data = np.load(directory / "input.npz")
-    labels, vox, ori = data["labels"], data["vox"], data["ori"]
+    labels, vox = data["labels"], data["vox"]
     report = {
         "accepted": False,
         "upxo_version": importlib.metadata.version("upxo"),
@@ -724,7 +724,7 @@ def _worker(request):
             raise RuntimeError(
                 "UPXO mesh failed conformity, ownership or adjacency checks"
             )
-        export_mesh(mesher, directory / stem, vox, ori, labels.shape, config["unit"])
+        export_mesh(mesher, directory / stem, vox, labels.shape, config["unit"])
         report["accepted"] = True
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"

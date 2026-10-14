@@ -138,6 +138,34 @@ def test_import_cache_invalidates_when_source_changes(
     )
 
 
+@requires_upxo
+def test_import_cache_regenerates_unsupported_provenance(
+    tmp_path, ctf_writer, monkeypatch
+):
+    """An intact archive cannot keep an unsupported provenance record in use."""
+    from festim_microstructure.meshing import upxo
+
+    ctf = ctf_writer(tmp_path / "map.ctf", np.zeros((4, 4, 3)))
+    output = tmp_path / "map.npz"
+    first = convert(ctf, output, min_pixels=1, force=False, log=None)
+    record = json.loads(first.provenance.read_text())
+    record["version"] = 2
+    first.provenance.write_text(json.dumps(record))
+    run = upxo.subprocess.run
+    imports = []
+
+    def tracked_run(command, **kwargs):
+        if "--import" in command:
+            imports.append(command)
+        return run(command, **kwargs)
+
+    monkeypatch.setattr(upxo.subprocess, "run", tracked_run)
+    rebuilt = convert(ctf, output, min_pixels=1, force=False, log=None)
+    assert len(imports) == 1
+    assert json.loads(rebuilt.provenance.read_text())["version"] == 1
+    np.testing.assert_array_equal(rebuilt.data.labels, first.data.labels)
+
+
 def test_native_archive_retains_voids_components_and_membership(tmp_path):
     labels = np.ones((12, 12), dtype=np.int32)
     labels[3:5, 3:5] = labels[8:10, 8:10] = 2

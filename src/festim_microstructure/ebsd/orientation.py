@@ -105,21 +105,6 @@ def rotate_sample_frame(q, rot):
     return to_fundamental_zone(qmul(np.asarray(rot, dtype=float), q))
 
 
-def rodrigues_to_quat(r):
-    """Rodrigues vectors (n, 3) -> unit quaternions (n, 4), q0 > 0."""
-    r = np.asarray(r, dtype=float).reshape(-1, 3)
-    q = np.column_stack((np.ones(len(r)), r))
-    return q / np.linalg.norm(q, axis=1)[:, None]
-
-
-def quat_to_rodrigues(q):
-    """Rodrigues vector = (q1, q2, q3) / q0. Requires q already in the FZ."""
-    q0 = q[..., :1]
-    if np.any(np.abs(q0) < 1e-8):
-        raise ValueError("scalar part near zero; reduce to the fundamental zone first")
-    return q[..., 1:] / q0
-
-
 def cubic_disorientation_angle(m):
     """Disorientation angle (degrees) of a cubic misorientation quaternion.
 

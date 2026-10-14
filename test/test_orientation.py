@@ -6,12 +6,10 @@ from festim_microstructure.ebsd import orientation as ori
 
 
 def test_bunge_0_30_0_is_a_rotation_about_x():
-    """The quaternion and Rodrigues vector use the half-angle about x."""
+    """The quaternion uses the half-angle about x."""
     q = ori.euler_bunge_to_quat(np.array([0.0]), np.array([30.0]), np.array([0.0]))
     half_angle = np.radians(15.0)
     assert np.allclose(q[0], [np.cos(half_angle), np.sin(half_angle), 0, 0])
-    r = ori.quat_to_rodrigues(ori.to_fundamental_zone(q))
-    assert np.allclose(r[0], [np.tan(half_angle), 0, 0])
 
 
 def test_bunge_rotation_has_expected_ipf_z_direction():

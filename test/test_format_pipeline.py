@@ -45,6 +45,7 @@ def test_ctf_conversion_provenance_and_readback(tmp_path):
     assert result.rms_deg < 1e-5
     np.testing.assert_array_equal(read_ebsd(result.archive).labels, np.ones((3, 4)))
     saved = read_provenance(result.provenance)
+    assert saved["version"] == 1
     assert saved["flip_y"] is True
     assert saved["ncells"] == 1
     settings = settings_from_provenance(result.provenance)
@@ -168,11 +169,13 @@ def test_laue_m3_is_rejected(tmp_path):
         convert(ctf, tmp_path / "map.npz", min_pixels=1, log=None)
 
 
-def test_active_option_is_gone(tmp_path):
-    """The removed option is refused, including from an old provenance file."""
-    with pytest.raises(TypeError):
-        Settings(ctf="x.ctf", active=True)
-    old = tmp_path / "old-provenance.json"
-    old.write_text(json.dumps({"ctf": "x.ctf", "active": True}))
-    with pytest.raises(ValueError, match="active=True"):
-        settings_from_provenance(old)
+@pytest.mark.parametrize("version", [None, 2])
+def test_provenance_requires_supported_version(tmp_path, version):
+    """Unversioned or unsupported metadata must be regenerated."""
+    record = {"ctf": "x.ctf"}
+    if version is not None:
+        record["version"] = version
+    path = tmp_path / "provenance.json"
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="unsupported EBSD provenance version"):
+        settings_from_provenance(path)

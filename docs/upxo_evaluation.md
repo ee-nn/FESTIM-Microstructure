@@ -276,6 +276,8 @@ Taubin's small void-boundary movement fails the partition gate.
 The following version list describes the historical 1.2.0 run; the checkout
 command selects the current 1.3.1 pin. The combined environment file is the
 preferred installation for reproducing current mesh and solver validation.
+Current evaluation inputs and expected results store native `grain_quats`
+arrays. Run preparation and meshing before verification to regenerate them.
 
 UPXO was installed in `/tmp/upxo-eval-env`, separate from the existing Python
 3.12 FESTIM environment. Relevant versions were Python 3.13.15, UPXO 1.2.0,

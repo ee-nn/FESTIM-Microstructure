@@ -426,6 +426,16 @@ Mesh diagnostic images are `<stem>-check-area.png` (grain-area changes),
 Optional images show quality rejection, grains and cubic IPF-Z, orientation
 error, mesh overlays, and the actual FESTIM boundary network.
 
+`EbsdMicrostructure.grain_quats` retains the archive's unit quaternions in
+Bunge convention. `micro.edges` exposes boundary arrays through named fields:
+`grain_pairs` (integer IDs, with zero for the exterior), `interior_mask`,
+`theta`, `length`, `ymin`, and `ymax`. Rows follow boundary-tag order, starting
+at tag 1; lengths and extents are in metres.
+
+Import provenance uses format version 1. Regenerate unversioned imports before
+reading their provenance; `force=False` automatically rebuilds an import whose
+saved provenance format is unsupported.
+
 For separate import/inspection, use
 `fm.ebsd.convert.convert(ctf, "grains.npz", ...)` and
 `fm.ebsd.measure_against_ctf(ctf, "grains.npz")`. Low-level

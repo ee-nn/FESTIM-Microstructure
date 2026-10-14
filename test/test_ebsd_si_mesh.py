@@ -22,8 +22,8 @@ def test_pipeline_exports_si_mesh_and_preserves_enclosed_grain(
     labels = np.ones((12, 16), dtype=np.int32)
     labels[4:8, 6:10] = 2
     orientations = np.zeros((*labels.shape, 3))
-    orientations[labels == 1] = [0, 30, 0]
-    orientations[labels == 2] = [0, 0, 20]
+    orientations[labels == 1] = [37, 52, 131]
+    orientations[labels == 2] = [21, 43, 73]
     ctf = ctf_writer(tmp_path / "map.ctf", orientations, spacing=(0.5, 0.75))
     options = ebsd.EbsdOptions(
         ctf=str(ctf),
@@ -41,7 +41,9 @@ def test_pipeline_exports_si_mesh_and_preserves_enclosed_grain(
     np.testing.assert_allclose(
         np.abs(read_ebsd(f"{base}-ebsd.npz").grain_quats),
         np.abs(
-            euler_bunge_to_quat(np.array([0, 0]), np.array([30, 0]), np.array([0, 20]))
+            euler_bunge_to_quat(
+                np.array([37, 21]), np.array([52, 43]), np.array([131, 73])
+            )
         ),
         atol=1e-6,
     )
@@ -52,7 +54,18 @@ def test_pipeline_exports_si_mesh_and_preserves_enclosed_grain(
     assert micro.triple_junctions == 0
     assert micro.surface_edges == 1
     assert micro.interior_mask.sum() == 1
-    np.testing.assert_allclose(sorted(micro.edges["length"]), [10e-6, 34e-6])
+    np.testing.assert_allclose(sorted(micro.edges.length), [10e-6, 34e-6])
+    np.testing.assert_array_equal(
+        micro.grain_quats, read_ebsd(f"{base}-ebsd.npz").grain_quats
+    )
+    assert micro.edges.grain_pairs.dtype.kind in "iu"
+    assert micro.edges.interior_mask.dtype.kind == "b"
+    np.testing.assert_array_equal(
+        micro.edges.grain_pairs[micro.interior_mask], [[1, 2]]
+    )
+    np.testing.assert_array_equal(
+        micro.edges.grain_pairs[~micro.interior_mask], [[1, 0]]
+    )
     micro.check_orientations()
     assert json.loads(Path(f"{base}-validation.json").read_text())["accepted"]
     original = base.with_suffix(".msh4").read_bytes()

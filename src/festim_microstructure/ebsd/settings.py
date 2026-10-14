@@ -16,12 +16,6 @@ __all__ = ["CUBIC_LAUE", "Settings", "settings_from_provenance"]
 def settings_from_provenance(path):
     """Rebuild the `Settings` of a conversion from its provenance json."""
     rec = read_provenance(path)
-    if rec.get("active"):
-        raise ValueError(
-            f"{path} records active=True, an option that wrote inverse rotations "
-            "under a 'rodrigues:passive' label and has been removed; re-run the "
-            "conversion"
-        )
     known = {f.name for f in dataclass_fields(Settings)}
     return Settings(**{k: v for k, v in rec.items() if k in known})
 

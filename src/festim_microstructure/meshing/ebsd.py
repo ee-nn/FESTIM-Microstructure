@@ -32,9 +32,9 @@ from festim_microstructure.meshing.upxo import UpxoMeshOptions, mesh_ebsd
 from festim_microstructure.plotting import draw_raster, scale_bar_ax, use_agg
 
 __all__ = [
+    "BoundaryEdges",
     "EbsdMicrostructure",
     "EbsdOptions",
-    "EdgeTable",
     "mesh_diagnostics",
     "read_extent",
     "run_ebsd_pipeline",
@@ -141,7 +141,7 @@ def run_ebsd_pipeline(options, workdir: str | Path = "results", force=True):
     if mesh.comm.rank == 0:
         report = dict(
             n_grains=micro.n_grains,
-            n_edges=micro.edges.n,
+            n_edges=len(micro.edges),
             interior_edges=int(micro.interior_mask.sum()),
             surface_edges=micro.surface_edges,
             triple_junctions=micro.triple_junctions,
@@ -199,25 +199,33 @@ def _allreduce(comm, arr, op):
     return out
 
 
-class EdgeTable:
-    """Per-edge scalars in id order: ``values[k]`` belongs to edge ``k + 1``."""
+@dataclass
+class BoundaryEdges:
+    """Boundary arrays in tag order; row ``k`` belongs to boundary ``k + 1``.
 
-    def __init__(self, values):
-        """Store per-edge columns and their common row count."""
-        self.values = values
-        self.n = len(next(iter(values.values())))
+    ``grain_pairs`` contains integer grain IDs, with zero as the second ID
+    for a surface boundary. ``interior_mask`` explicitly selects boundaries
+    shared by two grains. Lengths and y-extents are in metres.
+    """
 
-    def __getitem__(self, key):
-        """Return the per-edge column named by ``key``."""
-        return self.values[key]
+    grain_pairs: np.ndarray
+    interior_mask: np.ndarray
+    theta: np.ndarray
+    length: np.ndarray
+    ymin: np.ndarray
+    ymax: np.ndarray
+
+    def __len__(self):
+        """Return the number of tagged boundaries."""
+        return len(self.grain_pairs)
 
 
 def _edge_grain_pairs(comm, facet_edge, cell_grain, f2c, n_edge):
-    """Which grains sit either side of each ``edge#`` set.
+    """Which grains sit either side of each tagged boundary.
 
     Gathered across ranks: an edge can be cut by the partition, so no single
-    rank sees both of its grains. Returns ``(pair, sides, domtype)`` in edge-id
-    order, where ``domtype < 0`` marks an interior boundary.
+    rank sees both of its grains. Returns integer grain pairs and a boolean
+    interior mask in boundary-tag order.
     """
     local = {}
     for f in np.flatnonzero(facet_edge):
@@ -233,14 +241,14 @@ def _edge_grain_pairs(comm, facet_edge, cell_grain, f2c, n_edge):
         bad = _ids((sides < 1) | (sides > 2))
         raise RuntimeError(
             f"edges {bad[:10]} touch {sides[bad[:10] - 1]} grains; every "
-            "edge# set must lie between two face# sets or between one "
-            "face# set and the domain. Check the grain and boundary tags "
+            "boundary tag must lie between two grains or between one "
+            "grain and the domain. Check the grain and boundary tags "
             "in the mesh."
         )
     pair = np.array(
         [sorted(g) + [0] * (2 - len(g)) for g in grains[1:]], dtype=np.int32
     )
-    return pair, sides, np.where(sides == 2, -1.0, 1.0)
+    return pair, sides == 2
 
 
 def _edge_extents(comm, mesh, facet_edge, fdim, fmap, n_edge):
@@ -264,26 +272,19 @@ def _edge_extents(comm, mesh, facet_edge, fdim, fmap, n_edge):
     )
 
 
-def _edge_theta(base, n_grain, n_edge, pair, sides):
-    """Disorientations from the native archive associated with this mesh."""
+def _edge_orientations(base, n_grain, pair, interior_mask):
+    """Native grain quaternions and boundary disorientations for this mesh."""
     data = read_ebsd(f"{base}-ebsd.npz")
     if data.ncells != n_grain:
         raise RuntimeError(
             f"native EBSD archive has {data.ncells} grains "
-            f"but mesh has {n_grain} face sets"
+            f"but mesh grain tags reach {n_grain}"
         )
-    from festim_microstructure.ebsd.orientation import (
-        quat_to_rodrigues,
-        to_fundamental_zone,
-    )
-
     q = data.grain_quats
-    ori = quat_to_rodrigues(to_fundamental_zone(q))
-    theta = np.zeros(n_edge)
-    inner = sides == 2
-    a, b = pair[inner, 0] - 1, pair[inner, 1] - 1
-    theta[inner] = cubic_disorientation_angle(qmul(qconj(q[a]), q[b]))
-    return ori, theta
+    theta = np.zeros(len(pair))
+    a, b = pair[interior_mask, 0] - 1, pair[interior_mask, 1] - 1
+    theta[interior_mask] = cubic_disorientation_angle(qmul(qconj(q[a]), q[b]))
+    return q, theta
 
 
 def _count_triple_junctions(comm, mesh, facet_edge, v2f, vmap, extent):
@@ -311,8 +312,9 @@ def _count_triple_junctions(comm, mesh, facet_edge, v2f, vmap, extent):
 class EbsdMicrostructure:
     """Rebuild GB topology and disorientations from the tagged UPXO EBSD mesh.
 
-    Mesh ``edge#`` sets provide boundaries and ``face#`` sets retain raster cell
-    ids. Junction counts are exact in serial and lower bounds in parallel.
+    Facet tags identify boundaries and cell tags retain grain IDs. Grain
+    orientations are the native archive's unit quaternions in Bunge convention.
+    Junction counts are exact in serial and lower bounds in parallel.
     Implements :class:`~festim_microstructure.microstructure.BoundaryNetwork`.
 
     Build it with :meth:`from_mesh`; the constructor only stores the arrays that
@@ -323,9 +325,9 @@ class EbsdMicrostructure:
     base: Path
     extent: tuple
     n_grains: int
-    ori: np.ndarray  #: (n_grain, 3) Rodrigues, one per raster cell
+    grain_quats: np.ndarray  #: (n_grains, 4), indexed by grain ID - 1
     facet_edge: np.ndarray  #: edge id per local facet, 0 off the network
-    edges: EdgeTable
+    edges: BoundaryEdges
     triple_junctions: int
     surface_edges: int
     theta_min: float = 10.0
@@ -359,47 +361,44 @@ class EbsdMicrostructure:
         n_edge = comm.allreduce(int(facet_edge.max(initial=0)), op=MPI.MAX)
         n_grain = comm.allreduce(int(cell_grain.max(initial=0)), op=MPI.MAX)
         if n_edge == 0 or n_grain == 0:
-            raise RuntimeError("the mesh carries no edge# / face# element sets")
+            raise RuntimeError("the mesh carries no boundary or grain tags")
 
-        pair, sides, domtype = _edge_grain_pairs(
+        pair, interior_mask = _edge_grain_pairs(
             comm, facet_edge, cell_grain, f2c, n_edge
         )
         length, ymin, ymax = _edge_extents(comm, mesh, facet_edge, fdim, fmap, n_edge)
-        ori, theta = _edge_theta(base, n_grain, n_edge, pair, sides)
+        grain_quats, theta = _edge_orientations(base, n_grain, pair, interior_mask)
 
         return cls(
             base=Path(base),
             extent=extent,
             n_grains=n_grain,
-            ori=ori,
+            grain_quats=grain_quats,
             facet_edge=facet_edge,
-            edges=EdgeTable(
-                {
-                    "domtype": domtype,
-                    "theta": theta,
-                    "length": length,
-                    "ymin": ymin,
-                    "ymax": ymax,
-                    "grain_a": pair[:, 0].astype(float),
-                    "grain_b": pair[:, 1].astype(float),
-                }
+            edges=BoundaryEdges(
+                grain_pairs=pair,
+                interior_mask=interior_mask,
+                theta=theta,
+                length=length,
+                ymin=ymin,
+                ymax=ymax,
             ),
             triple_junctions=_count_triple_junctions(
                 comm, mesh, facet_edge, v2f, vmap, extent
             ),
-            surface_edges=int((sides == 1).sum()),
+            surface_edges=int((~interior_mask).sum()),
             theta_min=theta_min,
         )
 
     @property
     def interior_mask(self):
         """Mark edges shared by two grains rather than the exterior."""
-        return self.edges["domtype"] < 0
+        return self.edges.interior_mask
 
     @property
     def network_mask(self):
         """Mark interior edges above the disorientation threshold."""
-        return self.interior_mask & (self.edges["theta"] > self.theta_min)
+        return self.interior_mask & (self.theta > self.theta_min)
 
     @property
     def network_ids(self):
@@ -413,12 +412,12 @@ class EbsdMicrostructure:
     @property
     def theta(self):
         """Disorientation of every edge, degrees, in id order."""
-        return self.edges["theta"]
+        return self.edges.theta
 
     @property
     def network_measure(self):
         """Total length of the boundaries in the network."""
-        return float(self.edges["length"][self.network_mask].sum())
+        return float(self.edges.length[self.network_mask].sum())
 
     #: The 2D spelling of :attr:`network_measure`.
     network_length = network_measure
@@ -429,20 +428,23 @@ class EbsdMicrostructure:
         Below this depth no boundary is fed directly, so whatever the network
         holds there has crossed at least one triple junction.
         """
-        touching = self.network_mask & (self.edges["ymax"] > y_top - tol)
+        touching = self.network_mask & (self.edges.ymax > y_top - tol)
         if not touching.any():
             return y_top
-        return float(self.edges["ymin"][touching].min())
+        return float(self.edges.ymin[touching].min())
 
     def check_orientations(self):
-        """Check finite orientations and cubic boundary-angle bounds.
+        """Check unit grain quaternions and cubic boundary-angle bounds.
 
         Identity orientations and zero-angle boundaries can be physically valid;
         source readback checks and grain IDs establish their provenance.
         """
-        theta = self.edges["theta"][self.interior_mask]
+        theta = self.theta[self.interior_mask]
+        q = np.asarray(self.grain_quats)
         if (
-            not np.isfinite(self.ori).all()
+            q.shape != (self.n_grains, 4)
+            or not np.isfinite(q).all()
+            or not np.allclose(np.linalg.norm(q, axis=1), 1.0)
             or not np.isfinite(theta).all()
             or np.any(theta < 0)
             or np.any(theta > 63)
@@ -455,13 +457,13 @@ class EbsdMicrostructure:
     def report(self):
         """Summarize the EBSD mesh geometry and selected boundary network."""
         kept, total = int(self.network_mask.sum()), int(self.interior_mask.sum())
-        theta = self.edges["theta"][self.network_mask]
+        theta = self.theta[self.network_mask]
         lx, ly = self.extent
         lines = [
             f"microstructure: {self.n_grains} grains from {self.base.name} "
             "(2D, raster mesh)",
             f"  domain                          : {lx:g} x {ly:g}",
-            f"  edges                           : {self.edges.n}",
+            f"  edges                           : {len(self.edges)}",
             f"  on the specimen surface         : {self.surface_edges}",
             f"  grain boundaries (interior)     : {total}",
             f"  kept above {self.theta_min:g} deg    : {kept}",
@@ -501,7 +503,7 @@ def write_network_png(base, mesh, micro, archive_path, unit=1e-6, unit_name="um"
     nodes = dolfinx.mesh.entities_to_geometry(mesh, fdim, owned, False)
     segs = mesh.geometry.x[nodes][:, :, :2] / unit  # back to source units
     e = micro.facet_edge[owned] - 1
-    surface = micro.edges["domtype"][e] > 0
+    surface = ~micro.interior_mask[e]
     kept = micro.network_mask[e]
     dropped = ~surface & ~kept
 
@@ -513,7 +515,7 @@ def write_network_png(base, mesh, micro, archive_path, unit=1e-6, unit_name="um"
         LineCollection(segs[dropped], colors="white", lw=1.3, linestyles="--")
     )
     net = LineCollection(segs[kept], cmap="inferno", lw=1.8)
-    net.set_array(micro.edges["theta"][e[kept]])
+    net.set_array(micro.theta[e[kept]])
     net.set_clim(micro.theta_min, 62.8)
     ax.add_collection(net)
     fig.colorbar(net, ax=ax, fraction=0.046).set_label("theta (deg)")

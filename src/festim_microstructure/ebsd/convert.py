@@ -33,7 +33,7 @@ from festim_microstructure.ebsd.settings import (
 )
 from festim_microstructure.formats.ctf import CtfMap
 from festim_microstructure.formats.ebsd import EbsdData, read_ebsd, write_ebsd
-from festim_microstructure.formats.provenance import write_provenance
+from festim_microstructure.formats.provenance import read_provenance, write_provenance
 from festim_microstructure.meshing.upxo import UPXO_REVISION, import_ebsd
 
 __all__ = [
@@ -330,7 +330,7 @@ class CtfConversion:
         provenance = archive.with_name(archive.stem + "-provenance.json")
         if not force and archive.is_file() and provenance.is_file():
             try:
-                saved = json.loads(provenance.read_text())
+                saved = read_provenance(provenance)
             except (ValueError, OSError):
                 saved = {}
             if (

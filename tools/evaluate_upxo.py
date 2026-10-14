@@ -77,10 +77,7 @@ def synthetic_cases():
 
 def prepare(output):
     from festim_microstructure.ebsd.convert import CtfConversion
-    from festim_microstructure.ebsd.orientation import (
-        euler_bunge_to_quat,
-        quat_to_rodrigues,
-    )
+    from festim_microstructure.ebsd.orientation import euler_bunge_to_quat
     from festim_microstructure.ebsd.settings import Settings
 
     output.mkdir(parents=True, exist_ok=True)
@@ -88,9 +85,14 @@ def prepare(output):
     inputs.mkdir(exist_ok=True)
     for name, labels in synthetic_cases().items():
         gids = np.arange(1, int(labels.max()) + 1)
-        ori = quat_to_rodrigues(euler_bunge_to_quat(17 * gids, 23 * gids, 11 * gids))
+        grain_quats = euler_bunge_to_quat(17 * gids, 23 * gids, 11 * gids)
         # Deliberately anisotropic, to expose implicit square-pixel assumptions.
-        np.savez(inputs / f"{name}.npz", labels=labels, vox=[1.6, 0.8], ori=ori)
+        np.savez(
+            inputs / f"{name}.npz",
+            labels=labels,
+            vox=[1.6, 0.8],
+            grain_quats=grain_quats,
+        )
     ctf = ROOT / "examples/data/D7 PBF SS316L.ctf"
     options = Settings(
         ctf=str(ctf),
@@ -106,7 +108,7 @@ def prepare(output):
         inputs / "ctf_map.npz",
         labels=conversion.cellids,
         vox=conversion.vox,
-        ori=quat_to_rodrigues(conversion.qcell),
+        grain_quats=conversion.data.grain_quats,
     )
     save_json(
         output / "input_provenance.json",
@@ -324,7 +326,7 @@ def mesh_metrics(mesher, cells):
     }
 
 
-def adapted_export(mesher, base, vox, ori, labels):
+def adapted_export(mesher, base, vox, grain_quats, labels):
     """Evaluation-only export of the unchanged UPXO triangles with FESTIM tags."""
     import gmsh
     import meshio
@@ -373,15 +375,13 @@ def adapted_export(mesher, base, vox, ori, labels):
         Path(f"{base}-metadata.json"),
         {"extent_m": [nx * vox[0] * 1e-6, ny * vox[1] * 1e-6], "unit": 1e-6},
     )
-    q = np.column_stack((np.ones(len(ori)), ori))
-    q /= np.linalg.norm(q, axis=1, keepdims=True)
     pixel_q = np.zeros((*labels.shape, 4))
     pixel_q[..., 0] = 1
     np.savez_compressed(
         f"{base}-ebsd.npz",
         version=np.array(1),
         labels=labels,
-        grain_quats=q,
+        grain_quats=grain_quats,
         vox=vox,
         pixel_quats=pixel_q,
         indexed=labels > 0,
@@ -392,7 +392,7 @@ def adapted_export(mesher, base, vox, ori, labels):
         str(base) + "-expected.npz",
         pairs=pairs,
         grain_ids=np.unique(owners),
-        ori=ori,
+        grain_quats=grain_quats,
         points=points,
         triangles=triangles,
         owners=owners,
@@ -410,7 +410,7 @@ def worker(input_path, method, directory):
 
     directory.mkdir(parents=True, exist_ok=True)
     data = np.load(input_path)
-    labels, vox, ori = data["labels"], data["vox"], data["ori"]
+    labels, vox, grain_quats = data["labels"], data["vox"], data["grain_quats"]
     result = {"case": input_path.stem, "method": method}
     started = time.monotonic()
     try:
@@ -465,7 +465,7 @@ def worker(input_path, method, directory):
         )
         result["mesh"] = mesh_metrics(m, cells)
         # Keep UPXO's geometry and triangles untouched. Export scaling uses both axes.
-        adapted_export(m, directory / "adapted", vox, ori, labels)
+        adapted_export(m, directory / "adapted", vox, grain_quats, labels)
         result["accepted_before_import"] = (
             result["geometry"]["accepted"] and result["mesh"]["accepted"]
         )
@@ -661,23 +661,22 @@ def verify(output):
                     np.unique(facets.values), np.arange(1, len(expected["pairs"]) + 1)
                 )
                 np.testing.assert_array_equal(
-                    np.column_stack([micro.edges["grain_a"], micro.edges["grain_b"]]),
+                    micro.edges.grain_pairs,
                     expected["pairs"],
                 )
                 np.testing.assert_allclose(
                     mesh.geometry.x.max(axis=0)[:2], extent, rtol=1e-12, atol=1e-15
                 )
                 from festim_microstructure.ebsd.orientation import (
-                    rodrigues_to_quat,
                     cubic_disorientation_angle,
-                    qmul,
                     qconj,
+                    qmul,
                 )
 
                 error = cubic_disorientation_angle(
                     qmul(
-                        qconj(rodrigues_to_quat(expected["ori"])),
-                        rodrigues_to_quat(micro.ori),
+                        qconj(expected["grain_quats"]),
+                        micro.grain_quats,
                     )
                 )
                 assert error.max() < 1e-4
@@ -704,14 +703,14 @@ def verify(output):
                 lengths = np.linalg.norm(xyz[line[:, 1]] - xyz[line[:, 0]], axis=1)
                 edge_lengths = np.bincount(tags, weights=lengths)[1:]
                 np.testing.assert_allclose(
-                    micro.edges["length"], edge_lengths, rtol=1e-10, atol=1e-15
+                    micro.edges.length, edge_lengths, rtol=1e-10, atol=1e-15
                 )
                 if result["case"] != "interior_void":
                     micro.check_orientations()
                 result["adapted_import"] = {
                     "accepted": True,
                     "grains": micro.n_grains,
-                    "boundary_arcs": micro.edges.n,
+                    "boundary_arcs": len(micro.edges),
                     "triple_junctions": micro.triple_junctions,
                     "network_length_m": micro.network_measure,
                     "facet_tags": True,

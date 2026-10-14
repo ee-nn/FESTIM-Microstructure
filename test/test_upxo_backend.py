@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from festim_microstructure.ebsd.orientation import rodrigues_to_quat
+from festim_microstructure.ebsd.orientation import euler_bunge_to_quat
 from festim_microstructure.formats.ebsd import EbsdData, read_ebsd, write_ebsd
 from festim_microstructure.meshing import upxo
 
@@ -91,8 +91,10 @@ def test_real_worker_retains_island_and_ownership(tmp_path, smoothing):
     labels = np.ones((24, 24), dtype=np.int32)
     labels[8:16, 8:16] = 2
     source = tmp_path / "map.npz"
-    ori = np.array([[0.1, 0.2, 0.3], [0.4, 0.1, 0.2]])
-    write_ebsd(source, EbsdData(labels, rodrigues_to_quat(ori), (1.6, 0.8)))
+    grain_quats = euler_bunge_to_quat(
+        np.array([37, 21]), np.array([52, 43]), np.array([131, 73])
+    )
+    write_ebsd(source, EbsdData(labels, grain_quats, (1.6, 0.8)))
     base = upxo.mesh_ebsd(
         source, upxo.UpxoMeshOptions(smoothing=smoothing), workdir=tmp_path
     )
@@ -108,9 +110,7 @@ def test_real_worker_retains_island_and_ownership(tmp_path, smoothing):
     np.testing.assert_allclose(
         np.max(list(xyz.values()), axis=0)[:2], [38.4e-6, 19.2e-6]
     )
-    np.testing.assert_allclose(
-        read_ebsd(f"{base}-ebsd.npz").grain_quats, rodrigues_to_quat(ori)
-    )
+    np.testing.assert_allclose(read_ebsd(f"{base}-ebsd.npz").grain_quats, grain_quats)
 
 
 @pytest.mark.parametrize(
