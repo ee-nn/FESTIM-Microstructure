@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import numpy as np
+import meshio
 
 __all__ = ["read_mesh", "read_msh4"]
 
@@ -36,39 +36,27 @@ def read_mesh(base, gdim, comm=None, rank=0):
 
 
 def read_msh4(path):
-    """Nodes and tagged 1D / 2D elements of a Gmsh 4.1 ascii mesh.
+    """Nodes and physically tagged lines / triangles of a Gmsh mesh.
 
     Returns ``(xyz, seg, tri)`` where ``xyz`` maps node tag -> coordinates,
     ``seg`` is a list of (edge id, [n1, n2]) and ``tri`` a list of
-    (face id, [n1, n2, n3]); IDs are the Gmsh entity tags written by the
-    exporter. The UPXO adapter sets them to boundary and grain IDs.
+    (grain id, [n1, n2, n3]). Node indices are local to this read. Physical
+    groups supply boundary and grain IDs, as they do in the DOLFINx reader;
+    geometrical entity tags do not determine ownership.
     """
-    with open(path) as fh:
-        lines = fh.read().split("\n")
-    i = lines.index("$Nodes")
-    nblocks = int(lines[i + 1].split()[0])
-    p = i + 2
-    xyz = {}
-    for _ in range(nblocks):
-        _dim, _tag, _par, n = map(int, lines[p].split())
-        p += 1
-        tags = [int(lines[p + k]) for k in range(n)]
-        p += n
-        for k in range(n):
-            xyz[tags[k]] = np.array(lines[p + k].split(), dtype=float)
-        p += n
-    i = lines.index("$Elements")
-    nblocks = int(lines[i + 1].split()[0])
-    p = i + 2
+    mesh = meshio.read(path, file_format="gmsh")
+    physical = mesh.cell_data.get("gmsh:physical", [])
     seg, tri = [], []
-    for _ in range(nblocks):
-        dim, tag, _typ, n = map(int, lines[p].split())
-        p += 1
-        for k in range(n):
-            nodes = [int(v) for v in lines[p + k].split()[1:]]
-            if dim == 1:
-                seg.append((tag, nodes))
-            elif dim == 2:
-                tri.append((tag, nodes))
-        p += n
-    return xyz, seg, tri
+    for i, block in enumerate(mesh.cells):
+        if block.dim in (1, 2) and block.type not in ("line", "triangle"):
+            raise ValueError(f"{path}: mesh diagnostics require linear lines/triangles")
+        if block.type not in ("line", "triangle"):
+            continue
+        if i >= len(physical) or (physical[i] <= 0).any():
+            raise ValueError(f"{path}: every {block.type} needs a positive physical ID")
+        target = seg if block.type == "line" else tri
+        target.extend(
+            (int(tag), nodes.tolist())
+            for tag, nodes in zip(physical[i], block.data, strict=True)
+        )
+    return dict(enumerate(mesh.points)), seg, tri

@@ -21,6 +21,7 @@ from festim_microstructure.ebsd.orientation import (
 )
 from festim_microstructure.ebsd.settings import Settings, settings_from_provenance
 from festim_microstructure.formats.ebsd import EbsdData, read_ebsd, write_ebsd
+from festim_microstructure.formats.msh4 import read_msh4
 from festim_microstructure.formats.provenance import read_provenance
 from festim_microstructure.meshing.diagnostics import area_change, overlay
 from festim_microstructure.meshing.upxo import resolve_python
@@ -70,14 +71,20 @@ def test_mesh_area_and_overlay_use_shared_readers(tmp_path):
     msh = tmp_path / "map.msh4"
     msh.write_text(
         "$MeshFormat\n4.1 0 8\n$EndMeshFormat\n"
-        "$Nodes\n1 4 1 4\n2 1 0 4\n1\n2\n3\n4\n"
+        '$PhysicalNames\n2\n1 5 "edge5"\n2 1 "face1"\n$EndPhysicalNames\n'
+        "$Entities\n0 1 1 0\n77 0 0 0 1 1 0 1 5 0\n"
+        "11 0 0 0 1 1 0 1 1 1 77\n$EndEntities\n"
+        "$Nodes\n1 4 1 4\n2 11 0 4\n1\n2\n3\n4\n"
         "0 0 0\n1 0 0\n1 1 0\n0 1 0\n$EndNodes\n"
-        "$Elements\n2 6 1 6\n1 1 1 4\n"
+        "$Elements\n2 6 1 6\n1 77 1 4\n"
         "1 1 2\n2 2 3\n3 3 4\n4 4 1\n"
-        "2 1 2 2\n5 1 2 3\n6 1 3 4\n$EndElements\n"
+        "2 11 2 2\n5 1 2 3\n6 1 3 4\n$EndElements\n"
     )
     report = area_change(archive, msh)
-    assert report.identity
+    assert report.comparable
+    _, segments, triangles = read_msh4(msh)
+    assert {tag for tag, _ in segments} == {5}
+    assert {tag for tag, _ in triangles} == {1}
     assert report.mesh_total == pytest.approx(1.0)
     np.testing.assert_allclose(report.delta, 0.0)
     out = tmp_path / "overlay.png"

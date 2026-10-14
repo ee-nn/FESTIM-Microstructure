@@ -52,12 +52,10 @@ class ChangeStats:
 
 @dataclass
 class AreaChange:
-    """Raster grain areas against their meshed counterparts.
+    """Raster and mesh areas paired by their declared grain IDs.
 
-    ``delta``/``area``/``ecd`` stay ``None`` when the face-to-cell mapping is
-    not the identity and ``allow_mismatch`` was not given: every per-grain
-    quantity downstream is indexed by face id, so the areas would be attached
-    to the wrong grains. :func:`measure` turns that into an exception.
+    ``displaced`` is a triangle-centroid estimate of raster label disagreement,
+    independent of the ownership checks performed during mesh export.
     """
 
     ncell: int
@@ -65,11 +63,6 @@ class AreaChange:
     vox: tuple
     cells: Any
     npx: Any
-    identity: bool
-    allow_mismatch: bool
-    mapping: Any
-    face_area: Any
-    face_matched: Any
     displaced: float
     a_raster: Any
     a_mesh: Any
@@ -88,13 +81,12 @@ class AreaChange:
 
 @dataclass
 class AreaReportOptions:
-    """Where :func:`measure` writes, and how tolerant it is."""
+    """Where :func:`measure` writes, and the source-to-mesh length conversion."""
 
     csv: str | None = None
     png: str | None = None
     unit: str = "um"
     dpi: int = 150
-    allow_mismatch: bool = False
     mesh_unit: float = 1.0
 
 
@@ -122,33 +114,19 @@ def triangle_areas(xyz, tri):
     return tags, area, p.mean(axis=1)
 
 
-def face_to_cell(cells, vox, origin, tags, area, centroid, ncell):
-    """Map mesh faces to raster cells and measure unsigned displaced area."""
+def centroid_displacement(cells, vox, tags, area, centroid):
+    """Estimate label displacement by sampling the raster at triangle centroids.
+
+    This is mesh-resolution dependent and does not establish grain identity.
+    Centroids outside the raster count as disagreement, without edge clipping.
+    """
     ny, nx = cells.shape
-    ix = np.clip(((centroid[:, 0] - origin[0]) / vox[0]).astype(int), 0, nx - 1)
-    iy = np.clip(((centroid[:, 1] - origin[1]) / vox[1]).astype(int), 0, ny - 1)
-    under = cells[iy, ix].astype(np.int64)  # raster cell each triangle sits on
-    ntag = int(tags.max())
-
-    key = tags * (ncell + 1) + under
-    uk, inv = np.unique(key, return_inverse=True)
-    w = np.bincount(inv, weights=area)
-    utag, ucell = uk // (ncell + 1), uk % (ncell + 1)
-
-    # Sort each face's candidate cells by accumulated area.
-    order = np.lexsort((w, utag))
-    ut, uc, uw = utag[order], ucell[order], w[order]
-    last = np.flatnonzero(np.r_[ut[1:] != ut[:-1], True])
-
-    mapping = np.zeros(ntag + 1, dtype=np.int64)
-    best = np.zeros(ntag + 1)
-    mapping[ut[last]] = uc[last]
-    best[ut[last]] = uw[last]
-
-    total = np.bincount(tags, weights=area, minlength=ntag + 1)
-    same = utag == ucell  # area lying over the cell of its own id
-    displaced = 1.0 - w[same].sum() / total.sum() if total.sum() else 0.0
-    return mapping, total, best, displaced
+    ix, iy = np.floor(centroid / np.asarray(vox)).astype(int).T
+    inside = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    under = np.zeros(len(tags), dtype=np.int64)
+    under[inside] = cells[iy[inside], ix[inside]]
+    total = area.sum()
+    return float(area[tags != under].sum() / total) if total else 0.0
 
 
 def summarise(delta, weights=None) -> ChangeStats:
@@ -174,13 +152,10 @@ def summarise(delta, weights=None) -> ChangeStats:
     )
 
 
-def area_change(
-    archive_path, msh4_path, allow_mismatch=False, mesh_unit=1.0
-) -> AreaChange:
-    """The whole diagnostic, as an :class:`AreaChange`."""
+def area_change(archive_path, msh4_path, mesh_unit=1.0) -> AreaChange:
+    """Compare areas by physical grain ID; reject missing or unexpected IDs."""
     data = read_ebsd(archive_path)
     cells, vox = data.labels, data.vox
-    origin = (0.0, 0.0)
     xyz, _seg, tri = read_msh4(msh4_path)
     xyz = {tag: np.asarray(point) / mesh_unit for tag, point in xyz.items()}
     if not tri:
@@ -191,19 +166,16 @@ def area_change(
     ncell = int(cells.max())
     a_ras, npx = raster_areas(cells, vox, ncell)
     tags, tarea, cent = triangle_areas(xyz, tri)
-    mapping, f_total, f_best, displaced = face_to_cell(
-        cells, vox, origin, tags, tarea, cent, ncell
-    )
-
-    ntag = int(tags.max())
     faces = np.unique(tags)
-    identity = bool(np.array_equal(mapping[faces], faces))
-
-    a_mesh = (
-        np.bincount(tags, weights=tarea, minlength=ncell + 1)[1 : ncell + 1]
-        if ntag <= ncell
-        else None
-    )
+    expected = set(range(1, ncell + 1))
+    actual = set(map(int, faces))
+    if actual != expected:
+        raise ValueError(
+            f"{msh4_path}: physical grain IDs differ from the archive; "
+            f"missing {sorted(expected - actual)}, "
+            f"unexpected {sorted(actual - expected)}"
+        )
+    a_mesh = np.bincount(tags, weights=tarea, minlength=ncell + 1)[1 : ncell + 1]
 
     res = AreaChange(
         ncell=ncell,
@@ -211,20 +183,12 @@ def area_change(
         vox=vox,
         cells=cells,
         npx=npx,
-        identity=bool(identity),
-        allow_mismatch=bool(allow_mismatch),
-        mapping=mapping,
-        face_area=f_total,
-        face_matched=f_best,
-        displaced=float(displaced),
+        displaced=centroid_displacement(cells, vox, tags, tarea, cent),
         a_raster=a_ras,
         a_mesh=a_mesh,
         mesh_total=float(tarea.sum()),
         raster_total=float(a_ras.sum()),
     )
-    if a_mesh is None or not (identity or allow_mismatch):
-        return res
-
     with np.errstate(invalid="ignore", divide="ignore"):
         delta = 100.0 * (a_mesh - a_ras) / np.where(a_ras > 0, a_ras, np.nan)
         # Equivalent circular diameter converts area change to a length scale.
@@ -243,42 +207,9 @@ def format_report(res: AreaChange):
         res: Comparison of the raster cells with the final mesh faces.
 
     Returns:
-        Report lines, including mapping warnings when faces do not match cells.
+        Report lines for grain areas and the separate displacement estimate.
     """
     lines = []
-    if res.nface != res.ncell:
-        lines.append(
-            f"WARNING: the raster has {res.ncell} cells but the mesh has "
-            f"{res.nface} faces. Grains were lost or split in the "
-            "reconstruction; the area comparison below is not one-to-one."
-        )
-    if not res.identity:
-        tag = "WARNING" if res.allow_mismatch else "ERROR"
-        m, tot, matched = res.mapping, res.face_area, res.face_matched
-        bad = [
-            (f, int(m[f]), matched[f] / tot[f] if tot[f] else np.nan)
-            for f in range(1, len(m))
-            if int(m[f]) not in (0, f) and tot[f] > 0
-        ]
-        lines.append(
-            f"{tag}: mesh face k is not raster cell k. Faces sitting mostly on "
-            "another cell (face -> cell, fraction of the face's area there): "
-            + ", ".join(f"{f} -> {k} ({100 * q:.0f} %)" for f, k, q in bad[:10])
-            + (" ..." if len(bad) > 10 else "")
-        )
-        lines.append(
-            f"  {len(bad)} of {res.nface} faces. Every per-grain quantity "
-            "downstream, theta included, is indexed by face id, so this has to "
-            "be resolved before the mesh is used. A face whose fraction is "
-            "barely over half is an ambiguous small grain rather than a "
-            "mis-tagged one; --allow-mismatch carries on with the identity "
-            "mapping and reports the areas anyway."
-        )
-        if not res.allow_mismatch:
-            return lines
-    if not res.comparable:
-        return lines
-
     a, e = res.area, res.ecd
     if a is None or e is None:
         raise ValueError("area and ECD statistics are required for the report")
@@ -299,8 +230,8 @@ def format_report(res: AreaChange):
     lines.append(
         f"  total meshed area {res.mesh_total:.6g} vs rastered "
         f"{res.raster_total:.6g} ({tot:+.3f} %); "
-        f"displaced area {100 * res.displaced:.2f} % "
-        "(meshed area lying over a different raster cell)"
+        f"centroid-sampled displaced area estimate {100 * res.displaced:.2f} % "
+        "(triangle area weighted by raster label disagreement at its centroid)"
     )
     return lines
 
@@ -393,24 +324,17 @@ def write_png(path, res: AreaChange, unit="um", dpi=150, log=print):
 
 
 def measure(archive, msh4, options: AreaReportOptions | None = None, log=print):
-    """Measure, report, and optionally write the table and the picture.
+    """Report areas by physical grain ID and a separate displacement estimate.
 
-    Returns the :class:`AreaChange`. Raises ValueError when a mesh face does not
-    sit on the raster cell of the same id, unless ``options.allow_mismatch``:
-    every per-grain quantity downstream is indexed by face id, so continuing
-    past that would attach the areas -- and the transport driver's theta -- to
-    the wrong grains.
+    Missing or unexpected grain IDs raise ValueError. Ownership preservation is
+    validated during export, without inferring identity from raster overlap.
     """
     opt = options or AreaReportOptions()
-    res = area_change(
-        archive, msh4, allow_mismatch=opt.allow_mismatch, mesh_unit=opt.mesh_unit
-    )
+    res = area_change(archive, msh4, mesh_unit=opt.mesh_unit)
     lines = format_report(res)
     if log:
         for line in lines:
             log("  " + line)
-    if not res.comparable:
-        raise ValueError("\n".join(lines))
     if opt.csv:
         write_csv(opt.csv, res, log=log)
     if opt.png:

@@ -414,12 +414,18 @@ route: Taubin can move void boundaries and fail coverage validation.
 `thin_grain_px=1.5` enables optional protection for thin grains; the default is
 `0` (disabled). The adapter always sets `close_staircase=False` so protection
 does not enable label-changing preprocessing. All preservation checks still apply.
+Before accepting a mesh, the adapter reads back the exported file and checks
+each triangle's physical grain ID and each boundary segment's physical ID against
+the UPXO mesh, allowing node and element reordering.
 
 Outputs include `<stem>.msh4`, `<stem>-ebsd.npz` (grain/pixel orientations,
 labels, masks and spacings), `<stem>-metadata.json` (SI extent), import provenance,
 `<stem>-validation.json`, and `<stem>-festim.json`. Quantitative diagnostics cover
 source orientation transcription, indexed/filled error populations, grain area
-and equivalent-diameter changes, displaced area, and grain-to-mesh identity.
+and equivalent-diameter changes, and a centroid-sampled displaced-area estimate.
+Areas are paired by physical grain ID. Raster overlap is a geometric diagnostic;
+it does not determine grain identity or reject an otherwise valid smoothed grain.
+The validation report records geometry, mesh, and export checks separately.
 Mesh diagnostic images are `<stem>-check-area.png` (grain-area changes),
 `<stem>-check-mesh.png` (mesh over source pixels), and
 `<stem>-check-network.png` (FESTIM boundary selection and disorientation).

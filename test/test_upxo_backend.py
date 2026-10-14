@@ -100,6 +100,9 @@ def test_real_worker_retains_island_and_ownership(tmp_path, smoothing):
     )
     report = json.loads(Path(f"{base}-validation.json").read_text())
     assert report["accepted"]
+    assert report["export"]["accepted"]
+    assert report["export"]["triangle_physical_ids_preserved"]
+    assert report["export"]["boundary_physical_ids_preserved"]
     assert report["geometry"]["actual_topology"] == {
         "1": {"parts": 1, "holes": 1},
         "2": {"parts": 1, "holes": 0},

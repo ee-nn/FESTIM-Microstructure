@@ -33,7 +33,7 @@ __all__ = [
 UPXO_VERSION = "1.3.1"
 DEFDAP_VERSION = "0.93.6"
 UPXO_REVISION = "a53885ef0a7a06f6b3fb195747363ae0a19bb127"
-_PROTOCOL = 3
+_PROTOCOL = 4
 
 
 @dataclass
@@ -563,8 +563,59 @@ def mesh_metrics(mesher, cells):
     }
 
 
+def export_metrics(path, points, triangles, owners, lines, edge_ids):
+    """Check the exported physical tags against UPXO's exact mesh ownership.
+
+    Match vertices by coordinates, then compare connectivity and physical IDs
+    per element. Gmsh may reorder nodes/elements or reverse their orientation.
+    Raster overlap plays no part in this check.
+    """
+    import meshio
+    from scipy.spatial import cKDTree
+
+    exported = meshio.read(path, file_format="gmsh")
+    distance, node_map = cKDTree(points).query(exported.points)
+    tolerance = np.max(np.abs(points)) * 1e-12
+    coordinates_preserved = bool(
+        len(exported.points) == len(points)
+        and np.all(distance <= tolerance)
+        and len(np.unique(node_map)) == len(points)
+    )
+    report = {"coordinates_preserved": coordinates_preserved}
+
+    def canonical_order(connectivity):
+        connectivity = np.sort(connectivity, axis=1)
+        order = np.lexsort(connectivity.T[::-1])
+        return connectivity[order], order
+
+    physical = exported.cell_data_dict.get("gmsh:physical", {})
+    for kind, expected, tags, prefix in (
+        ("triangle", triangles, owners, "triangle"),
+        ("line", lines, edge_ids, "boundary"),
+    ):
+        actual = exported.get_cells_type(kind)
+        expected_nodes, expected_order = canonical_order(np.asarray(expected))
+        actual_nodes, actual_order = canonical_order(node_map[actual])
+        connectivity_preserved = np.array_equal(expected_nodes, actual_nodes)
+        actual_tags = physical.get(kind)
+        tags_preserved = bool(
+            connectivity_preserved
+            and actual_tags is not None
+            and np.array_equal(
+                np.asarray(tags)[expected_order], actual_tags[actual_order]
+            )
+        )
+        report[f"{prefix}_connectivity_preserved"] = connectivity_preserved
+        report[f"{prefix}_physical_ids_preserved"] = tags_preserved
+    report["element_types_preserved"] = all(
+        block.type in ("line", "triangle") for block in exported.cells
+    )
+    report["accepted"] = all(report.values())
+    return report
+
+
 def export_mesh(mesher, base, vox, shape, unit):
-    """Retain UPXO's triangles and add deterministic grain and boundary tags."""
+    """Export UPXO's mesh and verify its physical grain and boundary ownership."""
     import gmsh
     import meshio
 
@@ -580,7 +631,7 @@ def export_mesh(mesher, base, vox, shape, unit):
     for edge_id, (_pair, edges) in enumerate(arcs, start=1):
         lines.extend(edges)
         edge_ids.extend([edge_id] * len(edges))
-    edge_ids = np.asarray(edge_ids)
+    lines, edge_ids = np.asarray(lines), np.asarray(edge_ids)
     field_data = {f"face{g}": np.array([g, 2]) for g in np.unique(owners)}
     field_data.update({f"edge{e}": np.array([e, 1]) for e in np.unique(edge_ids)})
     intermediate = base.with_suffix(".msh")
@@ -588,7 +639,7 @@ def export_mesh(mesher, base, vox, shape, unit):
         intermediate,
         meshio.Mesh(
             points,
-            [("line", np.asarray(lines)), ("triangle", triangles)],
+            [("line", lines), ("triangle", triangles)],
             cell_data={
                 "gmsh:physical": [edge_ids, owners],
                 "gmsh:geometrical": [edge_ids, owners],
@@ -617,6 +668,9 @@ def export_mesh(mesher, base, vox, shape, unit):
             "n_grains": len(np.unique(owners)),
             "crystal_symmetry": "cubic",
         },
+    )
+    return export_metrics(
+        base.with_suffix(".msh4"), points, triangles, owners, lines, edge_ids
     )
 
 
@@ -724,7 +778,13 @@ def _worker(request):
             raise RuntimeError(
                 "UPXO mesh failed conformity, ownership or adjacency checks"
             )
-        export_mesh(mesher, directory / stem, vox, labels.shape, config["unit"])
+        report["export"] = export_mesh(
+            mesher, directory / stem, vox, labels.shape, config["unit"]
+        )
+        if not report["export"]["accepted"]:
+            raise RuntimeError(
+                "Exported mesh failed connectivity or physical ownership checks"
+            )
         report["accepted"] = True
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"
