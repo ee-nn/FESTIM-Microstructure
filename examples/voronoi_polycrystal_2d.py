@@ -32,7 +32,7 @@ SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
 
 # Simulation parameters
 L = 1.0e-4  # specimen size, 100 microns
-n_seeds = 12  # number of grains
+n_seeds = 50  # number of grains
 seed = 3  # rng seed, so the microstructure is reproducible
 
 E_M_BULK = 0.20  # eV, DFT, Diaz-Rodriguez Fig. 3

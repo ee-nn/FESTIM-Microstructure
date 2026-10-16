@@ -16,6 +16,7 @@ grain, the width-scaled network share, a window, and the tensor-valued flux.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, cast
 
 from mpi4py import MPI
@@ -34,6 +35,7 @@ __all__ = [
     "mean_lattice_tensor",
     "parent_field",
     "solutions",
+    "vtx_series",
     "write_vtx",
 ]
 
@@ -182,23 +184,46 @@ def parent_field(grains, species, name="c"):
     return field, update
 
 
-def write_vtx(grains, species, network, c_gb, prefix, time=0.0):
-    """Write ``<prefix>_grains.bp`` and ``<prefix>_network.bp``.
+@contextmanager
+def vtx_series(grains, species, network, c_gb, prefix):
+    """Keep grain and network BP writers open for a time series.
 
-    The grains go out as one discontinuous parent-mesh field (see
-    :func:`parent_field`) and the network as its own dataset. This is a snapshot
-    of the current state, so a transient run writes its last step; for a time
-    series, hand FESTIM one ``festim.SpeciesExport(..., format="vtx")`` per
-    subdomain through the problem's ``exports``.
+    Yield a ``write(time)`` callback that refreshes the combined grain field
+    and appends both concentrations to ``<prefix>_{grains,network}.bp``. Call
+    it after FESTIM has updated its post-processing solutions at each step.
+    The writers close when the context exits, including on solver errors.
     """
     field, update = parent_field(grains, species, name="c_lattice")
-    update()
-    comm = field.function_space.mesh.comm
-    with dolfinx.io.VTXWriter(comm, f"{prefix}_grains.bp", [field], "BP5") as writer:
-        writer.write(time)
     cgb = c_gb.subdomain_to_post_processing_solution[network]
-    with dolfinx.io.VTXWriter(comm, f"{prefix}_network.bp", [cgb], "BP5") as writer:
-        writer.write(time)
+    comm = field.function_space.mesh.comm
+    # ParaView 6.1's VTX reader needs consistent mesh and point-ID blocks at
+    # every step; the DOLFINx reuse path can produce incompatible metadata.
+    policy = dolfinx.io.VTXMeshPolicy.update
+    with (
+        dolfinx.io.VTXWriter(
+            comm, f"{prefix}_grains.bp", [field], "BP5", mesh_policy=policy
+        ) as grain_writer,
+        dolfinx.io.VTXWriter(
+            comm, f"{prefix}_network.bp", [cgb], "BP5", mesh_policy=policy
+        ) as network_writer,
+    ):
+
+        def write(time):
+            """Refresh and append the current fields at the supplied solve time."""
+            update()
+            grain_writer.write(time)
+            network_writer.write(time)
+
+        yield write
+
+
+def write_vtx(grains, species, network, c_gb, prefix, time=0.0):
+    """Write a single snapshot to ``<prefix>_{grains,network}.bp``.
+
+    Use :func:`vtx_series` to append every timestep to these same two datasets.
+    """
+    with vtx_series(grains, species, network, c_gb, prefix) as write:
+        write(time)
 
 
 def equilibrium_error(grains, species, network, c_gb, tolerance):

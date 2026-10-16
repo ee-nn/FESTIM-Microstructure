@@ -4,7 +4,8 @@ polycrystal.
 Runs the equiaxed case plus two aspect=3 cases elongated parallel (z) and
 perpendicular (x) to hydrogen entry from z=L. The elongated cases use the same
 tessellation with its axes exchanged. Each case writes separate grain and
-network BP snapshots under examples/results/voronoi_polycrystal_3d/.
+network BP time series under examples/results/voronoi_polycrystal_3d/, including
+the initial state and every solved timestep.
 
 Same idea as the 2D example: the entire network is declared as **one** codim-1
 subdomain with **one** species. In 3D "codim-1" means the network is made of
@@ -49,7 +50,7 @@ SURFACE_ID_0 = 2_000_000  # the per-grain surface patches are numbered from here
 
 # Simulation parameters
 L = 1.0  # specimen size
-n_seeds = 12  # number of grains
+n_seeds = 36  # number of grains
 seed = 3
 
 D_B = 1e-3  # lattice diffusivity
@@ -65,6 +66,18 @@ h_gb = 0.05  # mesh size at the boundaries
 h_bulk = 0.15  # mesh size in the grain interiors
 locate_geometrically = False  # use the geometric locator instead of facet tags
 T = 500.0  # with E_D = 0 on both phases, nothing depends on it
+
+
+class GrainNetworkProblem(F.HydrogenTransportProblemDiscontinuous):
+    """Write the combined fields after FESTIM refreshes each timestep's solution."""
+
+    field_writer = None
+
+    def post_processing(self):
+        """Keep FESTIM's post-processing and append the current grain/network fields."""
+        super().post_processing()
+        if self.field_writer is not None:
+            self.field_writer(float(self.t))
 
 
 def create_microstructure(aspect, aspect_axis):
@@ -153,7 +166,7 @@ def grain_network_problem(micro, D_gb):
         F.FixedConcentrationBC(subdomain=mouths, value=c0, species=c_gb)
     )
 
-    model = F.HydrogenTransportProblemDiscontinuous(
+    model = GrainNetworkProblem(
         mesh=F.Mesh(mesh),
         subdomains=[*grains, network, *patches, mouths],
         species=[*grain_species, c_gb],
@@ -178,10 +191,15 @@ def run_case(name, aspect, aspect_axis, prefix):
     model, grains, grain_species, network, cgb_species = grain_network_problem(
         micro, D_GB
     )
-    model.run()
-    fm.exports.averages.write_vtx(
-        grains, grain_species, network, cgb_species, OUTPUT_DIR / prefix, time=t_end
-    )
+    with fm.exports.averages.vtx_series(
+        grains, grain_species, network, cgb_species, OUTPUT_DIR / prefix
+    ) as write_fields:
+        model.field_writer = write_fields
+        try:
+            model.post_processing()  # include the initial state at t=0
+            model.run()
+        finally:
+            model.field_writer = None
     cgb_fast = cgb_species.subdomain_to_post_processing_solution[network]
 
     # Inspect the mesh and boundary network
