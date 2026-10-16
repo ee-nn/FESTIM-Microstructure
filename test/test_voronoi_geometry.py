@@ -105,12 +105,79 @@ def test_3d_faces_are_planar_rings_inside_the_cube():
     assert np.isclose(np.trace(tensor), 2 * V.network_measure(faces, dim=3))
 
 
-def test_3d_topology_is_independent_of_physical_scale():
+@pytest.mark.parametrize("aspect", [1.0, 3.0])
+def test_3d_topology_is_independent_of_physical_scale(aspect):
     """Verify 3d topology is independent of physical scale."""
     size = 1e-6
-    _, boundaries = V.tessellate(8, size, np.random.default_rng(1), dim=3)
-    assert V.connected_components(boundaries, dim=3, size=size) == 1
+    _, boundaries = V.tessellate(
+        8, size, np.random.default_rng(1), dim=3, aspect=aspect
+    )
+    _, unit_boundaries = V.tessellate(
+        8, 1.0, np.random.default_rng(1), dim=3, aspect=aspect
+    )
+    assert V.connected_components(
+        boundaries, dim=3, size=size
+    ) == V.connected_components(unit_boundaries, dim=3, size=1.0)
     assert V.junctions(boundaries, dim=3, size=size).line_measure > 0
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+@pytest.mark.parametrize("size", [1.0, 1e-6])
+def test_3d_elongated_grains_preserve_the_box_and_voronoi_bisectors(axis, size):
+    """Elongation keeps planar boundaries on bisectors in the stretched metric."""
+    from scipy.spatial import KDTree
+
+    aspect = 3.0
+    seeds, faces = V.tessellate(
+        24, size, np.random.default_rng(3), dim=3, aspect=aspect, aspect_axis=axis
+    )
+    stretch = np.ones(3)
+    stretch[axis] = aspect
+    shifts = np.stack(np.meshgrid(*[[-1, 0, 1]] * 3, indexing="ij"), -1)
+    images = (seeds / size + shifts.reshape(-1, 1, 3)).reshape(-1, 3) / stretch
+    tree = KDTree(images)
+    for face in faces:
+        assert face.min() >= -1e-9 * size
+        assert face.max() <= size * (1 + 1e-9)
+        points = face / size / stretch
+        distances, pair = tree.query(points.mean(axis=0), k=2)
+        assert np.isclose(*distances, atol=1e-9)
+        d0 = np.sum((points - images[pair[0]]) ** 2, axis=1)
+        d1 = np.sum((points - images[pair[1]]) ** 2, axis=1)
+        assert np.allclose(d0, d1, atol=1e-9)
+    # Clipping a periodic network can leave disconnected pieces at box corners.
+    assert len(V.junctions(faces, dim=3, size=size).lines) > 0
+    tensor = V.network_tensor(faces, dim=3)
+    transverse = np.delete(np.diag(tensor), axis)
+    assert tensor[axis, axis] > 1.1 * transverse.max()
+
+
+@pytest.mark.parametrize("dim", [2, 3])
+def test_elongation_axis_rotates_the_same_realisation(dim):
+    """Parallel and perpendicular cases differ only by a coordinate exchange."""
+    seeds_x, boundaries_x = V.tessellate(
+        12, 1.0, np.random.default_rng(3), dim=dim, aspect=3.0
+    )
+    seeds_other, boundaries_other = V.tessellate(
+        12, 1.0, np.random.default_rng(3), dim=dim, aspect=3.0, aspect_axis=dim - 1
+    )
+    axes = np.arange(dim)[::-1]
+    assert np.allclose(seeds_x[:, axes], seeds_other)
+    assert len(boundaries_x) == len(boundaries_other)
+    for original, rotated in zip(boundaries_x, boundaries_other, strict=True):
+        assert np.allclose(np.asarray(original)[:, axes], rotated)
+
+
+@pytest.mark.parametrize("aspect", [0.0, -1.0, np.inf, np.nan])
+def test_aspect_must_be_finite_and_positive(aspect):
+    with pytest.raises(ValueError, match="aspect must be finite and positive"):
+        V.tessellate(8, 1.0, np.random.default_rng(1), dim=3, aspect=aspect)
+
+
+@pytest.mark.parametrize("axis", [-1, 3, 0.5])
+def test_aspect_axis_must_be_a_valid_coordinate(axis):
+    with pytest.raises(ValueError, match="aspect_axis must be an integer"):
+        V.tessellate(8, 1.0, np.random.default_rng(1), dim=3, aspect_axis=axis)
 
 
 @pytest.mark.parametrize("dim", [1, 4])

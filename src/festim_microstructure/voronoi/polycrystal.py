@@ -43,6 +43,7 @@ class VoronoiMicrostructure:
     seeds: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     boundaries: list = field(default_factory=list)
     aspect: float = 1.0
+    aspect_axis: int = 0
     facet_tags: Any = None
     gb_tag: int | None = None
 
@@ -58,12 +59,14 @@ class VoronoiMicrostructure:
         bulk_coarsening=None,
         comm=None,
         msh_path=None,
+        *,
+        aspect_axis=0,
     ):
         """Generate and mesh a periodic Voronoi microstructure.
 
-        ``aspect`` controls elongation along x and is currently available in
-        2D only. Dimension-specific meshing defaults preserve the established
-        resolutions: 14 cells per grain and 8x bulk coarsening in 2D, versus
+        ``aspect`` controls elongation along ``aspect_axis`` (0=x, 1=y, 2=z),
+        defaulting to x. Dimension-specific meshing defaults preserve the
+        established resolutions: 14 cells per grain and 8x bulk coarsening in 2D, versus
         8 cells per grain and 4x bulk coarsening in 3D.
         """
         if dim not in (2, 3):
@@ -74,7 +77,9 @@ class VoronoiMicrostructure:
             bulk_coarsening = 8.0 if dim == 2 else 4.0
 
         rng = np.random.default_rng(seed)
-        seeds, boundaries = tessellate(n_seeds, size, rng, dim, aspect=aspect)
+        seeds, boundaries = tessellate(
+            n_seeds, size, rng, dim, aspect=aspect, aspect_axis=aspect_axis
+        )
         spacing = (size**dim / n_seeds / aspect) ** (1.0 / dim)
         h_gb = spacing / cells_per_grain
         boundaries = snap(boundaries, 0.1 * h_gb, size, dim)
@@ -87,6 +92,8 @@ class VoronoiMicrostructure:
             seeds=seeds,
             comm=comm,
             msh_path=msh_path,
+            aspect=aspect,
+            aspect_axis=aspect_axis,
         )
         orientations = rng.uniform(0.0, np.pi, int(mesh_data.grain_ids.max()))
         return cls(
@@ -104,6 +111,7 @@ class VoronoiMicrostructure:
             seeds=seeds,
             boundaries=boundaries,
             aspect=aspect,
+            aspect_axis=aspect_axis,
         )
 
     @property

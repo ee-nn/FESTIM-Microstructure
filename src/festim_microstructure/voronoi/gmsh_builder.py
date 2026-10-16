@@ -12,6 +12,8 @@ from typing import Any
 
 import numpy as np
 
+from .geometry import _stretch_factors
+
 __all__ = [
     "GB_TAG",
     "MeshData",
@@ -83,8 +85,24 @@ def _unpack(result: Any, *names: str) -> tuple[Any, ...]:
     return tuple(result[index[n]] for n in names)
 
 
-def build_mesh(boundaries, size, sizing, dim, seeds=None, comm=None, msh_path=None):
-    """Build a conforming mesh for 2D segments or 3D polygons."""
+def build_mesh(
+    boundaries,
+    size,
+    sizing,
+    dim,
+    seeds=None,
+    comm=None,
+    msh_path=None,
+    *,
+    aspect=1.0,
+    aspect_axis=0,
+):
+    """Build a conforming mesh for 2D segments or 3D polygons.
+
+    For elongated 3D grains, pass the same ``aspect`` and ``aspect_axis`` as
+    :func:`~.geometry.tessellate` so grain tags use the matching distance metric.
+    """
+    _stretch_factors(dim, aspect, aspect_axis)
     if dim == 2:
         mesh, cell_tags, n_grains = _build_mesh_2d(
             boundaries, size, sizing, comm=comm, msh_path=msh_path
@@ -102,7 +120,9 @@ def build_mesh(boundaries, size, sizing, dim, seeds=None, comm=None, msh_path=No
         mesh, facet_tags = _build_mesh_3d(
             boundaries, size, sizing, comm=comm, msh_path=msh_path
         )
-        cell_tags, grain_ids = grain_tags_from_seeds(mesh, seeds, size)
+        cell_tags, grain_ids = grain_tags_from_seeds(
+            mesh, seeds, size, aspect=aspect, aspect_axis=aspect_axis
+        )
         return MeshData(mesh, cell_tags, facet_tags, grain_ids, GB_TAG)
     raise ValueError(f"dim must be 2 or 3, got {dim!r}")
 
@@ -218,13 +238,14 @@ def _build_mesh_3d(faces, size, sizing, comm=None, msh_path=None):
     return mesh, facet_tags
 
 
-def grain_tags_from_seeds(mesh, seeds, size):
+def grain_tags_from_seeds(mesh, seeds, size, *, aspect=1.0, aspect_axis=0):
     """Cell tags for a mesh that conforms to the periodic Voronoi of ``seeds``.
 
     Each cell takes the index of the nearest seed *image* (the seeds tiled over
     the neighbouring periodic images, as :func:`~.geometry.tessellate` does).
-    Every facet of a conforming mesh lies on a bisector plane of two seeds, so a
-    cell is never straddling and the classification is exact. Pieces cut off by
+    Distances are measured before the specified coordinate stretch, matching
+    elongated tessellations. Every grain boundary lies on a bisector plane in
+    that metric, so a cell is never straddling. Pieces cut off by
     image seeds get ids of their own, as the 2D mesher's ``fragment`` gives them.
     Returns ``(cell_tags, grain_ids)``; ids are 1-based and global across ranks.
     """
@@ -233,13 +254,14 @@ def grain_tags_from_seeds(mesh, seeds, size):
 
     seeds = np.asarray(seeds)
     dim = seeds.shape[1]
+    stretch = _stretch_factors(dim, aspect, aspect_axis)
     shifts = np.stack(np.meshgrid(*[[-1, 0, 1]] * dim, indexing="ij"), -1)
     images = (seeds[None] + shifts.reshape(-1, dim)[:, None] * size).reshape(-1, dim)
     tdim = mesh.topology.dim
     imap = mesh.topology.index_map(tdim)
     n = imap.size_local + imap.num_ghosts
     mid = dolfinx.mesh.compute_midpoints(mesh, tdim, np.arange(n, dtype=np.int32))
-    _, idx = KDTree(images, leafsize=16).query(mid[:, :dim])
+    _, idx = KDTree(images / stretch, leafsize=16).query(mid[:, :dim] / stretch)
     values = (idx + 1).astype(np.int32)
     tags = dolfinx.mesh.meshtags(mesh, tdim, np.arange(n, dtype=np.int32), values)
     present = np.unique(np.concatenate(mesh.comm.allgather(np.unique(values))))

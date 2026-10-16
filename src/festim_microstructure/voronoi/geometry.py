@@ -31,6 +31,18 @@ def _check_dim(dim):
         raise ValueError(f"dim must be 2 or 3, got {dim!r}")
 
 
+def _stretch_factors(dim, aspect, aspect_axis):
+    """Validate elongation parameters and return their coordinate stretch."""
+    _check_dim(dim)
+    if not np.isfinite(aspect) or aspect <= 0:
+        raise ValueError("aspect must be finite and positive")
+    if not isinstance(aspect_axis, (int, np.integer)) or not 0 <= aspect_axis < dim:
+        raise ValueError(f"aspect_axis must be an integer from 0 to {dim - 1}")
+    stretch = np.ones(dim)
+    stretch[aspect_axis] = aspect
+    return stretch
+
+
 class _UnionFind:
     """Track connected components using disjoint-set union."""
 
@@ -93,12 +105,13 @@ def _order_ring(poly, normal):
 
 
 def _clip_polygon_to_box(poly, size):
-    """Clip a 3D polygon to the positive box of the given size."""
+    """Clip a 3D polygon to a positive box with scalar or per-axis sizes."""
+    box = np.broadcast_to(size, (3,))
     planes = []
     for axis in range(3):
         normal = np.zeros(3)
         normal[axis] = 1.0
-        planes.extend(((normal, 0.0), (-normal, -size)))
+        planes.extend(((normal, 0.0), (-normal, -box[axis])))
     out = poly
     for normal, offset in planes:
         if len(out) < 3:
@@ -156,20 +169,34 @@ def _network_scale(boundaries, size=None):
     return 1e-9 * size
 
 
-def tessellate(n_seeds, size, rng, dim, aspect=1.0, min_boundary_measure=1e-8):
+def tessellate(
+    n_seeds, size, rng, dim, aspect=1.0, min_boundary_measure=1e-8, *, aspect_axis=0
+):
     """Return ``(seeds, boundaries)`` for a periodic Voronoi tessellation.
 
     Boundaries are endpoint pairs in 2D and ordered planar polygons in 3D.
-    ``aspect`` stretches 2D grains along x; 3D elongation is not implemented.
+    ``aspect`` stretches grains along ``aspect_axis`` (0=x, 1=y, 2=z), while
+    retaining a square or cubic domain. The default axis is x. Changing the
+    axis permutes the same tessellation, allowing comparisons of its alignment.
     ``min_boundary_measure`` is relative to the unit box used by the 3D
     construction.
     """
-    _check_dim(dim)
+    _stretch_factors(dim, aspect, aspect_axis)
     if dim == 2:
-        return _tessellate_2d(n_seeds, size, rng, aspect)
-    if aspect != 1.0:
-        raise NotImplementedError("aspect is currently supported only in 2D")
-    return _tessellate_3d(n_seeds, size, rng, min_boundary_measure)
+        seeds, boundaries = _tessellate_2d(n_seeds, size, rng, aspect)
+    else:
+        seeds, boundaries = _tessellate_3d(
+            n_seeds, size, rng, min_boundary_measure, aspect
+        )
+    if aspect_axis != 0:
+        axes = np.arange(dim)
+        axes[0], axes[aspect_axis] = axes[aspect_axis], axes[0]
+        seeds = seeds[:, axes]
+        if dim == 2:
+            boundaries = [(p[axes], q[axes]) for p, q in boundaries]
+        else:
+            boundaries = [poly[:, axes] for poly in boundaries]
+    return seeds, boundaries
 
 
 def _tessellate_2d(n_seeds, size, rng, aspect):
@@ -206,7 +233,7 @@ def _tessellate_2d(n_seeds, size, rng, aspect):
     return raw * stretch, boundaries
 
 
-def _tessellate_3d(n_seeds, size, rng, min_boundary_measure):
+def _tessellate_3d(n_seeds, size, rng, min_boundary_measure, aspect):
     """Construct periodic 3D Voronoi faces clipped to the cube.
 
     Args:
@@ -214,15 +241,19 @@ def _tessellate_3d(n_seeds, size, rng, min_boundary_measure):
         size: Side length of the output cube.
         rng: NumPy random generator.
         min_boundary_measure: Minimum face area in the unit cube.
+        aspect: Stretch factor along x, applied after tessellation.
 
     Returns:
         Seed coordinates and clipped planar boundary polygons.
     """
-    # Work in a unit cube so clipping tolerances do not depend on physical scale.
-    seeds = rng.uniform(0.0, 1.0, (n_seeds, 3))
+    # Tessellate a compressed box, then stretch it back to a unit cube. This
+    # changes grain shapes without changing the physical specimen dimensions.
+    stretch = np.array([aspect, 1.0, 1.0])
+    box = 1.0 / stretch
+    seeds = rng.uniform(0.0, 1.0, (n_seeds, 3)) * box
     tiled = np.vstack(
         [
-            seeds + np.array([dx, dy, dz])
+            seeds + np.array([dx, dy, dz]) * box
             for dx in (-1, 0, 1)
             for dy in (-1, 0, 1)
             for dz in (-1, 0, 1)
@@ -238,14 +269,17 @@ def _tessellate_3d(n_seeds, size, rng, min_boundary_measure):
         offset = 0.5 * (tiled[i] + tiled[j]) @ normal
         poly = vor.vertices[ridge]
         poly = poly - np.outer(poly @ normal - offset, normal)
-        clipped = _clip_polygon_to_box(_order_ring(poly, normal), 1.0)
-        if clipped is None or _polygon_area(clipped) < min_boundary_measure:
+        clipped = _clip_polygon_to_box(_order_ring(poly, normal), box)
+        if clipped is None:
+            continue
+        clipped = clipped * stretch
+        if _polygon_area(clipped) < min_boundary_measure:
             continue
         key = tuple(np.round(clipped.mean(axis=0), 7))
         if key not in seen:
             seen.add(key)
             boundaries.append(clipped * size)
-    return seeds * size, boundaries
+    return seeds * stretch * size, boundaries
 
 
 def snap(boundaries, tol, size, dim):
