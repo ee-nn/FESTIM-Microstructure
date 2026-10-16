@@ -372,6 +372,11 @@ micro = fm.VoronoiMicrostructure.create(
 )
 print(micro.report())
 
+# Elongate 3D grains along z (aspect_axis: 0=x, 1=y, 2=z).
+micro_3d = fm.VoronoiMicrostructure.create(
+    size=100e-6, n_seeds=64, dim=3, aspect=3, aspect_axis=2
+)
+
 workdir = Path("results")
 workdir.mkdir(parents=True, exist_ok=True)
 ctf = "examples/data/D7 PBF SS316L.ctf"
