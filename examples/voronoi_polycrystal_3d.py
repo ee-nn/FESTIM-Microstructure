@@ -190,28 +190,18 @@ print(
 )
 print(f"  interior facets                 : {model.manifold_is_interior(network)}")
 
-# Compare fast boundaries with lattice diffusion
+# Inspect the fast-boundary transport solution
 fast = fm.exports.averages.inventory(grains, grain_species, network, cgb_species, delta)
 depth = fm.exports.measures.junction_only_below(boundaries, axis=2, top=L)
 gb_z = cgb_fast.function_space.tabulate_dof_coordinates()[:, 2]
 deep = gb_z < depth
 c_deep = cgb_fast.x.array[deep].max() if deep.any() else 0.0
 
-# A second problem with D_gb = D_b: a transient problem cannot be re-run
-# from t = 0 in place.
-reference, ref_grains, ref_species, ref_network, ref_cgb = grain_network_problem(D_B)
-reference.run()
-ref = fm.exports.averages.inventory(
-    ref_grains, ref_species, ref_network, ref_cgb, delta
-)
-
 print(
     f"\nafter t = {t_end} (lattice diffusion alone reaches "
     f"~{2 * np.sqrt(D_B * t_end):.3g})"
 )
 print(f"  inventory with fast boundaries : {fast:.4e}")
-print(f"  inventory with D_gb = D_b      : {ref:.4e}")
-print(f"  enhancement                    : x {fast / ref:.1f}")
 f_gb = delta * face_area / L**3
 print(f"  boundary volume fraction f     : {f_gb:.3e}")
 print(
