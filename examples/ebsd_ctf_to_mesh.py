@@ -1,6 +1,6 @@
-"""Import CTF grains, mesh with UPXO, and validate the FESTIM network.
-
-Run in festim-microstructure-upxo before ebsd_gb_diffusion.py.
+"""
+Import CTF grains, mesh with UPXO, and validate the FESTIM network.
+Run before ebsd_gb_diffusion.py.
 """
 
 from pathlib import Path

@@ -1,73 +1,52 @@
-# Conda environment for FESTIM-Microstructure: the FEniCSx / FESTIM side.
+# Standard FESTIM-Microstructure environment (Python 3.13).
+# conda env create -f environment.yml
+# conda activate festim-microstructure
+# python -m pip install --no-deps -e .
 #
-#   conda env create -f environment.yml
-#   conda activate festim-microstructure
-#   pip install -e .
-#
-# For EBSD meshing with UPXO, use environment-festim-microstructure-upxo.yml
-# to run the solver and mesher together under Python 3.13.
-#
-# Platforms: linux-64, osx-64, osx-arm64.
-# Windows users should work inside WSL2.
-
+# Platforms: linux-64, osx-64, osx-arm64. Windows users should use WSL2.
 name: festim-microstructure
-
 channels:
   - conda-forge
-
 dependencies:
-  # ---- interpreter -------------------------------------------------------
-  # FESTIM supports 3.9-3.13; 3.12 has the widest set of conda-forge builds
-  # for the compiled dolfinx/scifem stack.
-  - python=3.12
+  - python=3.13
   - pip
-
-  # ---- FEniCSx ------------------------------------------------------------
-  # Pin the dolfinx minor series. FESTIM tracks the dolfinx ABI closely
-  # (festim-dev/FESTIM#1173 moved FESTIM to dolfinx 0.11), so an unpinned
-  # dolfinx will silently drift away from the pinned FESTIM below.
-  # Widen or narrow this range when you bump the FESTIM pin.
   - fenics-dolfinx >=0.10,<0.12
-  - fenics-ufl            # NOT `ufl` -- that name does not exist on conda-forge
+  - fenics-ufl
   - fenics-basix
   - mpi4py
   - petsc4py
-
-  # ---- FESTIM's own compiled dependencies ---------------------------------
-  # Installed from conda-forge so that pip does not try to build scifem
-  # from source against the conda dolfinx. FESTIM declares
-  # tqdm, scifem>=0.20.0 and io4dolfinx[h5py].
-  - scifem
+  - scifem >=0.20.0
   - io4dolfinx
   - h5py
-  - tqdm
-
-  # ---- meshing / microstructure generation --------------------------------
-  # The Gmsh Python API is used for Voronoi meshing and mesh import.
-  # EBSD meshing uses the combined Python 3.13 environment instead.
-  - python-gmsh
-  - meshio
-
-  # ---- scientific stack ---------------------------------------------------
-  - numpy
-  - scipy
-  - matplotlib
-
-  # ---- optional: visualisation -------------------------------------------
-  - pyvista
-
-  # ---- development --------------------------------------------------------
+  - gmsh=4.15.2
+  - python-gmsh=4.15.2
+  - meshio=5.3.5
+  - rasterio >=1.4.3
+  # Meet UPXO's requirements in conda so pip need not replace ABI-sensitive
+  # scientific packages underneath the compiled FEniCSx stack.
+  - numpy >=2.2.6
+  - scipy >=1.16.2
+  - matplotlib >=3.10.6
+  - pandas >=2.3.3
+  - numba >=0.62.1
+  - networkx >=3.5
+  - pyvista >=0.46.3
+  - scikit-image >=0.25.2
+  - scikit-learn >=1.7.2
+  - shapely >=2.1.1
+  - tqdm >=4.67.1
+  - seaborn >=0.13.2
+  - colorama >=0.4.6
+  - termcolor >=2.4.0
+  - connected-components-3d >=3.26.1
+  - xlrd >=2.0.1
+  - openpyxl >=3.1.0
+  - ipywidgets >=8.0.0
+  - pillow >=10.0.0
   - pytest
   - pytest-cov
   - ruff
   - ipykernel
-
-  # ---- pip-only -----------------------------------------------------------
   - pip:
-      # FESTIM 2.1 / 2.2rc* are not on conda-forge yet (newest there is
-      # 2.0b2.post2), so this must come from PyPI. Note the canonical
-      # spelling is `2.2rc2`, not `2.2.0rc2`.
-      # If pip tries to build scifem from source here, the conda scifem above
-      # is too old for this FESTIM pin -- either relax the FESTIM pin or
-      # install with: pip install --no-deps festim==2.2rc2
       - festim==2.2rc2
+      - upxo[ebsd] @ git+https://github.com/Design-By-Fundamentals-UKAEA/UPXO.git@a53885ef0a7a06f6b3fb195747363ae0a19bb127

@@ -45,12 +45,12 @@ jobs:
       - uses: conda-incubator/setup-miniconda@v3
         with:
           miniforge-version: latest
-          environment-file: environment-festim-microstructure-upxo.yml
-          activate-environment: festim-microstructure-upxo
+          environment-file: environment.yml
+          activate-environment: festim-microstructure
           auto-activate-base: false
       - name: Install package without replacing the solver stack
         run: python -m pip install --no-deps -e .
-      - name: Run the complete test suite with the solver and UPXO stack
+      - name: Run the complete test suite
         env:
           FM_REQUIRE_FULL_STACK: "1"
         run: python -m pytest -q

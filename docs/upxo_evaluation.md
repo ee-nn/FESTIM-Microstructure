@@ -106,7 +106,7 @@ The default meshing policy remains five gentle Taubin passes (λ=0.25,
 μ=−0.265), explicit pixel seeds, no grain merging and no diagonal repair.
 Geometry and mesh validation are mandatory, including actual triangle
 components/holes. Exact polygons use `smoothing="none"`.
-The combined environment pins the UPXO revision and DefDAP EBSD extra.
+The standard `environment.yml` pins the UPXO revision and DefDAP EBSD extra.
 The combined Python 3.13 environment was installed and tested locally on
 October 9, 2026: UPXO 1.3.1, DefDAP 0.93.6, FESTIM 2.2rc2, DOLFINx 0.11.0,
 SciFEM 0.26.0, NumPy 2.5.3 and Gmsh 4.15.2. CTF-to-FESTIM transport tests
@@ -274,7 +274,7 @@ Taubin's small void-boundary movement fails the partition gate.
 ## Reproduction and artifacts
 
 The following version list describes the historical 1.2.0 run; the checkout
-command selects the current 1.3.1 pin. The combined environment file is the
+command selects the current 1.3.1 pin. The standard `environment.yml` is the
 preferred installation for reproducing current mesh and solver validation.
 Current evaluation inputs and expected results store native `grain_quats`
 arrays. Run preparation and meshing before verification to regenerate them.

@@ -37,69 +37,47 @@ exports.
 
 ## Requirements
 
-The solver and EBSD mesher share a Python 3.13 conda environment. Dependencies
-come from two package managers:
+The package uses a Python 3.13 conda environment for microstructure generation,
+EBSD meshing and FESTIM transport. `environment.yml` provides the full stack:
 
-- **conda-forge** supplies DOLFINx, the Gmsh Python API, FESTIM's compiled
-  dependencies (`scifem`, `io4dolfinx`).
-- **PyPI** supplies FESTIM itself. Versions 2.1 and 2.2rc* are not yet on
-  conda-forge, where the newest 2.x build is `2.0b2.post2`.
-- **UPXO requires Python 3.13** and shares the combined environment with FESTIM.
+- **conda-forge** supplies DOLFINx, the Gmsh Python API, compiled dependencies
+  (`scifem`, `io4dolfinx`) and scientific packages.
+- **pip** supplies the pinned FESTIM and EBSD dependencies.
 
 **Platforms:** linux-64, osx-64, osx-arm64. Windows users should work inside
 WSL2 for the FEniCSx stack.
 
 ## Installation
 
-Install [Miniforge](https://github.com/conda-forge/miniforge) (or Miniconda).
-For a combined Python 3.13 solver and UPXO environment:
-
-```bash
-conda env create -f environment-festim-microstructure-upxo.yml
-conda activate festim-microstructure-upxo
-python -m pip install -e .
-unset FM_UPXO_PYTHON
-fm-check
-python examples/ebsd_ctf_to_mesh.py
-```
-
-Run these commands from the repository checkout. The combined environment
-installs the scientific and FEniCSx packages through conda and pins the evaluated
-UPXO 1.3.1 commit and DefDAP 0.93.6. With Python 3.13 and UPXO installed, the importer and mesher automatically use
-the active interpreter. An explicit `UpxoMeshOptions(python=...)` or
-`FM_UPXO_PYTHON` still takes precedence.
-CI creates this combined environment from scratch and runs the complete test
-suite, including CTF-to-FESTIM transport and solver tests. Missing dependencies
-or skipped tests fail that job.
-Run `FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py`
-after installation to check mesh reconstruction, boundary exchange and inventory
-conservation locally.
-
-For solver workflows using the original Python 3.12 environment:
+Install [Miniforge](https://github.com/conda-forge/miniforge) (or Miniconda),
+then run:
 
 ```bash
 git clone https://github.com/ee-nn/FESTIM-Microstructure.git
 cd FESTIM-Microstructure
-
-# The FEniCSx / FESTIM environment
 conda env create -f environment.yml
 conda activate festim-microstructure
-pip install -e .
+python -m pip install --no-deps -e .
+fm-check --ebsd
 ```
 
-`pip install -e .` is required -- without it the modules under `src/` are not
-on the import path and none of the examples will run. For a development install
-including test and lint extras:
+The editable install makes the modules under `src/` available to examples and
+scripts. `--no-deps` preserves the dependency stack installed by the environment
+file. The active interpreter runs both the solver and EBSD mesher.
+
+CI creates this environment from scratch and runs the complete test suite;
+missing dependencies or skipped tests fail that job. To check EBSD mesh
+reconstruction, boundary exchange and inventory conservation locally, run:
 
 ```bash
-pip install -e ".[test,lint]"
+FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py
 ```
 
-For VS Code, select the `festim-microstructure-upxo` Conda environment with
-**Python: Select Interpreter**. The project configures `src/` as an analysis
-search path for Pylance/Pyright; running the examples still requires the
-editable install in the selected environment. If imports stay underlined after
-changing environments, run **Developer: Reload Window**.
+The environment also includes test and lint tools. For VS Code, select the
+`festim-microstructure` Conda environment with **Python: Select Interpreter**.
+Running examples requires the editable install in the selected environment.
+If imports stay underlined after changing environments, run
+**Developer: Reload Window**.
 
 ### Verifying the install
 
@@ -107,7 +85,7 @@ changing environments, run **Developer: Reload Window**.
 fm-check
 ```
 
-prints the versions of the Python stack and probes the configured UPXO EBSD
+prints the versions of the Python stack and probes the EBSD
 worker. It exits non-zero if dependencies fail to import or the worker fails
 its health check. It looks like:
 
@@ -117,9 +95,9 @@ python-side stack
   ...
   dolfinx                0.10.0
   festim                 2.2rc2
-  gmsh (python-gmsh)     4.13.1
+  gmsh (python-gmsh)     4.15.2
   ...
-  UPXO interpreter       /home/you/miniforge3/envs/festim-microstructure-upxo/bin/python
+  EBSD interpreter       /home/you/miniforge3/envs/festim-microstructure/bin/python
   EBSD worker            OK (runtime imports verified)
     upxo                 1.3.1
     defdap               0.93.6
@@ -133,24 +111,26 @@ mpirun -n 2 python -c "from mpi4py import MPI; print(MPI.COMM_WORLD.rank)"
 
 The `gmsh (python-gmsh)` line matters: on conda-forge the `gmsh` package
 installs only the executable and shared library, and the Python module comes
-from the separate `python-gmsh` package. Both environment files include the
+from the separate `python-gmsh` package. `environment.yml` includes the
 Python API used by the mesh builders.
 
 ### Updating
 
-For the combined solver and EBSD environment:
+From the repository checkout, update the standard environment and reinstall:
 
 ```bash
-conda env update -n festim-microstructure-upxo -f environment-festim-microstructure-upxo.yml --prune
-conda activate festim-microstructure-upxo
+conda env update -n festim-microstructure -f environment.yml --prune
+conda activate festim-microstructure
 python -m pip install --no-deps -e .
-unset FM_UPXO_PYTHON
 fm-check --ebsd
 FM_REQUIRE_FULL_STACK=1 python -m pytest -q test/test_ebsd_si_mesh.py
 ```
 
-For the original solver environment, use `conda env update -f environment.yml
---prune` and reinstall the package there.
+This also upgrades an existing Python 3.12 `festim-microstructure` environment
+to the current Python 3.13 stack. If you previously used a differently named
+environment, create the standard environment using the installation commands
+above and select it in your editor. Clear any old `FM_UPXO_PYTHON` override
+with `unset FM_UPXO_PYTHON` to use the active interpreter.
 
 Import and mesh cache identities probe the selected worker before reuse. They
 record its Python executable/version, all installed distribution versions,
@@ -188,8 +168,7 @@ pip check
 
 ```
 FESTIM-Microstructure/
-├── environment.yml             # Python 3.12 FEniCSx / FESTIM environment
-├── environment-festim-microstructure-upxo.yml  # combined Python 3.13 environment
+├── environment.yml             # Python 3.13 environment for all workflows
 ├── pyproject.toml
 ├── README.md
 ├── docs/
@@ -228,13 +207,13 @@ FESTIM-Microstructure/
 │   ├── gb_homogenisation.py    # RVE identification, validation and figures
 │   ├── li2022_fig4*.py         # Li et al. (2022) reproduction scripts
 │   └── ...                     # usage examples and data/
-└── test/                       # pytest in the combined FESTIM/UPXO environment
+└── test/                       # pytest in the standard environment
 ```
 
 Nothing importable sits at the repository root. The package imports its public
 API directly and requires the FESTIM/DOLFINx stack. Run the examples, conversion
-tools, `fm-check`, and tests from an installed solver environment; the combined
-Python 3.13 environment also supplies UPXO/DefDAP for EBSD workflows.
+tools, `fm-check`, and tests from the installed
+`festim-microstructure` environment.
 
 ## Usage
 
@@ -455,10 +434,10 @@ For separate import/inspection, use
 A failed meshing worker retains the previous accepted mesh and writes a failure
 validation report and log.
 
-In the combined Python 3.13 environment, the active interpreter runs both UPXO
-and FESTIM. `FM_UPXO_PYTHON`, `Settings(python=...)`, or
+In the standard environment, the active interpreter runs both the mesher
+and solver. `FM_UPXO_PYTHON`, `Settings(python=...)`, or
 `UpxoMeshOptions(python=...)` can select a compatible importer/mesher interpreter.
-The combined environment pins UPXO's evaluated commit and its DefDAP extra.
+`environment.yml` pins UPXO's evaluated commit and its DefDAP extra.
 UPXO remains an external dependency with its upstream GPL-3.0 license.
 
 The returned Voronoi mesh is in metres; the optional Gmsh file uses units of

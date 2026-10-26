@@ -19,6 +19,26 @@ def test_configured_interpreter_does_not_fall_back(monkeypatch):
         upxo.resolve_python()
 
 
+@pytest.mark.parametrize("active_environment", ["festim-microstructure", "solver"])
+def test_standard_environment_discovery(tmp_path, monkeypatch, active_environment):
+    interpreter = tmp_path / "festim-microstructure" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.touch(mode=0o755)
+    active = tmp_path / active_environment
+    monkeypatch.delenv("FM_UPXO_PYTHON", raising=False)
+    monkeypatch.setattr(upxo.sys, "prefix", str(active))
+    monkeypatch.setattr(upxo.sys, "executable", str(active / "bin" / "python"))
+    monkeypatch.setattr(upxo.importlib.util, "find_spec", lambda name: None)
+
+    if active_environment == "festim-microstructure":
+        # A pre-upgrade environment without UPXO must not discover itself.
+        assert upxo.resolve_python(required=False) is None
+        with pytest.raises(FileNotFoundError, match=r"environment\.yml"):
+            upxo.resolve_python()
+    else:
+        assert upxo.resolve_python() == str(interpreter)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

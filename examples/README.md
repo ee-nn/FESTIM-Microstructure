@@ -38,7 +38,7 @@ chain. It writes `results/ebsd_ctf_to_mesh/poly.msh4` in metres, with native
 validation reports. It also generates quality, orientation, mesh, area and
 FESTIM network images. `ebsd_gb_diffusion.py` reads these prepared files; its
 simulation exports go to `results/ebsd_gb_diffusion/`.
-Activate the environment in `environment-festim-microstructure-upxo.yml`.
+Activate the environment in `environment.yml`.
 The original CTF stays in `examples/data/`.
 
 The consolidated study writes `identified.json`, `validation.json`, and

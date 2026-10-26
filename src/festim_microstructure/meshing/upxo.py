@@ -97,15 +97,17 @@ def resolve_python(explicit=None, required=True):
     else:
         if sys.version_info >= (3, 13) and importlib.util.find_spec("upxo"):
             return sys.executable
-        sibling = (
-            Path(sys.prefix).parent / "festim-microstructure-upxo" / "bin" / "python"
-        )
-        if sibling.is_file() and os.access(sibling, os.X_OK):
+        sibling = Path(sys.prefix).parent / "festim-microstructure" / "bin" / "python"
+        if (
+            sibling.is_file()
+            and sibling.resolve() != Path(sys.executable).resolve()
+            and os.access(sibling, os.X_OK)
+        ):
             return str(sibling)
     if required:
         raise FileNotFoundError(
             "UPXO Python interpreter not found. Create and activate "
-            "environment-festim-microstructure-upxo.yml, or set FM_UPXO_PYTHON "
+            "environment.yml, or set FM_UPXO_PYTHON "
             "to an interpreter with UPXO installed."
         )
     return None

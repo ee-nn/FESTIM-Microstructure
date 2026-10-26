@@ -1,4 +1,4 @@
-"""``fm-check`` reports Python dependencies and the UPXO EBSD worker."""
+"""``fm-check`` reports Python dependencies and the EBSD worker."""
 
 import argparse
 import importlib
@@ -42,7 +42,7 @@ def main(argv=None):
     print(f"  prefix                 {sys.prefix}")
 
     upxo_python = resolve_python(required=False)
-    print(f"  UPXO interpreter       {upxo_python or 'not configured'}")
+    print(f"  EBSD interpreter       {upxo_python or 'not configured'}")
     if upxo_python is not None:
         try:
             report = probe_worker(upxo_python, health=True)
@@ -54,10 +54,7 @@ def main(argv=None):
             ok = False
     if upxo_python is None:
         ok &= not (args.ebsd or os.environ.get("FM_UPXO_PYTHON"))
-        print(
-            "  EBSD meshing: create and activate "
-            "environment-festim-microstructure-upxo.yml"
-        )
+        print("  EBSD meshing: create and activate environment.yml")
 
     return 0 if ok else 1
 
